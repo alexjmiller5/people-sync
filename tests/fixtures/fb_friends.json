@@ -1,0 +1,15 @@
+{
+  "friends_v2": [
+    {
+      "name": "Test Person",
+      "timestamp": 1700000000
+    },
+    {
+      "name": "Test Co Person",
+      "timestamp": 1700000001
+    },
+    {
+      "timestamp": 1700000002
+    }
+  ]
+}
