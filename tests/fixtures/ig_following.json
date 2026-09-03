@@ -1,0 +1,26 @@
+{
+  "relationships_following": [
+    {
+      "title": "",
+      "media_list_data": [],
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/testuser_a",
+          "value": "testuser_a",
+          "timestamp": 1700000010
+        }
+      ]
+    },
+    {
+      "title": "",
+      "media_list_data": [],
+      "string_list_data": [
+        {
+          "href": "https://www.instagram.com/testuser_d",
+          "value": "testuser_d",
+          "timestamp": 1700000011
+        }
+      ]
+    }
+  ]
+}
