@@ -6,7 +6,6 @@ requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28",
     "structlog>=25.1",
-    "boto3>=1.35",
 ]
 
 [dependency-groups]
