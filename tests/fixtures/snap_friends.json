@@ -1,15 +1,28 @@
 {
-  "friends": [
+  "Friends": [
     {
       "Username": "testuser_a",
-      "Display Name": "Test User A"
+      "Display Name": "Test User A",
+      "Creation Timestamp": "2020-01-01 00:00:00 UTC",
+      "Last Modified Timestamp": "2020-01-01 00:00:00 UTC",
+      "Source": "ADDED_BY_USERNAME"
     },
     {
       "Username": "testuser_e",
-      "Display Name": "Test User E"
+      "Display Name": "Test User E",
+      "Creation Timestamp": "2021-01-01 00:00:00 UTC",
+      "Last Modified Timestamp": "2021-01-01 00:00:00 UTC",
+      "Source": "ADDED_BY_PHONE"
     },
     {
       "Display Name": "No Username Here"
     }
-  ]
+  ],
+  "Deleted Friends": [
+    {
+      "Username": "testuser_deleted",
+      "Display Name": "Test User Deleted"
+    }
+  ],
+  "Blocked Users": []
 }
