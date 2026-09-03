@@ -69,6 +69,9 @@ def test_snapchat_maps_username_and_display_name():
     assert e.name == "Test User E"
     assert e.handle == "testuser_e"
 
+    # only the current friends list is ingested - not deleted/blocked siblings
+    assert "testuser_deleted" not in by_id
+
 
 def test_linkedin_skips_preamble_and_slugs():
     recs = parsers.parse_linkedin(f"{FIX}/linkedin_connections.csv")

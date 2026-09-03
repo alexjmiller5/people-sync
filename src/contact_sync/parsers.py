@@ -21,10 +21,11 @@ paragraph + a blank line) before the real header row:
 Some rows are entirely blank except Connected On (LinkedIn could not export
 that connection's profile) - these have no URL and are skipped.
 
-Snapchat friends.json - UNVALIDATED against a real export (the file does not
-exist as of 2026-09-03, only a placeholder). Written from Snapchat's
-documented shape:
-    {"friends": [{"Username": "<user>", "Display Name": "<name>", ...}]}
+Snapchat friends.json - one list per relationship kind; only the current
+"Friends" list is ingested (siblings like "Deleted Friends", "Blocked Users",
+and "Ignored Snapchatters" are deliberately not people to triage):
+    {"Friends": [{"Username": "<user>", "Display Name": "<name>",
+                  "Creation Timestamp": ..., "Source": ...}], ...}
 """
 
 import csv
@@ -110,7 +111,7 @@ def parse_snapchat(path: str) -> list[Record]:
     with open(path) as f:
         data = json.load(f)
     records = []
-    for i, entry in enumerate(data.get("friends", [])):
+    for i, entry in enumerate(data.get("Friends") or []):
         username = entry.get("Username")
         if not username:
             log.warning(
