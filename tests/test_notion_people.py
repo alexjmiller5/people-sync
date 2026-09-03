@@ -1,3 +1,5 @@
+import pytest
+
 from contact_sync import notion_people
 
 
@@ -35,3 +37,13 @@ def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
         "data_source_id": notion_people.DATA_SOURCE_ID,
     }
     assert body["properties"] == {"Name": {"title": [{"text": {"content": "Test Person"}}]}}
+
+
+def test_create_stub_raises_clear_error_when_token_missing(monkeypatch, mocker):
+    monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
+    post = mocker.patch("contact_sync.notion_people.httpx.post")
+
+    with pytest.raises(RuntimeError, match=notion_people.MISSING_TOKEN_MSG):
+        notion_people.create_stub("Test Person")
+
+    post.assert_not_called()

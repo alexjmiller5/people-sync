@@ -43,11 +43,20 @@ def cmd_queue(args: argparse.Namespace) -> None:
 
 
 def cmd_new_person(args: argparse.Namespace) -> None:
-    if not os.environ.get("NOTION_API_TOKEN"):
-        sys.exit("NOTION_API_TOKEN is not set - cannot create a Notion People stub page")
-    page_id = notion_people.create_stub(args.name)
+    try:
+        page_id = notion_people.create_stub(args.name)
+    except RuntimeError as e:
+        sys.exit(str(e))
     person_id = page_id.replace("-", "")
-    lifedata.insert("people", [{"id": person_id, "name": args.name}])
+    try:
+        lifedata.insert("people", [{"id": person_id, "name": args.name}])
+    except Exception:
+        print(
+            f"orphaned notion page {page_id}: created but life-data insert failed; "
+            "re-run with this id or delete the page",
+            file=sys.stderr,
+        )
+        raise
     print(person_id)
 
 
