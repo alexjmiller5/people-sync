@@ -45,3 +45,15 @@ def test_double_upsert_idempotent_counts(mocker):
     )
     assert upsert([rec()]) == {"new": 1, "updated": 0}
     assert upsert([rec()]) == {"new": 0, "updated": 1}
+
+
+def test_duplicate_ids_within_batch_collapse(mocker):
+    """Sources without stable ids (facebook derives one from the name) can emit the
+    same row_id twice; a batch must insert it once, not violate the UNIQUE constraint."""
+    mocker.patch("contact_sync.lifedata.sql", return_value=[])
+    ins = mocker.patch("contact_sync.lifedata.insert")
+    mocker.patch("contact_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    out = upsert([rec(), rec(), rec("bob456")])
+    rows = ins.call_args.args[1]
+    assert [r["id"] for r in rows] == ["instagram:alice123", "instagram:bob456"]
+    assert out == {"new": 2, "updated": 0}
