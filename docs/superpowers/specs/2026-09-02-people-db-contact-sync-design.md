@@ -70,7 +70,8 @@ One row per (person, platform, handle). Columns: `person_id`, `platform`,
 
 * `platform` values (open set): `instagram`, `facebook`, `snapchat`,
   `linkedin`, `google_contacts`, `apple_contacts`, `whatsapp`, `venmo`,
-  `partiful`.
+  `partiful`, `spotify` - and any future platform; the set is a
+  convention, not an enum.
 * `source_id` is the platform's stable id where one exists (Google People
   `resourceName`, Apple Contacts id). For `google_contacts` /
   `apple_contacts` rows this is a foreign key into those systems: emails,
@@ -122,6 +123,14 @@ Columns: `person_id`, `platform`, `r2_key`, `sha256`, `fetched_at`,
 * Append-only: a changed profile picture is a new row; old rows stay -
   photo history is free. `sha256` prevents re-storing an unchanged image
   on every sweep.
+* **Capture policy: every person\_accounts row whose platform shows a
+  profile picture gets it captured - all platforms, not a shortlist.**
+  API-backed platforms (google\_contacts, apple\_contacts, spotify) are
+  fetched automatically; browser-only platforms (instagram, facebook,
+  linkedin, whatsapp, partiful, and whatever else appears) are scraped
+  via chrome-control during review runs. New/changed accounts every run;
+  full re-sweeps periodically or on request - sha dedupe makes unchanged
+  pictures free.
 
 ### person\_relations (existing - extended)
 
@@ -204,12 +213,14 @@ Scripts (plain Python via `uv run`, invoked ad hoc by Claude):
   ledger `matched`); everything fuzzy gets `suggested_person_id` and stays
   `pending`. Single-word names are never auto-matched. Every auto-link is
   recorded in the ledger, so it is auditable and reversible.
-* `photos fetch` - Apple/Google contact photos via API; hash, upload to R2,
-  append person\_photos rows.
+* `photos fetch` - Apple/Google contact photos via API, plus a generic
+  store-from-bytes/URL path used by review-time avatar scraping (any
+  platform); hash, upload to R2, append person\_photos rows.
 
-WhatsApp, Venmo, and Partiful have no exports: accounts are entered during
-triage; their photos are captured best-effort (chrome-control-assisted for
-specific people Alex cares about).
+WhatsApp, Venmo, Partiful, and Spotify have no friend exports: accounts are
+entered during triage (Spotify profile URLs/ids manually; its avatar is then
+API-fetchable). Avatars for browser-only platforms are scraped via
+chrome-control during review runs per the person\_photos capture policy.
 
 ## The workflow (`contacts-review` skill, in agent-config)
 
