@@ -134,3 +134,44 @@ def test_exact_unique_automatch_writes_account(mocker):
     assert row["active"] == 1
 
     assert out == {"auto": 1, "suggested": 0, "left_pending": 0}
+
+
+def test_record_side_ambiguity_stays_pending(mocker):
+    # one person "Test Person", two pending records both keying to them
+    # -> neither is touched: no auto, no suggestion, both stay pending
+    people = [
+        {
+            "id": "p1",
+            "name": "Test Person",
+            "first_name": "Test",
+            "last_name": "Person",
+            "nickname": None,
+        }
+    ]
+    pending = [
+        {
+            "id": "linkedin:t1",
+            "source": "linkedin",
+            "source_id": "t1",
+            "handle": "t1",
+            "name": "Test Person",
+            "raw": json.dumps({"URL": "https://linkedin.com/in/t1"}),
+        },
+        {
+            "id": "facebook:t2",
+            "source": "facebook",
+            "source_id": "t2",
+            "handle": None,
+            "name": "Test Person",
+            "raw": json.dumps({"name": "Test Person"}),
+        },
+    ]
+    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("contact_sync.lifedata.insert")
+
+    out = run_match()
+
+    ins.assert_not_called()
+    updates = [c.args[0] for c in sql.call_args_list if c.args[0].startswith("UPDATE")]
+    assert updates == []
+    assert out == {"auto": 0, "suggested": 0, "left_pending": 2}
