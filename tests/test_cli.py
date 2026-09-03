@@ -146,16 +146,32 @@ def test_new_person_creates_stub_inserts_dashstripped_row_and_prints_id(
     assert capsys.readouterr().out.strip() == "1a803953a8af80ab000bfe407316"
 
 
-def test_new_person_exits_with_clear_error_when_token_missing(mocker, monkeypatch, capsys):
+def test_new_person_exits_with_clear_error_when_token_missing(monkeypatch, mocker):
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
-    create = mocker.patch("contact_sync.notion_people.create_stub")
     insert = mocker.patch("contact_sync.lifedata.insert")
 
     with pytest.raises(SystemExit):
         cli.main(["new-person", "--name", "Test Person"])
 
-    create.assert_not_called()
     insert.assert_not_called()
+
+
+def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
+    mocker, monkeypatch, capsys
+):
+    monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
+    mocker.patch(
+        "contact_sync.notion_people.create_stub",
+        return_value="1a80-3953-a8af-80ab-000bfe407316",
+    )
+    mocker.patch("contact_sync.lifedata.insert", side_effect=RuntimeError("life insert failed"))
+
+    with pytest.raises(RuntimeError, match="life insert failed"):
+        cli.main(["new-person", "--name", "Test Person"])
+
+    err = capsys.readouterr().err
+    assert "1a80-3953-a8af-80ab-000bfe407316" in err
+    assert "life-data insert failed" in err
 
 
 def test_photos_store_prints_r2_key_on_new_photo(mocker, tmp_path, capsys):

@@ -12,11 +12,15 @@ import httpx
 
 DATA_SOURCE_ID = "1a803953-a8af-80ab-824d-000bfe407316"
 _API = "https://api.notion.com/v1/pages"
+MISSING_TOKEN_MSG = "NOTION_API_TOKEN is not set - cannot create a Notion People stub page"
 
 
 def create_stub(name: str) -> str:
+    token = os.environ.get("NOTION_API_TOKEN")
+    if not token:
+        raise RuntimeError(MISSING_TOKEN_MSG)
     headers = {
-        "Authorization": f"Bearer {os.environ['NOTION_API_TOKEN']}",
+        "Authorization": f"Bearer {token}",
         "Notion-Version": "2026-03-11",
         "Content-Type": "application/json",
     }
