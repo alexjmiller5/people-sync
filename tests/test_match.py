@@ -137,8 +137,9 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 
 def test_record_side_ambiguity_stays_pending(mocker):
-    # one person "Test Person", two pending records both keying to them
-    # -> neither is touched: no auto, no suggestion, both stay pending
+    # one person "Test Person", two pending records FROM THE SAME SOURCE both keying
+    # to them -> which account is really theirs is ambiguous, so neither is touched:
+    # no auto, no suggestion, both stay pending
     people = [
         {
             "id": "p1",
@@ -158,12 +159,12 @@ def test_record_side_ambiguity_stays_pending(mocker):
             "raw": json.dumps({"URL": "https://linkedin.com/in/t1"}),
         },
         {
-            "id": "facebook:t2",
-            "source": "facebook",
+            "id": "linkedin:t2",
+            "source": "linkedin",
             "source_id": "t2",
-            "handle": None,
+            "handle": "t2",
             "name": "Test Person",
-            "raw": json.dumps({"name": "Test Person"}),
+            "raw": json.dumps({"URL": "https://linkedin.com/in/t2"}),
         },
     ]
     sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
@@ -175,3 +176,53 @@ def test_record_side_ambiguity_stays_pending(mocker):
     updates = [c.args[0] for c in sql.call_args_list if c.args[0].startswith("UPDATE")]
     assert updates == []
     assert out == {"auto": 0, "suggested": 0, "left_pending": 2}
+
+
+def test_cross_source_records_both_automatch(mocker):
+    # one person "Test Person" present in BOTH google and apple contacts.
+    # Cross-source co-occurrence is confirmation, not ambiguity: both auto-link.
+    people = [
+        {
+            "id": "p1",
+            "name": "Test Person",
+            "first_name": "Test",
+            "last_name": "Person",
+            "nickname": None,
+        }
+    ]
+    pending = [
+        {
+            "id": "google_contacts:people/c1",
+            "source": "google_contacts",
+            "source_id": "people/c1",
+            "handle": None,
+            "name": "Test Person",
+            "raw": json.dumps({"names": [{"displayName": "Test Person"}]}),
+        },
+        {
+            "id": "apple_contacts:u1:ABPerson",
+            "source": "apple_contacts",
+            "source_id": "u1:ABPerson",
+            "handle": None,
+            "name": "Test Person",
+            "raw": json.dumps({"name": "Test Person"}),
+        },
+    ]
+    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("contact_sync.lifedata.insert")
+
+    out = run_match()
+
+    updates = [c.args[0] for c in sql.call_args_list if c.args[0].startswith("UPDATE")]
+    assert len(updates) == 2
+    assert all("status = 'matched'" in u and "person_id = 'p1'" in u for u in updates)
+
+    rows = ins.call_args.args[1]
+    assert sorted(r["platform"] for r in rows) == ["apple_contacts", "google_contacts"]
+    assert {r["person_id"] for r in rows} == {"p1"}
+    assert sorted(r["id"] for r in rows) == [
+        "apple_contacts:p1:u1:ABPerson",
+        "google_contacts:p1:people/c1",
+    ]
+
+    assert out == {"auto": 2, "suggested": 0, "left_pending": 0}
