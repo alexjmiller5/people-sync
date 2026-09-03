@@ -1,7 +1,5 @@
 {
-  description = "notion-contact-sync: unify social-platform contact exports into the Notion People DB";
+  description = "contact-sync: consolidate contact sources into the life-data people estate";
 
-  outputs = { self, ... }: {
-    darwinModules.default = import ./nix/darwin.nix;
-  };
+  outputs = { self, ... }: { };
 }
