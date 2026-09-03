@@ -43,11 +43,16 @@ def _ig_entries(path: str) -> dict[str, dict]:
         data = json.load(f)
     entries = data if isinstance(data, list) else data.get("relationships_following", [])
     out: dict[str, dict] = {}
-    for entry in entries:
+    for i, entry in enumerate(entries):
         items = entry.get("string_list_data") or []
         username = items[0].get("value") if items else None
         if not username:
-            log.warning("instagram entry missing username", entry=entry)
+            log.warning(
+                "skipping malformed entry",
+                source="instagram",
+                index=i,
+                reason="missing string_list_data",
+            )
             continue
         out[username.lower()] = entry
     return out
@@ -79,10 +84,12 @@ def parse_facebook(path: str) -> list[Record]:
     with open(path) as f:
         data = json.load(f)
     records = []
-    for entry in data.get("friends_v2", []):
+    for i, entry in enumerate(data.get("friends_v2", [])):
         name = entry.get("name")
         if not name:
-            log.warning("facebook entry missing name", entry=entry)
+            log.warning(
+                "skipping malformed entry", source="facebook", index=i, reason="missing name"
+            )
             continue
         source_id = name.strip().lower().replace(" ", "_")
         records.append(
@@ -103,10 +110,12 @@ def parse_snapchat(path: str) -> list[Record]:
     with open(path) as f:
         data = json.load(f)
     records = []
-    for entry in data.get("friends", []):
+    for i, entry in enumerate(data.get("friends", [])):
         username = entry.get("Username")
         if not username:
-            log.warning("snapchat entry missing username", entry=entry)
+            log.warning(
+                "skipping malformed entry", source="snapchat", index=i, reason="missing Username"
+            )
             continue
         records.append(
             Record(
@@ -132,16 +141,20 @@ def _linkedin_slug(url: str) -> str | None:
 def parse_linkedin(path: str) -> list[Record]:
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
-    header_idx = next(i for i, row in enumerate(rows) if row[:1] == ["First Name"])
+    header_idx = next((i for i, row in enumerate(rows) if row[:1] == ["First Name"]), None)
+    if header_idx is None:
+        raise ValueError("linkedin header row not found")
     header = rows[header_idx]
     records = []
-    for row in rows[header_idx + 1 :]:
+    for i, row in enumerate(rows[header_idx + 1 :]):
         if not row or not any(row):
             continue
         raw = dict(zip(header, row))
         slug = _linkedin_slug(raw.get("URL", ""))
         if not slug:
-            log.warning("linkedin row missing profile url", raw=raw)
+            log.warning(
+                "skipping malformed entry", source="linkedin", index=i, reason="missing URL"
+            )
             continue
         name = f"{raw.get('First Name', '')} {raw.get('Last Name', '')}".strip() or None
         records.append(

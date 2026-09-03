@@ -1,3 +1,5 @@
+import pytest
+
 from contact_sync import parsers
 
 FIX = "tests/fixtures"
@@ -87,3 +89,11 @@ def test_linkedin_handles_empty_email_and_skips_blank_row():
     assert jane.raw["Email Address"] == "jane@example.com"
     assert jane.raw["Company"] == ""
     assert jane.follows_me is None and jane.i_follow is None
+
+
+def test_linkedin_raises_valueerror_when_header_row_missing(tmp_path):
+    csv_path = tmp_path / "no_header.csv"
+    csv_path.write_text('Notes:\n"some preamble"\n\nnot,a,header,row\nfoo,bar,baz,qux\n')
+
+    with pytest.raises(ValueError, match="linkedin header row not found"):
+        parsers.parse_linkedin(str(csv_path))
