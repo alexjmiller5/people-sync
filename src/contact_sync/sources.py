@@ -87,12 +87,23 @@ def fetch_google() -> list[Record]:
         if page_token:
             cmd += ["--page", page_token]
         data = json.loads(_run(cmd))
-        resource_names.extend(c["resource"] for c in data.get("contacts", []) if c.get("resource"))
+        for i, c in enumerate(data.get("contacts", [])):
+            if not c.get("resource"):
+                log.warning(
+                    "skipping malformed entry",
+                    source="google_contacts",
+                    index=i,
+                    reason="missing resource",
+                )
+                continue
+            resource_names.append(c["resource"])
         page_token = data.get("nextPageToken")
         if not page_token:
             break
 
     records = []
+    # ponytail: one gog raw call per contact (~10min for ~1k); switch to
+    # people.getBatchGet (via `gog api call people v1 people.getBatchGet`) if runtime matters
     for i, resource_name in enumerate(resource_names):
         try:
             person = json.loads(_run(["gog", "contacts", "raw", resource_name, "-j", "--no-input"]))

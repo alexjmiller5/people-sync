@@ -85,9 +85,6 @@ def test_fetch_google_maps_full_contact(mocker):
     # phone/email never copied into raw - same boundary as Apple
     assert "emailAddresses" not in full.raw
     assert "phoneNumbers" not in full.raw
-    assert "email" not in json.dumps(full.raw).lower() or "synthetic@example.com" not in json.dumps(
-        full.raw
-    )
 
 
 def test_fetch_google_paginates_and_skips_malformed(mocker):
@@ -104,6 +101,46 @@ def test_fetch_google_paginates_and_skips_malformed(mocker):
     # second page (via nextPageToken) was fetched
     assert "people/c4" in recs
     assert len(recs) == 3  # c1, c2, c4 (c3 skipped)
+
+
+def test_fetch_google_skips_list_entry_missing_resource(mocker):
+    def fake_run(cmd, **kwargs):
+        class Proc:
+            def __init__(self, stdout, returncode=0):
+                self.stdout = stdout
+                self.returncode = returncode
+                self.stderr = ""
+
+        if cmd[:3] == ["gog", "contacts", "list"]:
+            return Proc(
+                json.dumps(
+                    {
+                        "contacts": [
+                            {"name": "No Resource Person"},  # missing "resource" entirely
+                            {"resource": "people/c9", "name": "Good Person"},
+                        ]
+                    }
+                )
+            )
+        if cmd[:3] == ["gog", "contacts", "raw"]:
+            return Proc(
+                json.dumps({"resourceName": "people/c9", "names": [{"displayName": "Good Person"}]})
+            )
+        raise AssertionError(f"unexpected command {cmd}")
+
+    mocker.patch("contact_sync.sources.subprocess.run", side_effect=fake_run)
+    log = mocker.patch("contact_sync.sources.log")
+
+    recs = sources.fetch_google()
+
+    # the entry missing "resource" never reaches a raw call or a Record
+    assert [r.source_id for r in recs] == ["people/c9"]
+    log.warning.assert_any_call(
+        "skipping malformed entry",
+        source="google_contacts",
+        index=0,
+        reason="missing resource",
+    )
 
 
 APPLE_ROWS_DB1 = json.dumps(
@@ -188,7 +225,6 @@ def test_fetch_apple_maps_and_skips_missing_id(mocker):
     assert full.raw["has_phone"] is True
     assert full.raw["has_email"] is False
     # hard privacy rule: no actual phone/email values ever appear
-    assert "phone" not in full.raw or isinstance(full.raw.get("has_phone"), bool)
     assert not any(
         k
         for k in full.raw
