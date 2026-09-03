@@ -44,6 +44,10 @@ def _upload(key: str, data: bytes) -> None:
 
 
 def store_photo(person_id: str, platform: str, image: bytes, ext: str) -> str | None:
+    # platform must be one of the spec's person_accounts platform values
+    # (instagram, facebook, snapchat, linkedin, google_contacts,
+    # apple_contacts, whatsapp, venmo, partiful, spotify) - person_photos
+    # joins to person_accounts on (person_id, platform).
     sha = hashlib.sha256(image).hexdigest()
     existing = lifedata.sql(
         "SELECT id FROM person_photos WHERE deleted_at IS NULL "
