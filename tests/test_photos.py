@@ -65,6 +65,44 @@ def test_store_photo_uploads_new_sha(mocker, monkeypatch):
     assert "fetched_at" in row
 
 
+def test_store_photo_dedupe_is_scoped_per_person(mocker, monkeypatch):
+    monkeypatch.setenv("CF_API_TOKEN", "test-token")
+    stored_rows: list[tuple[str, str]] = []  # simulates person_photos: (person_id, sha256)
+
+    def fake_sql(query):
+        # A real dedupe query must scope by person_id, not just sha256 - if the
+        # person_id clause is ever dropped from store_photo's query, this stops
+        # matching and the assertions below fail.
+        return [
+            {"id": "x"}
+            for pid, sha in stored_rows
+            if f"person_id = '{pid}'" in query and f"sha256 = '{sha}'" in query
+        ]
+
+    def fake_insert(table, rows):
+        for row in rows:
+            stored_rows.append((row["person_id"], row["sha256"]))
+
+    mocker.patch("contact_sync.lifedata.sql", side_effect=fake_sql)
+    mocker.patch("contact_sync.lifedata.insert", side_effect=fake_insert)
+    mocker.patch(
+        "contact_sync.photos.httpx.get",
+        return_value=_Resp(json_data={"result": [{"id": "acct1"}]}),
+    )
+    put = mocker.patch("contact_sync.photos.httpx.put", return_value=_Resp())
+
+    image = b"same-image-bytes"
+
+    first = photos.store_photo("p1", "instagram", image, "jpg")
+    dup_same_person = photos.store_photo("p1", "instagram", image, "jpg")
+    other_person = photos.store_photo("p2", "instagram", image, "jpg")
+
+    assert first is not None
+    assert dup_same_person is None
+    assert other_person is not None
+    assert put.call_count == 2
+
+
 def test_fetch_url_photo_returns_bytes_on_200_image(mocker):
     mocker.patch(
         "contact_sync.photos.httpx.get",
