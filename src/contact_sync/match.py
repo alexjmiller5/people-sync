@@ -77,8 +77,11 @@ def run_match() -> dict:
             if let:
                 letters_to_people[let].add(p["id"])
 
-    # person_id -> list of pending records that uniquely resolved to it
-    person_matches: dict[str, list[dict]] = defaultdict(list)
+    # (person_id, source) -> list of pending records that uniquely resolved to it.
+    # Scoped per source on purpose: two records from ONE source resolving to one person
+    # is ambiguous (which account is really theirs?), but the same person turning up in
+    # google AND apple contacts is confirmation, not ambiguity.
+    person_matches: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in pending:
         if r["source"] == "instagram":
             key = letters(r["handle"]) if r.get("handle") else ""
@@ -87,15 +90,15 @@ def run_match() -> dict:
             key = normalize(r["name"]) if r.get("name") else ""
             candidates = variant_to_people.get(key, set()) if key else set()
         if len(candidates) == 1:
-            person_matches[next(iter(candidates))].append(r)
+            person_matches[(next(iter(candidates)), r["source"])].append(r)
 
     auto = 0
     suggested = 0
     account_rows = []
-    for person_id, records in person_matches.items():
+    for (person_id, _source), records in person_matches.items():
         if len(records) != 1:
-            # more than one pending record resolves to this person - which one
-            # is right is ambiguous, so touch none of them
+            # more than one pending record from the SAME source resolves to this
+            # person - which one is right is ambiguous, so touch none of them
             continue
         record = records[0]
         person = people_by_id[person_id]
