@@ -13,7 +13,9 @@ Instagram following.json - a JSON object wrapping the same entry shape:
 
 Facebook your_friends.json - a JSON object with a single top-level key:
     {"friends_v2": [{"name": "<Full Name>", "timestamp": <int>}, ...]}
-    FB exports carry names only - no handle/username.
+    FB exports carry names only - no handle/username, so source_id is derived from
+    the name. CONSEQUENCE: two DIFFERENT friends who share a display name collapse
+    into ONE ledger record and one of them never reaches the triage queue.
 
 LinkedIn Connections.csv - a notes preamble ("Notes:" line + a quoted
 paragraph + a blank line) before the real header row:
