@@ -1,4 +1,4 @@
-"""One-off circles migration. Modes: worksheet | apply.
+"""One-off circles migration. Modes: worksheet | apply | sideeffects | reconcile.
 
 PRESERVATION INVARIANT: the default for every value is a verbatim circle.
 Any other action (merge/rename/split/location/employment/met_through/retire)
@@ -67,8 +67,7 @@ def apply():
             if d is None:
                 unaccounted.add(v)
                 continue
-            a = d["decision"]
-            for c in a.get("circles", [a.get("circle")] if a.get("circle") else []):
+            for c in circles_of(d):
                 if c not in circles:
                     circles.append(c)
             changed = True
@@ -100,5 +99,61 @@ def apply():
     print("applied; run reconcile checks next")
 
 
+def circles_of(decision):
+    a = decision["decision"]
+    return a.get("circles", [a.get("circle")] if a.get("circle") else [])
+
+
+def sideeffects():
+    """met_through edges for the values whose decision names a resolved person."""
+    dec = json.loads(DEC.read_text())
+    rows = {}
+    for row in load_people():
+        for _, v in values_of(row):
+            mt = dec[v]["decision"].get("met_through")
+            if mt and mt["person_id"] != row["id"]:
+                rid = f"mt:{row['id']}:{mt['person_id']}"
+                rows[rid] = {
+                    "id": rid,
+                    "person_id": row["id"],
+                    "related_id": mt["person_id"],
+                    "relation_type": "met_through",
+                }
+    lifedata.insert("person_relations", list(rows.values()))
+    print(f"{len(rows)} met_through edges inserted")
+
+
+def reconcile():
+    """Every person who contributed a value must carry the circle(s) it maps to."""
+    dec = json.loads(DEC.read_text())
+    want = defaultdict(lambda: defaultdict(set))  # value -> circle -> person ids
+    for row in load_people():
+        for _, v in values_of(row):
+            for c in circles_of(dec[v]):
+                want[v][c].add(row["id"])
+    have = defaultdict(set)
+    for r in lifedata.sql(
+        "SELECT p.id AS id, j.value AS c FROM people p, json_each(p.circles) j "
+        "WHERE p.deleted_at IS NULL"
+    ):
+        have[r["c"]].add(r["id"])
+    shortfalls = 0
+    print(f"{'value':<56} {'n':>4}  -> circle (carriers, missing)")
+    for v, d in sorted(dec.items(), key=lambda kv: -kv[1]["count"]):
+        parts = []
+        for c in circles_of(d) or ["<retired>"]:
+            missing = len(want[v][c] - have[c]) if c in want[v] else 0
+            shortfalls += missing
+            parts.append(f"{c!r} ({len(have[c])}, -{missing})")
+        print(f"{v!r:<56} {d['count']:>4}  -> " + "; ".join(parts))
+    print(f"\n{len(dec)} values checked, {shortfalls} shortfalls")
+    assert not shortfalls, "PRESERVATION VIOLATION: people lost a value"
+
+
 if __name__ == "__main__":
-    {"worksheet": worksheet, "apply": apply}[sys.argv[1]]()
+    {
+        "worksheet": worksheet,
+        "apply": apply,
+        "sideeffects": sideeffects,
+        "reconcile": reconcile,
+    }[sys.argv[1]]()
