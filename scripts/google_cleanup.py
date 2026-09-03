@@ -7,7 +7,9 @@ contact at a time, and ONLY after re-reading life-data and confirming the
 replacement is already there: every Google label must already be a circle and
 every org name/title must already be a person_employments row. A contact with
 any gap is printed and skipped - nothing is cleared from Google before its
-life-data replacement is verified.
+life-data replacement is verified. The org is additionally re-read from Google
+immediately before it is cleared, so a value that changed since the last ingest
+(and was therefore never verified) is left alone.
 
     uv run python scripts/google_cleanup.py             # dry run (the default)
     uv run python scripts/google_cleanup.py --apply     # with Alex watching
@@ -62,8 +64,8 @@ def user_groups() -> dict[str, str]:
 def decide(raw: dict, circles: list[str], employments: list[dict], groups: dict[str, str]):
     """Verify-then-clear decision for one contact.
 
-    Returns (labels, clear_org, gaps): labels = [(group resourceName, name)] safe to
-    drop, clear_org = whether the org/title fields are safe to clear, gaps = the
+    Returns (labels, orgs, gaps): labels = [(group resourceName, name)] safe to
+    drop, orgs = the verified org entries whose fields are safe to clear, gaps = the
     life-data values that are missing. Any gap means nothing is cleared.
     """
     labels = []
@@ -87,11 +89,30 @@ def decide(raw: dict, circles: list[str], employments: list[dict], groups: dict[
             gaps.append(f"title {o['title']!r} is not an employment title")
 
     if gaps:
-        return [], False, gaps
-    return labels, bool(orgs), []
+        return [], [], gaps
+    return labels, orgs, []
 
 
-def clear(resource_name: str, labels: list[tuple[str, str]], clear_org: bool) -> None:
+def org_key(orgs: list[dict]) -> list[tuple[str, str]]:
+    return sorted((norm(o.get("name")), norm(o.get("title"))) for o in orgs)
+
+
+def live_orgs(resource_name: str) -> list[dict]:
+    """What Google holds RIGHT NOW - the ledger's raw is only a snapshot of the last ingest."""
+    person = json.loads(sources._run(["gog", "contacts", "raw", resource_name, "-j", "--no-input"]))
+    return [o for o in (person.get("organizations") or []) if o.get("name") or o.get("title")]
+
+
+def clear(
+    resource_name: str,
+    labels: list[tuple[str, str]],
+    orgs: list[dict],
+    read_live=live_orgs,
+) -> bool:
+    """Clear the verified labels, then the org - returns whether the org was cleared."""
+    if orgs and org_key(read_live(resource_name)) != org_key(orgs):
+        print(f"  SKIP org on {resource_name}: changed in Google since the last ingest")
+        orgs = []
     for group_rn, _ in labels:
         sources._run(
             [
@@ -111,22 +132,24 @@ def clear(resource_name: str, labels: list[tuple[str, str]], clear_org: bool) ->
                 "-j",
             ]
         )
-    if clear_org:
-        sources._run(
-            [
-                "gog",
-                "contacts",
-                "update",
-                resource_name,
-                "--org",
-                "",
-                "--title",
-                "",
-                "--no-input",
-                "-y",
-                "-j",
-            ]
-        )
+    if not orgs:
+        return False
+    sources._run(
+        [
+            "gog",
+            "contacts",
+            "update",
+            resource_name,
+            "--org",
+            "",
+            "--title",
+            "",
+            "--no-input",
+            "-y",
+            "-j",
+        ]
+    )
+    return True
 
 
 def main(apply: bool) -> None:
@@ -143,18 +166,19 @@ def main(apply: bool) -> None:
     for rec in records:
         raw = json.loads(rec["raw"] or "{}")
         circles = json.loads(rec["circles"] or "[]")
-        labels, clear_org, gaps = decide(raw, circles, by_person.get(rec["person_id"], []), groups)
+        labels, orgs, gaps = decide(raw, circles, by_person.get(rec["person_id"], []), groups)
         if gaps:
             skipped += 1
             print(f"SKIP {rec['name']}: " + "; ".join(gaps))
             continue
-        if not labels and not clear_org:
+        if not labels and not orgs:
             continue
-        what = ", ".join([n for _, n in labels] + (["org"] if clear_org else []))
         if apply:
-            clear(rec["source_id"], labels, clear_org)
+            org_cleared = clear(rec["source_id"], labels, orgs)
+            what = ", ".join([n for _, n in labels] + (["org"] if org_cleared else []))
             print(f"CLEARED {rec['name']}: {what}")
         else:
+            what = ", ".join([n for _, n in labels] + (["org"] if orgs else []))
             print(f"WOULD CLEAR {rec['name']}: {what}")
         cleared += 1
     verb = "cleared" if apply else "would clear"
@@ -174,19 +198,19 @@ def selftest() -> None:
     employments = [{"company": "Acme", "title": "Engineer"}]
 
     # Fully covered: both labels are circles, the org is an employment.
-    labels, clear_org, gaps = decide(raw, ["Capital One", "NYC"], employments, groups)
+    labels, orgs, gaps = decide(raw, ["Capital One", "NYC"], employments, groups)
     assert gaps == [], gaps
-    assert clear_org is True
+    assert orgs == [{"name": "Acme", "title": "Engineer"}], orgs
     assert [n for _, n in labels] == ["Capital One", "NYC"], labels  # system group ignored
 
     # A missing circle blocks the WHOLE contact, org included.
-    labels, clear_org, gaps = decide(raw, ["Capital One"], employments, groups)
-    assert labels == [] and clear_org is False
+    labels, orgs, gaps = decide(raw, ["Capital One"], employments, groups)
+    assert labels == [] and orgs == []
     assert gaps == ["label 'NYC' is not a circle"], gaps
 
     # A missing employment blocks it too, labels included.
-    labels, clear_org, gaps = decide(raw, ["Capital One", "NYC"], [], groups)
-    assert labels == [] and clear_org is False
+    labels, orgs, gaps = decide(raw, ["Capital One", "NYC"], [], groups)
+    assert labels == [] and orgs == []
     assert len(gaps) == 2, gaps
 
     # Case and whitespace noise is not a gap.
@@ -196,16 +220,25 @@ def selftest() -> None:
     )
 
     # No labels and no org: nothing to do, and no gap either.
-    assert decide({}, [], [], groups) == ([], False, [])
+    assert decide({}, [], [], groups) == ([], [], [])
+
+    # The org changed in Google since the ingest that was verified: do NOT clear it.
+    verified = [{"name": "Acme", "title": "Engineer"}]
+    drifted = clear("people/c1", [], verified, read_live=lambda _: [{"name": "Globex"}])
+    assert drifted is False
+
+    # Same org, noisier formatting and Google's extra metadata: still safe to clear.
+    assert org_key([{"name": " acme ", "title": "engineer", "metadata": {}}]) == org_key(verified)
     print("selftest ok")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="print the plan only (the default)")
     parser.add_argument("--apply", action="store_true", help="actually write to Google")
     parser.add_argument("--selftest", action="store_true", help="offline decision check")
     args = parser.parse_args()
     if args.selftest:
         selftest()
         sys.exit(0)
-    main(args.apply)
+    main(args.apply and not args.dry_run)
