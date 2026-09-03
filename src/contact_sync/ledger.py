@@ -3,7 +3,11 @@
 import json
 from dataclasses import dataclass
 
+import structlog
+
 from contact_sync import lifedata
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -28,9 +32,20 @@ def _int_sql(v: int | None) -> str:
 def upsert(records: list[Record]) -> dict:
     if not records:
         return {"new": 0, "updated": 0}
-    # Sources without stable ids (facebook derives one from the name) can emit the same
-    # row_id twice; collapse to the last occurrence so the batch insert stays valid.
-    records = list({r.row_id: r for r in records}.values())
+    # Sources without stable ids (facebook derives one from the display name) can emit
+    # the same row_id twice; collapse to the last occurrence so the batch insert stays
+    # valid. CONSEQUENCE: two DIFFERENT people who share a display name collapse into
+    # ONE ledger record, so one of them silently never appears in the triage queue.
+    # That is a real data loss, not just a dedupe - hence the warning below.
+    deduped = list({r.row_id: r for r in records}.values())
+    if len(deduped) < len(records):
+        log.warning(
+            "collapsed duplicate row ids",
+            source=records[0].source,
+            dropped=len(records) - len(deduped),
+            reason="source has no stable id; row_id derived from the display name",
+        )
+    records = deduped
     ids = ",".join(lifedata.sq(r.row_id) for r in records)
     existing = {
         row["id"] for row in lifedata.sql(f"SELECT id FROM contact_records WHERE id IN ({ids})")
