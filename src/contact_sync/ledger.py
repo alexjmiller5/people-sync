@@ -28,6 +28,9 @@ def _int_sql(v: int | None) -> str:
 def upsert(records: list[Record]) -> dict:
     if not records:
         return {"new": 0, "updated": 0}
+    # Sources without stable ids (facebook derives one from the name) can emit the same
+    # row_id twice; collapse to the last occurrence so the batch insert stays valid.
+    records = list({r.row_id: r for r in records}.values())
     ids = ",".join(lifedata.sq(r.row_id) for r in records)
     existing = {
         row["id"] for row in lifedata.sql(f"SELECT id FROM contact_records WHERE id IN ({ids})")
