@@ -39,12 +39,23 @@ CIRCLE_ALIASES = {"ΣAE": "SAE"}
 
 # Notion DBs holding a relation to a People page. `merge` never writes to Notion,
 # so it reports the loser's pages for a manual re-point instead.
-# {db: (data_source_id, relation property)}
+# {db: (data_source_id, relation property id)} - property IDs, not names, so a
+# rename in Notion cannot silently turn the check into a no-op. The ids are the
+# percent-encoded form the API returns; the human name is in the comment.
 NOTION_PEOPLE_RELATIONS = {
-    "Gifts": ("0c39fffe-c8c2-43a5-af03-0a378c682c1c", "Recipient(s)"),
-    "Quotes": ("18f03953-a8af-802f-8950-000b03428f8e", "Person"),
-    "Trips": ("19603953-a8af-80af-8803-000be09834a6", "Travel Companions"),
-    "Calendar": ("24c03953-a8af-8036-8b1b-000bb8d77b03", "Attendees"),
+    "Gifts": ("0c39fffe-c8c2-43a5-af03-0a378c682c1c", "%3FT%40U"),  # Recipient(s)
+    "Quotes": ("18f03953-a8af-802f-8950-000b03428f8e", "Y%5B%3E%7B"),  # Person
+    "Trips": ("19603953-a8af-80af-8803-000be09834a6", "t%3DJH"),  # Travel Companions
+    "Calendar": ("24c03953-a8af-8036-8b1b-000bb8d77b03", "%3DS%60m"),  # Attendees
+}
+
+# {table: the columns that make two child rows the same fact}. A loser row whose
+# key an ACTIVE survivor row already holds is soft-deleted instead of re-pointed.
+MERGE_DEDUPE_KEYS = {
+    "person_accounts": ("platform", "source_id"),
+    "person_photos": ("sha256",),
+    "person_locations": ("city", "country", "start", "end"),
+    "person_employments": ("company", "title", "start", "end"),
 }
 
 # people columns the merge scalar fold must not touch: sync bookkeeping, plus the
@@ -161,7 +172,6 @@ def parse_record(record: dict, groups: dict[str, str]) -> dict:
         "last_name": name.get("familyName"),
         "birthday": _birthday(_primary_entry(raw.get("birthday") or []).get("date") or {}),
         "circles": union_circles([], circles),
-        "photo_url": raw.get("photo_url"),
     }
 
 
@@ -198,13 +208,24 @@ def _mark_matched(ops: Ops, record_id: str, person_id: str) -> None:
 
 def _link_account(ops: Ops, person_id: str, record: dict, display_name: str | None) -> None:
     existing = lifedata.sql(
-        f"SELECT id FROM person_accounts WHERE person_id = {lifedata.sq(person_id)} "
-        f"AND platform = {lifedata.sq(SOURCE)} "
-        f"AND source_id = {lifedata.sq(record['source_id'])} "
-        "AND active = 1 AND deleted_at IS NULL"
+        f"SELECT id, source_id FROM person_accounts WHERE person_id = {lifedata.sq(person_id)} "
+        f"AND platform = {lifedata.sq(SOURCE)} AND active = 1 AND deleted_at IS NULL"
     )
-    if existing:
-        print(f"  account already linked ({existing[0]['id']})")
+    # A row with no source_id predates the backfill: it cannot be compared, and
+    # inserting alongside it would give the person two google rows. Leave both alone.
+    legacy = [row for row in existing if row["source_id"] is None]
+    if legacy:
+        log.warning(
+            "manual-reconcile: legacy google account row without source_id",
+            source=SOURCE,
+            person_id=person_id,
+            account_id=legacy[0]["id"],
+        )
+        print(f"  account NOT inserted: {legacy[0]['id']} has no source_id - reconcile by hand")
+        return
+    match = [row for row in existing if row["source_id"] == record["source_id"]]
+    if match:
+        print(f"  account already linked ({match[0]['id']})")
         return
     ops.insert("person_accounts", [account_row(person_id, record, display_name)])
 
@@ -282,7 +303,7 @@ def link(person_id: str, record_id: str, rename: bool, ops: Ops) -> None:
 # --- merge --------------------------------------------------------------------
 
 
-def _notion_hits(db: str, data_source_id: str, prop: str, page_id: str, token: str) -> list[str]:
+def _notion_hits(data_source_id: str, prop: str, page_id: str, token: str) -> list[str]:
     resp = httpx.post(
         f"https://api.notion.com/v1/data_sources/{data_source_id}/query",
         headers={
@@ -317,7 +338,13 @@ def report_notion_relations(loser_id: str) -> None:
         return
     page_id = _dashed(loser_id)
     for db, (data_source_id, prop) in NOTION_PEOPLE_RELATIONS.items():
-        for url in _notion_hits(db, data_source_id, prop, page_id, token):
+        # advisory only: one DB failing must not block the merge or the other DBs
+        try:
+            hits = _notion_hits(data_source_id, prop, page_id, token)
+        except httpx.HTTPError as e:
+            log.warning("notion relation check failed", db=db, reason=type(e).__name__)
+            continue
+        for url in hits:
             print(
                 f"NOTION RELATION on {db}: {url} still points at the loser page - re-point manually"
             )
@@ -369,12 +396,8 @@ def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
         print(f"  after survivor:  {json.dumps(updates)}")
         ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {lifedata.sq(survivor_id)}")
 
-    _merge_accounts(survivor_id, loser_id, ops)
-    for table in ("person_photos", "person_locations", "person_employments"):
-        ops.sql(
-            f"UPDATE {table} SET person_id = {lifedata.sq(survivor_id)} "
-            f"WHERE person_id = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
-        )
+    for table, keys in MERGE_DEDUPE_KEYS.items():
+        _merge_child_rows(table, keys, survivor_id, loser_id, ops)
     for col in ("person_id", "suggested_person_id"):
         ops.sql(
             f"UPDATE contact_records SET {col} = {lifedata.sq(survivor_id)} "
@@ -395,23 +418,32 @@ def _soft_delete(ops: Ops, table: str, row_id: str, why: str) -> None:
     )
 
 
-def _merge_accounts(survivor_id: str, loser_id: str, ops: Ops) -> None:
+def _merge_child_rows(
+    table: str, keys: tuple[str, ...], survivor_id: str, loser_id: str, ops: Ops
+) -> None:
+    """Re-point the loser's rows, soft-deleting the ones the survivor already holds."""
     rows = lifedata.sql(
-        "SELECT id, person_id, platform, source_id FROM person_accounts "
+        f"SELECT * FROM {table} "
         f"WHERE person_id IN ({lifedata.sq(survivor_id)}, {lifedata.sq(loser_id)}) "
         "AND deleted_at IS NULL"
     )
-    held = {(row["platform"], row["source_id"]) for row in rows if row["person_id"] == survivor_id}
+    # active-only baseline: a retired survivor row (a renamed handle) is history,
+    # not a reason to drop the loser's live row
+    held = {
+        tuple(row[key] for key in keys)
+        for row in rows
+        if row["person_id"] == survivor_id and row.get("active", 1)
+    }
     for row in rows:
         if row["person_id"] != loser_id:
             continue
-        key = (row["platform"], row["source_id"])
-        if key in held:
-            _soft_delete(ops, "person_accounts", row["id"], "duplicate of a survivor account")
+        row_key = tuple(row[key] for key in keys)
+        if row_key in held:
+            _soft_delete(ops, table, row["id"], "duplicate of a survivor row")
             continue
-        held.add(key)
+        held.add(row_key)
         ops.sql(
-            f"UPDATE person_accounts SET person_id = {lifedata.sq(survivor_id)} "
+            f"UPDATE {table} SET person_id = {lifedata.sq(survivor_id)} "
             f"WHERE id = {lifedata.sq(row['id'])}"
         )
 
@@ -453,6 +485,8 @@ def create(record_id: str, ops: Ops) -> None:
     if record["status"] == "matched":
         print(f"{record_id} is already matched to {record['person_id']} - nothing to do")
         return
+    if record["status"] != "pending":
+        sys.exit(f"record {record_id} is {record['status']}, expected pending")
     google = parse_record(record, user_groups())
     name = google["display_name"]
     if not name:
