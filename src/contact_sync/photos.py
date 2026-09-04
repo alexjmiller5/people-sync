@@ -37,10 +37,26 @@ def _account_id() -> str:
     return resp.json()["result"][0]["id"]
 
 
-def _upload(key: str, data: bytes) -> None:
+def _upload(key: str, data: bytes, content_type: str | None = None) -> None:
     url = f"{_CF_API}/accounts/{_account_id()}/r2/buckets/{_BUCKET}/objects/{key}"
-    resp = httpx.put(url, headers=_cf_headers(), content=data, timeout=60)
+    headers = _cf_headers()
+    if content_type:
+        headers["Content-Type"] = content_type
+    resp = httpx.put(url, headers=headers, content=data, timeout=60)
     resp.raise_for_status()
+
+
+def put_object(key: str, data: bytes, content_type: str | None = None) -> None:
+    """Generic R2 object write - for content keyed by something other than
+    a person id (e.g. scraped raw pages and record-scoped avatars)."""
+    _upload(key, data, content_type)
+
+
+def get_object(key: str) -> bytes:
+    url = f"{_CF_API}/accounts/{_account_id()}/r2/buckets/{_BUCKET}/objects/{key}"
+    resp = httpx.get(url, headers=_cf_headers(), timeout=60)
+    resp.raise_for_status()
+    return resp.content
 
 
 def store_photo(person_id: str, platform: str, image: bytes, ext: str) -> str | None:
