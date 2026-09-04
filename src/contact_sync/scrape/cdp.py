@@ -35,6 +35,11 @@ DEVTOOLS_ACTIVE_PORT = Path(
 HANDSHAKE_TIMEOUT = 30.0
 ALLOW_HINT = "click Allow in the Chrome remote-debugging dialog"
 
+# A single Network.getResponseBody must never hang navigate() forever - a
+# request whose body Chrome never returns (evicted, aborted, redirected) is
+# logged and skipped rather than blocking the whole capture window.
+RESPONSE_BODY_TIMEOUT = 10.0
+
 
 class CdpError(RuntimeError):
     """A CDP handshake timeout, protocol error, or Runtime.evaluate exception."""
@@ -159,7 +164,11 @@ class Browser:
     # -- navigation ---------------------------------------------------------
 
     def navigate(self, url: str, wait_ms: int = 10000, capture: list[str] | None = None) -> dict:
-        """Navigate and wait for Page.loadEventFired (or wait_ms, non-fatal).
+        """Navigate and wait for Page.loadEventFired (or wait_ms, non-fatal -
+        SPAs like Facebook's /friends_all never fire it; the DOM is usually
+        already usable, so navigate() proceeds and reports `load_event: False`
+        instead of raising). Only a failed Page.navigate RPC itself (bad URL,
+        target gone) raises `CdpError`.
 
         `capture` is a list of regexes (matched with `re.search` against the
         response URL) - a plain substring works unchanged, but a literal URL
@@ -172,30 +181,41 @@ class Browser:
         return fut.result(timeout=wait_ms / 1000 * 2 + 30)
 
     async def _navigate_async(self, url: str, wait_ms: int, capture: list[str] | None) -> dict:
+        # Clean up any stragglers left pending by a previous navigate/capture
+        # window before starting a new one.
+        await self._cancel_capture_tasks()
         self._captured = []
         self._captured_returned_upto = 0
-        self._capture_tasks = []
         self._pending_responses = {}
         self._capture_patterns = list(capture) if capture else []
-        if self._capture_patterns:
-            await self._send("Network.enable", session_id=self._session_id)
-
-        self._load_waiter = asyncio.get_running_loop().create_future()
-        start = time.monotonic()
-        await self._send("Page.navigate", {"url": url}, session_id=self._session_id)
         try:
-            await asyncio.wait_for(self._load_waiter, timeout=wait_ms / 1000)
-        except asyncio.TimeoutError:
-            pass
-        load_ms = (time.monotonic() - start) * 1000
+            if self._capture_patterns:
+                await self._send("Network.enable", session_id=self._session_id)
 
-        if self._capture_patterns:
-            # SPAs (LinkedIn, Instagram) fetch their real data after the load
-            # event, so keep listening for the same window again.
-            await asyncio.sleep(wait_ms / 1000)
-            await self._settle_capture_tasks()
+            self._load_waiter = asyncio.get_running_loop().create_future()
+            start = time.monotonic()
+            await self._send("Page.navigate", {"url": url}, session_id=self._session_id)
+            load_event = True
+            try:
+                await asyncio.wait_for(self._load_waiter, timeout=wait_ms / 1000)
+            except asyncio.TimeoutError:
+                load_event = False
+            load_ms = (time.monotonic() - start) * 1000
 
-        return self._drain_captured(load_ms=load_ms)
+            if self._capture_patterns:
+                # SPAs (LinkedIn, Instagram) fetch their real data after the
+                # load event, so keep listening for the same window again.
+                # Each fetch is individually bounded (RESPONSE_BODY_TIMEOUT),
+                # so this can't hang past that regardless of load_event.
+                await asyncio.sleep(wait_ms / 1000)
+                await self._settle_capture_tasks()
+
+            return self._drain_captured(load_ms=load_ms, load_event=load_event)
+        except BaseException:
+            # A Page.navigate RPC error (or anything else) still leaves
+            # nothing pending behind for the loop to destroy later.
+            await self._cancel_capture_tasks()
+            raise
 
     def capture_more(self, seconds: float) -> list[dict]:
         fut = asyncio.run_coroutine_threadsafe(self._capture_more_async(seconds), self._loop)
@@ -207,16 +227,32 @@ class Browser:
         return self._drain_captured()["captured"]
 
     async def _settle_capture_tasks(self) -> None:
+        """Wait for in-flight fetches to finish naturally. Each one is
+        individually bounded by RESPONSE_BODY_TIMEOUT (see `_fetch_body`),
+        so this can't hang - it's not a cancellation path."""
         tasks, self._capture_tasks = self._capture_tasks, []
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _drain_captured(self, load_ms: float | None = None) -> dict:
+    async def _cancel_capture_tasks(self) -> None:
+        """Force-cancel and await any still-pending fetch tasks, so none are
+        left for the event loop to destroy while pending (on an exception
+        path, a fresh navigate(), or close())."""
+        tasks, self._capture_tasks = self._capture_tasks, []
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _drain_captured(self, load_ms: float | None = None, load_event: bool | None = None) -> dict:
         new = self._captured[self._captured_returned_upto :]
         self._captured_returned_upto = len(self._captured)
         result: dict = {"captured": new}
         if load_ms is not None:
             result["load_ms"] = load_ms
+        if load_event is not None:
+            result["load_event"] = load_event
         return result
 
     def scroll(self, px: int) -> None:
@@ -254,10 +290,13 @@ class Browser:
 
     async def _fetch_body(self, request_id: str, info: dict) -> None:
         try:
-            result = await self._send(
-                "Network.getResponseBody",
-                {"requestId": request_id},
-                session_id=self._session_id,
+            result = await asyncio.wait_for(
+                self._send(
+                    "Network.getResponseBody",
+                    {"requestId": request_id},
+                    session_id=self._session_id,
+                ),
+                timeout=RESPONSE_BODY_TIMEOUT,
             )
             body = result.get("body", "") if result else ""
         except Exception as e:
@@ -284,6 +323,12 @@ class Browser:
             raise CdpError(f"Runtime.evaluate failed: {text} {description}".strip())
         return (result.get("result") or {}).get("value")
 
+    def text(self) -> str:
+        """Title + up to 3000 chars of visible body text - what run.py's
+        challenge check (`pace.is_challenge`) reads, in one eval instead of
+        each caller composing its own."""
+        return self.eval('document.title + "\\n" + document.body.innerText.slice(0, 3000)')
+
     def close(self) -> None:
         try:
             fut = asyncio.run_coroutine_threadsafe(self._close_async(), self._loop)
@@ -293,6 +338,7 @@ class Browser:
 
     async def _close_async(self) -> None:
         try:
+            await self._cancel_capture_tasks()
             if self._target_id:
                 await self._send("Target.closeTarget", {"targetId": self._target_id})
         finally:
