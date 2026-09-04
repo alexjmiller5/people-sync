@@ -45,7 +45,11 @@ class FakeChrome:
             elif method == "Target.createTarget":
                 await ws.send(json.dumps({"id": mid, "result": {"targetId": "T1"}}))
             elif method == "Target.attachToTarget":
-                await ws.send(json.dumps({"id": mid, "result": {"sessionId": "S1"}}))
+                # The RPC response deliberately carries a DIFFERENT sessionId
+                # than the attachedToTarget event, to prove the client takes
+                # the session id from the event (per the chrome-control
+                # skill), never from the call's own response.
+                await ws.send(json.dumps({"id": mid, "result": {"sessionId": "WRONG-FROM-RPC"}}))
                 await ws.send(
                     json.dumps({"method": "Target.attachedToTarget", "params": {"sessionId": "S1"}})
                 )
@@ -271,7 +275,8 @@ def test_navigate_captures_matching_response_body(tmp_path, fake_chrome):
                 "body": '{"name": "fixture"}',
             }
         ]
-        assert any(m["method"] == "Network.enable" for m in fake_chrome.messages)
+        network_enable = next(m for m in fake_chrome.messages if m["method"] == "Network.enable")
+        assert network_enable["sessionId"] == browser._session_id == "S1"
     finally:
         browser.close()
 
@@ -385,6 +390,33 @@ def test_get_response_body_failure_does_not_abort(tmp_path, fake_chrome, mocker)
         assert "reason" in kwargs
     finally:
         browser.close()
+
+
+def test_fetch_body_logs_and_swallows_non_protocol_exceptions(mocker):
+    # A ConnectionClosed (or any non-CdpError) raised mid-fetch - e.g. the
+    # websocket drops between the request and its reply - must be logged and
+    # swallowed the same way, not left to surface as an unretrieved task
+    # exception from asyncio.gather.
+    warn = mocker.patch.object(cdp.log, "warning")
+    browser = cdp.Browser(loop=asyncio.new_event_loop())
+
+    async def boom(*args, **kwargs):
+        raise ConnectionResetError("boom")
+
+    browser._send = boom
+
+    asyncio.run(
+        browser._fetch_body(
+            "R1",
+            {"url": "https://x.test/api/profile", "status": 200, "mimeType": "application/json"},
+        )
+    )
+
+    assert browser._captured == []
+    warn.assert_called_once()
+    _, kwargs = warn.call_args
+    assert kwargs["host"] == "x.test"
+    assert "reason" in kwargs
 
 
 def test_capture_more_continues_without_renavigating(tmp_path, fake_chrome):

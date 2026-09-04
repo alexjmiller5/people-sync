@@ -159,6 +159,13 @@ class Browser:
     # -- navigation ---------------------------------------------------------
 
     def navigate(self, url: str, wait_ms: int = 10000, capture: list[str] | None = None) -> dict:
+        """Navigate and wait for Page.loadEventFired (or wait_ms, non-fatal).
+
+        `capture` is a list of regexes (matched with `re.search` against the
+        response URL) - a plain substring works unchanged, but a literal URL
+        containing regex metacharacters (`?`, `.`, `+`, ...) should be passed
+        through `re.escape` first.
+        """
         fut = asyncio.run_coroutine_threadsafe(
             self._navigate_async(url, wait_ms, capture), self._loop
         )
@@ -253,7 +260,7 @@ class Browser:
                 session_id=self._session_id,
             )
             body = result.get("body", "") if result else ""
-        except CdpError as e:
+        except Exception as e:
             log.warning("response body fetch failed", host=_url_host(info["url"]), reason=str(e))
             return
         self._captured.append({**info, "body": body})

@@ -10,23 +10,23 @@ def _dt(iso: str) -> datetime:
     return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
 
 
-def test_next_gap_uniform_range(mocker):
+def test_next_gap_uniform_range(tmp_path, mocker):
     mocker.patch("contact_sync.scrape.pace.random.uniform", return_value=15.0)
-    p = pace.Pacer("instagram", state_path="/tmp/does-not-matter.json")
+    p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     assert p.next_gap() == 15.0
 
 
-def test_next_gap_calls_uniform_with_8_25_bounds(mocker):
+def test_next_gap_calls_uniform_with_8_25_bounds(tmp_path, mocker):
     uniform = mocker.patch("contact_sync.scrape.pace.random.uniform", return_value=10.0)
-    p = pace.Pacer("instagram", state_path="/tmp/does-not-matter.json")
+    p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     p.next_gap()
     uniform.assert_called_once_with(8.0, 25.0)
 
 
-def test_next_gap_adds_break_every_25_calls(mocker):
+def test_next_gap_adds_break_every_25_calls(tmp_path, mocker):
     uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
     uniform.side_effect = [10.0] * 24 + [10.0, 200.0]
-    p = pace.Pacer("instagram", state_path="/tmp/does-not-matter.json")
+    p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     gaps = [p.next_gap() for _ in range(25)]
     # the 25th call adds a break on top of the normal gap
     assert gaps[:24] == [10.0] * 24
@@ -34,14 +34,30 @@ def test_next_gap_adds_break_every_25_calls(mocker):
     assert uniform.call_args_list[-1] == mocker.call(120.0, 300.0)
 
 
-def test_next_gap_break_cadence_repeats(mocker):
+def test_next_gap_break_cadence_repeats(tmp_path, mocker):
     uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
     # calls 1-24: base only. call 25: base + break. same pattern for 26-50.
     uniform.side_effect = [10.0] * 24 + [10.0, 200.0] + [10.0] * 24 + [10.0, 200.0]
-    p = pace.Pacer("instagram", state_path="/tmp/does-not-matter.json")
+    p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     gaps = [p.next_gap() for _ in range(50)]
     assert gaps[24] == 10.0 + 200.0
     assert gaps[49] == 10.0 + 200.0
+
+
+def test_next_gap_break_counter_survives_restart(tmp_path, mocker):
+    uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
+    state_path = str(tmp_path / "state.json")
+
+    uniform.side_effect = [10.0] * 24
+    p1 = pace.Pacer("instagram", state_path=state_path)
+    for _ in range(24):
+        p1.next_gap()
+
+    # process restarts: a brand new Pacer instance, no in-memory state
+    uniform.side_effect = [10.0, 200.0]
+    p2 = pace.Pacer("instagram", state_path=state_path)
+    gap = p2.next_gap()
+    assert gap == 10.0 + 200.0
 
 
 @pytest.mark.parametrize(
@@ -80,7 +96,7 @@ def test_record_persists_state_to_json_file(tmp_path, mocker):
     p.record()
 
     data = json.loads(state_path.read_text())
-    assert data["instagram"]["2026-09-04"] == 2
+    assert data["instagram"]["2026-09-04"]["calls"] == 2
 
 
 def test_record_is_scoped_per_platform(tmp_path, mocker):
@@ -93,8 +109,8 @@ def test_record_is_scoped_per_platform(tmp_path, mocker):
     fb.record()
 
     data = json.loads(state_path.read_text())
-    assert data["instagram"]["2026-09-04"] == 1
-    assert data["facebook"]["2026-09-04"] == 2
+    assert data["instagram"]["2026-09-04"]["calls"] == 1
+    assert data["facebook"]["2026-09-04"]["calls"] == 2
 
 
 def test_cap_rolls_over_at_utc_midnight(tmp_path, mocker):
@@ -116,19 +132,85 @@ def test_cap_rolls_over_at_utc_midnight(tmp_path, mocker):
 def test_record_loads_existing_state_file(tmp_path, mocker):
     mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
-    state_path.write_text(json.dumps({"instagram": {"2026-09-04": 5}}))
+    state_path.write_text(json.dumps({"instagram": {"2026-09-04": {"calls": 5, "gap_calls": 5}}}))
 
     p = pace.Pacer("instagram", state_path=str(state_path))
     assert p.allow() is True
     p.record()
 
     data = json.loads(state_path.read_text())
-    assert data["instagram"]["2026-09-04"] == 6
+    assert data["instagram"]["2026-09-04"]["calls"] == 6
 
 
 def test_default_state_path_is_data_scrape_state_json():
     p = pace.Pacer("instagram")
     assert p.state_path == "data/scrape-state.json"
+
+
+def test_two_pacer_instances_see_each_others_writes(tmp_path, mocker):
+    # Sequential interleaving on the same state file, two separate instances
+    # (simulating two processes): each re-reads under the lock rather than
+    # trusting an in-memory snapshot.
+    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    state_path = tmp_path / "state.json"
+    a = pace.Pacer("instagram", state_path=str(state_path))
+    b = pace.Pacer("instagram", state_path=str(state_path))
+
+    a.record()
+    b.record()
+    assert a.allow() is True
+    a.record()
+    b.record()
+
+    data = json.loads(state_path.read_text())
+    assert data["instagram"]["2026-09-04"]["calls"] == 4
+
+
+def test_write_is_atomic_no_tmp_file_left_behind(tmp_path, mocker):
+    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    state_path = tmp_path / "state.json"
+    pace.Pacer("instagram", state_path=str(state_path)).record()
+
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".scrape-state-")]
+    assert leftovers == []
+
+
+def test_allow_false_and_quarantines_corrupt_state_file(tmp_path, mocker):
+    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{not valid json")
+
+    p = pace.Pacer("instagram", state_path=str(state_path))
+    assert p.allow() is False
+
+    assert not state_path.exists()
+    quarantined = list(tmp_path.glob("state.json.corrupt-*"))
+    assert len(quarantined) == 1
+
+
+def test_allow_logs_corruption_with_platform_and_reason_only(tmp_path, mocker):
+    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    warn = mocker.patch.object(pace.log, "warning")
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{not valid json")
+
+    pace.Pacer("instagram", state_path=str(state_path)).allow()
+
+    warn.assert_called_once()
+    _, kwargs = warn.call_args
+    assert kwargs == {"platform": "instagram", "reason": "invalid json"}
+
+
+def test_record_self_heals_after_corrupt_state_file(tmp_path, mocker):
+    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    state_path = tmp_path / "state.json"
+    state_path.write_text("not json at all")
+
+    p = pace.Pacer("instagram", state_path=str(state_path))
+    p.record()
+
+    data = json.loads(state_path.read_text())
+    assert data["instagram"]["2026-09-04"]["calls"] == 1
 
 
 @pytest.mark.parametrize(
@@ -142,6 +224,8 @@ def test_default_state_path_is_data_scrape_state_json():
         "We've detected unusual activity on your account",
         "Please verify it's you before continuing",
         "Your account has been restricted",
+        "https://example.com/checkpoint/12345",
+        "Sorry, we restrict certain activity to protect our community",
     ],
 )
 def test_is_challenge_true_on_markers(text):
@@ -154,6 +238,8 @@ def test_is_challenge_true_on_markers(text):
         "Alex Smith - Photos",
         "Welcome to the profile page",
         "500 followers, 300 following",
+        "Bio: vegetarian, on a restricted diet, loves hiking",
+        "Works at Checkpoint Systems",
     ],
 )
 def test_is_challenge_false_on_ordinary_text(text):
