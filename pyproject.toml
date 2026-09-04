@@ -26,8 +26,8 @@ packages = ["src/contact_sync"]
 testpaths = ["tests"]
 # iCloud intermittently hides the venv's editable .pth (Python 3.13+ ignores
 # hidden .pth), which makes contact_sync unimportable; this makes tests immune.
-pythonpath = ["src"]
+pythonpath = ["src", "scripts"]
 
 [tool.ruff]
-src = ["src", "tests"]
+src = ["src", "scripts", "tests"]
 line-length = 100
