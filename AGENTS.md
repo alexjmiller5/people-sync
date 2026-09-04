@@ -19,7 +19,8 @@ src/contact_sync/
   photos.py        R2 profile-photo storage, sha256-deduped, plus per-platform fetchers
   notion_people.py Notion People stub-page creation (the row-id invariant)
 tests/             pytest, synthetic fixtures only
-scripts/           one-off migrations and the Google write-back cleanup
+scripts/           reconcile.py (triage link/merge/create), one-off migrations,
+                   the Google write-back cleanup
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
 ```
@@ -35,10 +36,38 @@ the next sync.
 `lifedata.sq()` quotes every value interpolated into SQL. Use it; do not
 f-string a raw value into a query.
 
+Birthdays are `YYYY-MM-DD`. A source that gives a month and day but no year
+is stored ISO 8601 style as `--MM-DD`; filter with
+`substr(birthday, -5)` when matching a month/day.
+
 `people.id` is always a Notion People page id with the dashes stripped. New
 people therefore get their Notion stub page first and the row second, which is
 exactly what `new-person` does - never insert a `people` row with an invented
 id.
+
+## Triage reconcile (`scripts/reconcile.py`)
+
+The three moves a `contacts-review` triage session repeats: `link` a pending
+Google record onto an existing person, `merge` two people rows, `create` a
+person from a Google record. Dry run is the default and prints every statement;
+`--apply` executes.
+
+They are LOSSLESS by construction, which is the property to preserve when
+editing them: an existing life-data value is never overwritten. A conflicting
+Google name part is appended to `notes` (`google_last_name: ...`), a replaced
+name survives in `nickname` or as `aka: ...`, a conflicting birthday is printed
+as `CONFLICT birthday` and dropped, circles are only ever unioned, and a merge
+appends every conflicting loser scalar as `merged from ...`. Label and org
+strings become circles verbatim (`CIRCLE_ALIASES` holds the one exception).
+
+`merge` never writes to Notion. It queries the People-related Notion DBs
+(`NOTION_PEOPLE_RELATIONS`) for pages still pointing at the loser page and
+prints them for a manual re-point; without `NOTION_API_TOKEN` it warns and
+skips that check.
+
+Scripts are importable by their bare module name (`pyproject`'s pytest
+`pythonpath` and ruff `src` both include `scripts`), which is what lets
+`reconcile.py` reuse `google_cleanup.user_groups` and lets tests import it.
 
 ## Platform vocabulary
 
