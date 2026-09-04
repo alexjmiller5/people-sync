@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import pytest
 
 import reconcile
@@ -66,20 +67,16 @@ def _person(**over):
     return person
 
 
-def _router(people=(), records=(), accounts=(), relations=()):
+def _router(people=(), records=(), **children):
     """Route lifedata.sql() reads by table; UPDATEs return nothing, like the real backend."""
+    tables = {"people": people, "contact_records": records, **children}
 
     def _fn(query):
         if query.startswith("UPDATE"):
             return []
-        if "FROM people" in query:
-            return list(people)
-        if "FROM contact_records" in query:
-            return list(records)
-        if "FROM person_accounts" in query:
-            return list(accounts)
-        if "FROM person_relations" in query:
-            return list(relations)
+        for table, rows in tables.items():
+            if f"FROM {table}" in query:
+                return list(rows)
         return []
 
     return _fn
@@ -229,13 +226,39 @@ def test_link_skips_duplicate_account(env):
     ]
     env.patch(
         "contact_sync.lifedata.sql",
-        side_effect=_router(people=[_person()], records=[_record()], accounts=accounts),
+        side_effect=_router(people=[_person()], records=[_record()], person_accounts=accounts),
     )
     insert = env.patch("contact_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
     insert.assert_not_called()
+
+
+def test_link_refuses_to_insert_beside_a_legacy_account_without_source_id(env, capsys):
+    # pre-backfill rows carry the profile url instead of a source_id: uncomparable,
+    # so inserting beside one would give the person two google account rows
+    accounts = [
+        {"id": "google_contacts:p1", "person_id": "p1", "source_id": None},
+    ]
+    env.patch(
+        "contact_sync.lifedata.sql",
+        side_effect=_router(people=[_person()], records=[_record()], person_accounts=accounts),
+    )
+    insert = env.patch("contact_sync.lifedata.insert")
+    warn = env.patch("reconcile.log.warning")
+
+    reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
+
+    insert.assert_not_called()
+    assert "google_contacts:p1" in capsys.readouterr().out
+    event, kwargs = warn.call_args.args[0], warn.call_args.kwargs
+    assert "legacy google account row without source_id" in event
+    assert kwargs == {
+        "source": "google_contacts",
+        "person_id": "p1",
+        "account_id": "google_contacts:p1",
+    }
 
 
 def test_link_on_matched_record_is_a_noop(env, capsys):
@@ -267,36 +290,109 @@ def test_link_dry_run_emits_no_writes(env):
 # --- merge --------------------------------------------------------------------
 
 
-def _merge_env(env, survivor, loser, accounts=(), relations=()):
+def _merge_env(env, survivor, loser, **children):
     return env.patch(
         "contact_sync.lifedata.sql",
         # reversed on purpose: survivor/loser are resolved by id, not row order
-        side_effect=_router(people=[loser, survivor], accounts=accounts, relations=relations),
+        side_effect=_router(people=[loser, survivor], **children),
     )
 
 
 def test_merge_repoints_every_table_and_soft_deletes_the_loser(env):
     survivor = _person(id="s1", name="Nova Quill")
     loser = _person(id="l1", name="N Quill")
-    accounts = [
-        {"id": "a-l", "person_id": "l1", "platform": "instagram", "source_id": "ig1"},
-    ]
-    sql = _merge_env(env, survivor, loser, accounts=accounts)
+    children = {
+        "person_accounts": [
+            {"id": "a-l", "person_id": "l1", "platform": "instagram", "source_id": "ig1"}
+        ],
+        "person_photos": [{"id": "ph-l", "person_id": "l1", "sha256": "aa"}],
+        "person_locations": [
+            {
+                "id": "lo-l",
+                "person_id": "l1",
+                "city": "Springfield",
+                "country": "US",
+                "start": None,
+                "end": None,
+            }
+        ],
+        "person_employments": [
+            {
+                "id": "em-l",
+                "person_id": "l1",
+                "company": "Acme",
+                "title": None,
+                "start": None,
+                "end": None,
+            }
+        ],
+    }
+    sql = _merge_env(env, survivor, loser, **children)
 
     reconcile.main(["merge", "s1", "l1", "--apply"])
 
     writes = _writes(sql)
-    for table in ("person_photos", "person_locations", "person_employments"):
+    for table, row_id in (
+        ("person_accounts", "a-l"),
+        ("person_photos", "ph-l"),
+        ("person_locations", "lo-l"),
+        ("person_employments", "em-l"),
+    ):
         assert any(
-            w.startswith(f"UPDATE {table} SET person_id = 's1'") and "person_id = 'l1'" in w
-            for w in writes
+            w == f"UPDATE {table} SET person_id = 's1' WHERE id = '{row_id}'" for w in writes
         ), table
-    assert any("UPDATE person_accounts SET person_id = 's1'" in w and "'a-l'" in w for w in writes)
     assert any("UPDATE contact_records SET person_id = 's1'" in w for w in writes)
     assert any("UPDATE contact_records SET suggested_person_id = 's1'" in w for w in writes)
     assert any(
         w.startswith("UPDATE people SET deleted_at = ") and "'l1'" in w and NOW in w for w in writes
     )
+
+
+@pytest.mark.parametrize(
+    ("table", "shared", "different"),
+    [
+        ("person_photos", {"sha256": "aa"}, {"sha256": "bb"}),
+        (
+            "person_locations",
+            {"city": "Springfield", "country": "US", "start": None, "end": None},
+            {"city": "Shelbyville", "country": "US", "start": None, "end": None},
+        ),
+        (
+            "person_employments",
+            {"company": "Acme", "title": None, "start": None, "end": None},
+            {"company": "Globex", "title": None, "start": None, "end": None},
+        ),
+    ],
+)
+def test_merge_dedupes_child_rows_by_their_key(env, table, shared, different):
+    rows = [
+        {"id": "keep", "person_id": "s1", **shared},
+        {"id": "dupe", "person_id": "l1", **shared},
+        {"id": "other", "person_id": "l1", **different},
+    ]
+    sql = _merge_env(env, _person(id="s1"), _person(id="l1"), **{table: rows})
+
+    reconcile.main(["merge", "s1", "l1", "--apply"])
+
+    writes = _writes(sql)
+    assert any(w.startswith(f"UPDATE {table} SET deleted_at") and "'dupe'" in w for w in writes)
+    assert f"UPDATE {table} SET person_id = 's1' WHERE id = 'other'" in writes
+    assert not any("SET person_id = 's1'" in w and "'dupe'" in w for w in writes)
+
+
+def test_merge_ignores_an_inactive_survivor_row_when_deduping(env):
+    accounts = [
+        # the survivor's row is retired (a renamed handle): history, not a duplicate
+        {"id": "a-s", "person_id": "s1", "platform": "instagram", "source_id": "ig1", "active": 0},
+        {"id": "a-l", "person_id": "l1", "platform": "instagram", "source_id": "ig1", "active": 1},
+    ]
+    sql = _merge_env(env, _person(id="s1"), _person(id="l1"), person_accounts=accounts)
+
+    reconcile.main(["merge", "s1", "l1", "--apply"])
+
+    writes = _writes(sql)
+    assert "UPDATE person_accounts SET person_id = 's1' WHERE id = 'a-l'" in writes
+    assert not any(w.startswith("UPDATE person_accounts SET deleted_at") for w in writes)
 
 
 def test_merge_dedupes_an_account_that_would_duplicate(env):
@@ -307,7 +403,7 @@ def test_merge_dedupes_an_account_that_would_duplicate(env):
         {"id": "a-l", "person_id": "l1", "platform": "instagram", "source_id": "ig1"},
         {"id": "b-l", "person_id": "l1", "platform": "snapchat", "source_id": "sn1"},
     ]
-    sql = _merge_env(env, survivor, loser, accounts=accounts)
+    sql = _merge_env(env, survivor, loser, person_accounts=accounts)
 
     reconcile.main(["merge", "s1", "l1", "--apply"])
 
@@ -326,7 +422,7 @@ def test_merge_soft_deletes_a_self_referential_relation(env):
         {"id": "r1", "person_id": "s1", "related_id": "l1", "relation_type": "partner"},
         {"id": "r2", "person_id": "l1", "related_id": "x9", "relation_type": "father"},
     ]
-    sql = _merge_env(env, survivor, loser, relations=relations)
+    sql = _merge_env(env, survivor, loser, person_relations=relations)
 
     reconcile.main(["merge", "s1", "l1", "--apply"])
 
@@ -344,7 +440,7 @@ def test_merge_soft_deletes_a_relation_that_would_duplicate(env):
         {"id": "r1", "person_id": "s1", "related_id": "x9", "relation_type": "father"},
         {"id": "r2", "person_id": "l1", "related_id": "x9", "relation_type": "father"},
     ]
-    sql = _merge_env(env, survivor, loser, relations=relations)
+    sql = _merge_env(env, survivor, loser, person_relations=relations)
 
     reconcile.main(["merge", "s1", "l1", "--apply"])
 
@@ -406,7 +502,34 @@ def test_merge_reports_notion_relations(env, monkeypatch, capsys):
     assert "https://notion.so/page1" in out
     assert "re-point manually" in out
     dashed = "00000000-0000-0000-0000-000000000000"
-    assert post.call_args.kwargs["json"]["filter"]["relation"]["contains"] == dashed
+    filters = [c.kwargs["json"]["filter"] for c in post.call_args_list]
+    assert all(f["relation"]["contains"] == dashed for f in filters)
+    # filtered by property ID, never by name - a rename in Notion must not silence this
+    assert [f["property"] for f in filters] == ["%3FT%40U", "Y%5B%3E%7B", "t%3DJH", "%3DS%60m"]
+    assert [c.args[0].rsplit("/", 2)[-2] for c in post.call_args_list] == [
+        "0c39fffe-c8c2-43a5-af03-0a378c682c1c",
+        "18f03953-a8af-802f-8950-000b03428f8e",
+        "19603953-a8af-80af-8803-000be09834a6",
+        "24c03953-a8af-8036-8b1b-000bb8d77b03",
+    ]
+
+
+def test_merge_survives_a_notion_api_failure(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    sql = _merge_env(env, _person(id="s1"), _person(id="l1"))
+    ok = env.Mock()
+    ok.json.return_value = {"results": [{"url": "https://app.notion.com/p/page1"}]}
+    warn = env.patch("reconcile.log.warning")
+    env.patch("httpx.post", side_effect=[httpx.ConnectError("boom"), ok, ok, ok])
+
+    reconcile.main(["merge", "s1", "l1", "--apply"])
+
+    # the failed DB warns, the other three are still checked, the merge still runs
+    assert warn.call_args.args[0] == "notion relation check failed"
+    assert warn.call_args.kwargs == {"db": "Gifts", "reason": "ConnectError"}
+    out = capsys.readouterr().out
+    assert out.count("NOTION RELATION") == 3
+    assert any(w.startswith("UPDATE people SET deleted_at") for w in _writes(sql))
 
 
 def test_merge_skips_notion_check_without_a_token(env, capsys):
@@ -461,6 +584,16 @@ def test_create_reports_an_orphaned_notion_page(env, capsys):
         reconcile.main(["create", "google_contacts:people/c1", "--apply"])
 
     assert "orphaned notion page abc-def" in capsys.readouterr().err
+
+
+def test_create_refuses_a_record_that_is_not_pending(env):
+    env.patch("contact_sync.lifedata.sql", side_effect=_router(records=[_record(status="ignored")]))
+    stub = env.patch("contact_sync.notion_people.create_stub")
+
+    with pytest.raises(SystemExit):
+        reconcile.main(["create", "google_contacts:people/c1", "--apply"])
+
+    stub.assert_not_called()
 
 
 def test_create_dry_run_writes_nothing(env):
