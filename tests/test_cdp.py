@@ -204,17 +204,200 @@ def test_navigate_without_capture_waits_for_load_event(tmp_path, fake_chrome):
         result = browser.navigate("https://x.test/profile", wait_ms=1000)
         assert result["captured"] == []
         assert result["load_ms"] < 1000
+        assert result["load_event"] is True
     finally:
         browser.close()
 
 
 def test_navigate_times_out_without_load_event(tmp_path, fake_chrome):
-    # Page.navigate is answered but no Page.loadEventFired ever arrives.
+    # Page.navigate is answered but no Page.loadEventFired ever arrives - a
+    # single-page app (e.g. Facebook's /friends_all) that never fires it.
+    # navigate() must not raise: it proceeds and reports load_event False.
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         result = browser.navigate("https://x.test/profile", wait_ms=100)
         assert result["captured"] == []
         assert result["load_ms"] >= 100
+        assert result["load_event"] is False
+    finally:
+        browser.close()
+
+
+def test_navigate_without_load_event_still_returns_captured_bodies(tmp_path, fake_chrome):
+    # Same SPA-never-loads scenario, but with a capture pattern active and a
+    # normal (fast) matching response - proves the capture window still runs
+    # and completes even though load_event never fires.
+    async def handle_navigate(ws, msg):
+        sid = msg.get("sessionId")
+        await ws.send(json.dumps({"id": msg["id"], "sessionId": sid, "result": {}}))
+        await ws.send(
+            json.dumps(
+                {
+                    "method": "Network.responseReceived",
+                    "sessionId": sid,
+                    "params": {
+                        "requestId": "R1",
+                        "response": {
+                            "url": "https://x.test/api/friends",
+                            "status": 200,
+                            "mimeType": "application/json",
+                        },
+                    },
+                }
+            )
+        )
+        await ws.send(
+            json.dumps(
+                {
+                    "method": "Network.loadingFinished",
+                    "sessionId": sid,
+                    "params": {"requestId": "R1"},
+                }
+            )
+        )
+        # deliberately never sends Page.loadEventFired
+
+    async def handle_get_body(ws, msg):
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "result": {"body": '{"friends": []}', "base64Encoded": False},
+                }
+            )
+        )
+
+    fake_chrome.on("Page.navigate", handle_navigate)
+    fake_chrome.on("Network.getResponseBody", handle_get_body)
+
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        result = browser.navigate("https://x.test/friends_all", wait_ms=100, capture=["/api/"])
+        assert result["load_event"] is False
+        assert result["captured"] == [
+            {
+                "url": "https://x.test/api/friends",
+                "status": 200,
+                "mimeType": "application/json",
+                "body": '{"friends": []}',
+            }
+        ]
+    finally:
+        browser.close()
+
+
+def test_navigate_raises_cdp_error_on_page_navigate_rpc_error(tmp_path, fake_chrome):
+    async def handle_navigate(ws, msg):
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "error": {"message": "No target with given id found"},
+                }
+            )
+        )
+
+    fake_chrome.on("Page.navigate", handle_navigate)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        with pytest.raises(cdp.CdpError, match="No target with given id found"):
+            browser.navigate("https://x.test/profile", wait_ms=100)
+    finally:
+        browser.close()
+
+
+def test_fetch_body_that_never_replies_times_out_instead_of_hanging(tmp_path, fake_chrome, mocker):
+    # The actual bug: Chrome never answers Network.getResponseBody for one
+    # request. Without a bound, navigate() hangs until the outer sync
+    # wrapper's own timeout, and the still-running coroutine gets destroyed
+    # while pending. Patched to a tiny bound so the test stays fast.
+    mocker.patch("contact_sync.scrape.cdp.RESPONSE_BODY_TIMEOUT", 0.05)
+    warn = mocker.patch.object(cdp.log, "warning")
+
+    async def handle_navigate(ws, msg):
+        sid = msg.get("sessionId")
+        await ws.send(json.dumps({"id": msg["id"], "sessionId": sid, "result": {}}))
+        await ws.send(
+            json.dumps(
+                {
+                    "method": "Network.responseReceived",
+                    "sessionId": sid,
+                    "params": {
+                        "requestId": "R1",
+                        "response": {
+                            "url": "https://x.test/api/stuck",
+                            "status": 200,
+                            "mimeType": "application/json",
+                        },
+                    },
+                }
+            )
+        )
+        await ws.send(
+            json.dumps(
+                {
+                    "method": "Network.loadingFinished",
+                    "sessionId": sid,
+                    "params": {"requestId": "R1"},
+                }
+            )
+        )
+        await ws.send(json.dumps({"method": "Page.loadEventFired", "sessionId": sid, "params": {}}))
+
+    async def hang(ws, msg):
+        pass  # never reply to Network.getResponseBody
+
+    fake_chrome.on("Page.navigate", handle_navigate)
+    fake_chrome.on("Network.getResponseBody", hang)
+
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        result = browser.navigate("https://x.test/profile", wait_ms=100, capture=["/api/"])
+        assert result["captured"] == []
+        warn.assert_called_once()
+        _, kwargs = warn.call_args
+        assert kwargs["host"] == "x.test"
+    finally:
+        browser.close()
+
+
+def test_close_cancels_pending_fetch_tasks_without_warnings(tmp_path, fake_chrome):
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+
+    async def inject_hanging_task():
+        async def never_finishes():
+            await asyncio.sleep(3600)
+
+        task = asyncio.ensure_future(never_finishes())
+        browser._capture_tasks.append(task)
+        return task
+
+    task = asyncio.run_coroutine_threadsafe(inject_hanging_task(), browser._loop).result(timeout=5)
+
+    browser.close()
+
+    assert task.cancelled()
+
+
+def test_text_returns_title_and_body_text(tmp_path, fake_chrome):
+    async def handle_evaluate(ws, msg):
+        assert "innerText" in msg["params"]["expression"]
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "result": {"result": {"value": "Profile\nSome body text"}},
+                }
+            )
+        )
+
+    fake_chrome.on("Runtime.evaluate", handle_evaluate)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        assert browser.text() == "Profile\nSome body text"
     finally:
         browser.close()
 
