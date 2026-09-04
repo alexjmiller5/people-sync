@@ -4,7 +4,8 @@ import json
 import sqlite3
 
 from contact_sync.scrape import run
-from contact_sync.scrape.profile import Profile
+from contact_sync.scrape.cdp import CdpError
+from contact_sync.scrape.profile import ExtractError, Profile
 
 
 class FakeModule:
@@ -232,6 +233,95 @@ def test_max_n_limits_records_processed(mocker):
 
     assert result["done"] == 2
     assert len(browser.navigated) == 2
+
+
+def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
+    records = [
+        {"id": "testplatform:u0", "handle": "u0", "avatar_r2_key": None, "avatar_sha256": None},
+        {"id": "testplatform:u1", "handle": "u1", "avatar_r2_key": None, "avatar_sha256": None},
+        {"id": "testplatform:u2", "handle": "u2", "avatar_r2_key": None, "avatar_sha256": None},
+    ]
+    parse_calls = {"n": 0}
+
+    class FlakyModule(FakeModule):
+        @staticmethod
+        def parse(eval_result, captured):
+            parse_calls["n"] += 1
+            if parse_calls["n"] == 2:
+                raise ValueError("boom")
+            return FakeModule.parse(eval_result, captured)
+
+    mocker.patch("contact_sync.scrape.run._select_records", return_value=records)
+    mocker.patch("contact_sync.scrape.run.import_module", return_value=FlakyModule)
+    browser = FakeBrowser()
+    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=browser)
+    pacer_cls = mocker.patch("contact_sync.scrape.run.Pacer")
+    pacer = pacer_cls.return_value
+    pacer.allow.return_value = True
+    pacer.next_gap.return_value = 0.0
+    sleep = mocker.patch("contact_sync.scrape.run.time.sleep")
+    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=None)
+    put_object = mocker.patch("contact_sync.photos.put_object")
+    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    warn = mocker.patch.object(run.log, "warning")
+
+    result = run.scrape("testplatform")
+
+    assert result == {"done": 2, "skipped": 1, "halted": None}
+    assert upsert.call_count == 2
+    assert pacer.record.call_count == 2
+    # raw upload never happens for the failed record (parse() raised first)
+    raw_calls = [c for c in put_object.call_args_list if c.args[0].startswith("profiles/")]
+    assert len(raw_calls) == 2
+    warn.assert_any_call("record failed", platform="testplatform", index=1, reason="ValueError")
+    # a failure still sleeps the normal gap - it must not speed up the loop
+    assert sleep.call_count == 3
+
+
+def test_extractor_error_sentinel_skips_without_any_writes(mocker):
+    class SentinelModule(FakeModule):
+        @staticmethod
+        def parse(eval_result, captured):
+            raise ExtractError(eval_result.get("error", "no-header"))
+
+    browser, pacer = _patch_common(mocker, [_record()])
+    mocker.patch("contact_sync.scrape.run.import_module", return_value=SentinelModule)
+    put_object = mocker.patch("contact_sync.photos.put_object")
+    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    warn = mocker.patch.object(run.log, "warning")
+
+    result = run.scrape("testplatform")
+
+    assert result == {"done": 0, "skipped": 1, "halted": None}
+    put_object.assert_not_called()
+    upsert.assert_not_called()
+    pacer.record.assert_not_called()
+    pacer.next_gap.assert_called_once()
+    warn.assert_any_call("record failed", platform="testplatform", index=0, reason="no-header")
+
+
+def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
+    class DyingBrowser(FakeBrowser):
+        def navigate(self, url, wait_ms, capture=None):
+            raise CdpError("boom")
+
+    browser = DyingBrowser()
+    mocker.patch("contact_sync.scrape.run._select_records", return_value=[_record()])
+    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
+    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=browser)
+    pacer_cls = mocker.patch("contact_sync.scrape.run.Pacer")
+    pacer = pacer_cls.return_value
+    pacer.allow.return_value = True
+    put_object = mocker.patch("contact_sync.photos.put_object")
+    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+
+    result = run.scrape("testplatform")
+
+    assert result == {"done": 0, "skipped": 0, "halted": "browser lost"}
+    assert browser.closed is True
+    put_object.assert_not_called()
+    upsert.assert_not_called()
+    pacer.record.assert_not_called()
 
 
 def test_records_sql_filters_deleted_ignored_and_stale_window():

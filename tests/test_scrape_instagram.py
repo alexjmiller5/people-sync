@@ -1,6 +1,9 @@
 import json
 
+import pytest
+
 from contact_sync.scrape import instagram
+from contact_sync.scrape.profile import ExtractError
 
 # Verbatim synthetic fixture from recon-instagram.md.
 FIXTURE = {
@@ -18,6 +21,11 @@ FIXTURE = {
     "avatar": "https://example.invalid/avatar.jpg",
     "links": ["https://www.instagram.com/testschool/"],
 }
+
+
+def test_parse_raises_extract_error_on_no_header_sentinel():
+    with pytest.raises(ExtractError, match="no-header"):
+        instagram.parse({"error": "no-header", "title": "Instagram"}, captured=[])
 
 
 def test_parse_maps_all_fields_from_fixture():

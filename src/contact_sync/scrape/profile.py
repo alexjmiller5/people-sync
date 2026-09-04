@@ -14,6 +14,12 @@ _JSON_COLUMNS = ("education", "work", "links")
 _BOOL_COLUMNS = ("is_private", "is_verified")
 
 
+class ExtractError(RuntimeError):
+    """A platform's extractor JS returned its failure sentinel (e.g. no
+    header rendered) instead of profile data. Never upsert on this - it
+    would blank a good existing row and stamp scraped_at, blocking retry."""
+
+
 @dataclass
 class Profile:
     record_id: str = ""
