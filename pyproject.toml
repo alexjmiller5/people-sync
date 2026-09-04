@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28",
     "structlog>=25.1",
+    "websockets>=17.1",
 ]
 
 [dependency-groups]
