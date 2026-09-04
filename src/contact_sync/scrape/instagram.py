@@ -8,7 +8,7 @@ reliable than the header scrape and are preferred when captured.
 
 import json
 
-from contact_sync.scrape.profile import Profile
+from contact_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://www.instagram.com/{handle}/"
 
@@ -62,6 +62,9 @@ def _web_profile_info(captured: list[dict] | None) -> dict | None:
 
 
 def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
+    if eval_result.get("error"):
+        raise ExtractError(eval_result["error"])
+
     bio_lines = list(eval_result.get("bio_lines") or [])
     pronouns = eval_result.get("pronouns")
     if pronouns:

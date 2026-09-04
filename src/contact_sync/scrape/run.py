@@ -17,11 +17,16 @@ from datetime import datetime, timedelta, timezone
 from importlib import import_module
 
 import structlog
+from websockets.exceptions import ConnectionClosed
 
 from contact_sync import lifedata, photos
-from contact_sync.scrape.cdp import Browser
+from contact_sync.scrape.cdp import Browser, CdpError
 from contact_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, is_challenge
-from contact_sync.scrape.profile import upsert_profile
+from contact_sync.scrape.profile import ExtractError, upsert_profile
+
+# A CDP protocol error or a dropped websocket means the browser session
+# itself is gone - halt rather than spin through the remaining records.
+_BROWSER_LOST = (CdpError, ConnectionClosed)
 
 log = structlog.get_logger(__name__)
 
@@ -139,40 +144,51 @@ def scrape(
                 skipped += 1
                 continue
 
-            url = module.URL.format(handle=handle)
-            nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE)
-            captured = nav_result.get("captured", [])
+            try:
+                url = module.URL.format(handle=handle)
+                nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE)
+                captured = nav_result.get("captured", [])
 
-            page_text = browser.eval(PAGE_TEXT_JS) or ""
-            if is_challenge(page_text):
-                halted = "challenge page"
-                log.warning("scrape halted", platform=platform, index=index, reason=halted)
+                page_text = browser.eval(PAGE_TEXT_JS) or ""
+                if is_challenge(page_text):
+                    halted = "challenge page"
+                    log.warning("scrape halted", platform=platform, index=index, reason=halted)
+                    break
+
+                raw_eval = browser.eval(module.EXTRACTOR_JS)
+                eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
+                profile = module.parse(eval_result, captured)
+                profile.record_id = record["id"]
+
+                record_key = _record_key(record["id"])
+                raw_key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}.json"
+                photos.put_object(
+                    raw_key,
+                    json.dumps({"eval": eval_result, "captured": captured}).encode(),
+                    content_type="application/json",
+                )
+
+                avatar_key, avatar_sha = _resolve_avatar(
+                    browser,
+                    platform,
+                    index,
+                    record_key,
+                    profile.avatar_url,
+                    record.get("avatar_r2_key"),
+                    record.get("avatar_sha256"),
+                )
+
+                upsert_profile(profile, avatar_key, avatar_sha, raw_key)
+            except _BROWSER_LOST:
+                halted = "browser lost"
+                log.error("scrape halted", platform=platform, index=index, reason=halted)
                 break
-
-            raw_eval = browser.eval(module.EXTRACTOR_JS)
-            eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
-            profile = module.parse(eval_result, captured)
-            profile.record_id = record["id"]
-
-            record_key = _record_key(record["id"])
-            raw_key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}.json"
-            photos.put_object(
-                raw_key,
-                json.dumps({"eval": eval_result, "captured": captured}).encode(),
-                content_type="application/json",
-            )
-
-            avatar_key, avatar_sha = _resolve_avatar(
-                browser,
-                platform,
-                index,
-                record_key,
-                profile.avatar_url,
-                record.get("avatar_r2_key"),
-                record.get("avatar_sha256"),
-            )
-
-            upsert_profile(profile, avatar_key, avatar_sha, raw_key)
+            except Exception as e:
+                reason = str(e) if isinstance(e, ExtractError) else type(e).__name__
+                log.warning("record failed", platform=platform, index=index, reason=reason)
+                skipped += 1
+                time.sleep(pacer.next_gap())
+                continue
 
             pacer.record()
             done += 1
