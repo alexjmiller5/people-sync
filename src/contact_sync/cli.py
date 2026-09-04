@@ -6,6 +6,8 @@ import os
 import sys
 
 from contact_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from contact_sync.scrape import run as scrape_run
+from contact_sync.scrape.pace import DEFAULT_STATE_PATH
 
 QUEUE_QUERY = """
     SELECT c.id, c.source, c.handle, c.name,
@@ -60,6 +62,11 @@ def cmd_new_person(args: argparse.Namespace) -> None:
     print(person_id)
 
 
+def cmd_scrape(args: argparse.Namespace) -> None:
+    result = scrape_run.scrape(args.platform, max_n=args.max, state_path=args.state)
+    print(json.dumps(result))
+
+
 def cmd_photos_store(args: argparse.Namespace) -> None:
     with open(args.file, "rb") as f:
         image = f.read()
@@ -91,6 +98,12 @@ def build_parser() -> argparse.ArgumentParser:
     new_person = sub.add_parser("new-person", help="create a Notion People stub + life-data row")
     new_person.add_argument("--name", required=True)
     new_person.set_defaults(func=cmd_new_person)
+
+    scrape_p = sub.add_parser("scrape", help="scrape a platform's pending/matched profiles")
+    scrape_p.add_argument("platform")
+    scrape_p.add_argument("--max", type=int, default=None)
+    scrape_p.add_argument("--state", default=DEFAULT_STATE_PATH)
+    scrape_p.set_defaults(func=cmd_scrape)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")
     photos_sub = photos_p.add_subparsers(dest="photos_command", required=True)
