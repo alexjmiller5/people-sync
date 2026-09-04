@@ -304,3 +304,55 @@ with Alex when the implementation ships, not before.
 * Memory: project file update; birthday-reminders memory notes the
   pending migration guidance.
 
+
+## Addendum (2026-09-04): profile scraping phase
+
+Decided during the first review run: social profiles are captured BEFORE
+reconciliation, because profile context (hometown, school, employer) is what
+disambiguates same-first-name duplicates.
+
+### Operating rules
+
+- All scraping runs in the user's own logged-in Chrome over CDP, acting as
+  the user, at human pace: randomized gaps, per-platform daily caps, breaks,
+  and an immediate stop on any rate-limit, challenge, or "action blocked"
+  page. Nothing that looks like a bot. Never past a credential or CAPTCHA
+  wall.
+- One full pass now; afterwards only NEW connections are visited, by hand
+  or via claude-in-chrome, so volume stays human.
+- Raw page data for every profile is stored verbatim (R2 archive, one object
+  per scrape) so later field extraction never needs a re-scrape.
+- Emails and phone numbers seen on profiles are never stored (spec boundary).
+
+### Platforms
+
+- Facebook: friends list (for profile ids/urls, the export has names only),
+  then each friend's About: birthday (when shared), hometown, current city,
+  education with years, work with dates, relationship status, links to other
+  socials, mutual-friend count, avatar.
+- Instagram: full name, bio, external url, pronouns, category, private and
+  verified flags, post count, mutual-follower count, avatar.
+- LinkedIn: headline, location, full education list, full experience list,
+  contact-info websites/handles (email/phone excluded), birthday when
+  exposed, mutual-connection count, avatar.
+- Venmo and Spotify: the user's own friends/followers lists - usernames,
+  display names, avatars.
+- Snapchat: export-based (friends.json); web friends list only if cheap
+  (display names, Bitmoji avatars).
+- Partiful: NOT enumerated up front. After the other platforms, walk the
+  mutuals tab; match via the Instagram url in each Partiful bio; link the
+  account and store the Partiful picture.
+- WhatsApp: deferred.
+
+### Storage
+
+`contact_profiles` (latest scrape wins, keyed by ledger record id):
+`record_id`, `platform`, `profile_url`, `platform_id`, `display_name`,
+`bio`, `location`, `hometown`, `education` (JSON), `work` (JSON),
+`birthday`, `links` (JSON array of urls/handles found), `is_private`,
+`is_verified`, `follower_count`, `following_count`, `mutual_count`,
+`avatar_r2_key`, `avatar_sha256`, `raw_r2_key`, `scraped_at`.
+When a record is linked or created, its avatar is promoted into
+person_photos (history kept) and profile facts inform circles, employments,
+locations, and birthday only with the user's approval. A Notion task tracks
+reviewing this design after the first full pass.
