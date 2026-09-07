@@ -21,6 +21,14 @@ uv sync
 The package is built with hatchling and installs editable into the project
 venv, so `uv run python -m contact_sync ...` works from the repo root.
 
+To run the profile scraper unattended on a Mac, the flake also exposes
+`packages.<system>.default` (the `contact-sync` CLI, packaged with plain
+`buildPythonApplication`) and `darwinModules.default`, a
+`services.contact-sync-scrape` nix-darwin module that runs it as a declared
+launchd agent - each platform gets its own headed Chrome profile and debug
+port, on a schedule, with no manual setup beyond enabling the option. See
+"Installing on a Mac" in AGENTS.md for the module's options and an example.
+
 Runtime dependencies outside Python:
 
 - The `life` CLI - the only write path to the people estate.

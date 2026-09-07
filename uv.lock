@@ -53,7 +53,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "structlog", specifier = ">=25.1" },
-    { name = "websockets", specifier = ">=17.1" },
+    { name = "websockets", specifier = ">=16.1" },
 ]
 
 [package.metadata.requires-dev]
