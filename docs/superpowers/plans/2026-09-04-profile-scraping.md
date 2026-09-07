@@ -72,3 +72,37 @@ Modify `scripts/reconcile.py`: on `link`/`create`, promote the record's `contact
 ### Task 9: docs
 
 life-map contract for `contact_profiles`; contacts-review skill: the scrape step, the claude-in-chrome rule for future new-connection visits, the halt-and-wait rule; AGENTS.md; memory.
+
+---
+
+## Revision 2026-09-07: run on the mac mini (chrome-control Tier 4)
+
+Supersedes the execution context of Tasks 3, 5, 6, 7 above. Tasks 1, 2, 4a are done and stand. The scraper runs on the mini with one dedicated Chrome profile per site (own `--user-data-dir`, own debug port, no Allow dialog), the driver detached on the mini, logins fully automated from a project vault. Nothing manual, ever; any challenge page halts and notifies.
+
+### R1: configurable CDP endpoint (repo)
+`cdp.Browser.connect(endpoint=None, data_dir=None)`: resolve in order - explicit `host:port` endpoint arg or `CONTACT_SYNC_CDP_ENDPOINT` env; else `data_dir` arg or `CONTACT_SYNC_CHROME_DATA_DIR` env (read `<dir>/DevToolsActivePort`); else Chrome's default data dir. Dedicated-profile ports have no browser-ws path file in approval mode, so for `host:port` use `GET http://host:port/json/version` to obtain `webSocketDebuggerUrl` (works outside approval mode). Tests for all three resolutions with a fake server. `scrape`/`login` CLI gain `--endpoint`/`--data-dir`.
+
+### R2 (INTERACTIVE - Alex): `Contact-Sync` vault
+Alex decides move (recommended) vs copy for the six logins (Facebook, Instagram, LinkedIn, Venmo, Spotify, Partiful) via desktop auth; items tagged per the 1password skill; the mini gets a per-run 24 h temp SA (`op-temp-sa Contact-Sync`) whose token is piped over ssh stdin, never a command line. Creds reach the driver through a credential COMMAND option (the app never names 1Password).
+
+### R3: automated login flows (repo, TDD against the fake CDP server)
+`scrape login <platform>`: navigate the site's login page in that site's profile; type username/password with trusted per-key events at 80-200 ms jitter and natural pauses; submit; then a 2FA dispatcher: TOTP (credential command returns the code), email code (a `--email-code-command`, e.g. a gog query), SMS code (an `--sms-code-command`, e.g. `ssh <laptop> imsg ...`); "remember this device" ticked when offered. Any captcha / "confirm on your phone" / unknown step: halt, screenshot via `Page.captureScreenshot` to the run dir, notify. Login state persists in the profile; `login` is idempotent (exits early when already signed in).
+
+### R4: flake package + nix-darwin module (repo)
+`packages.default` (uv2nix or a plain `python3.withPackages` wrapper - pick the one that builds offline) and `darwinModules.default` exposing `services.contact-sync-scrape` with options: `enable`, `user`, `platforms` (list), `dailyCaps` (attrset), `stateDir`, `profileDir`, `basePort`, `credentialCommand`, `emailCodeCommand`, `smsCodeCommand`, `schedule` (hour/minute; the job runs once per day until the queue is empty), `logDir`. The agent launches each site's Chrome (dedicated profile, port basePort+i, no headless) and the driver; logs under logDir. Module is generic - nothing about Alex in it.
+
+### R5 (INTERACTIVE - Alex): mini enablement
+nix-config: add the flake input + `services.contact-sync-scrape.enable = true` in hosts/mac-mini.nix with the credential/email/SMS commands from Alex's estate; Alex runs `switch-mini`. Precheck over ssh: console session (`stat -f %Su /dev/console`; if none, `system.defaults.loginwindow.autoLoginUser`), Chrome present, disk. First ssh needs Alex to approve the 1Password SSH key prompt.
+
+### R6 (INTERACTIVE): recon on the mini
+Forward the dedicated ports (`ssh -N -L`) and run the recon driver against each site's profile after `login`: Facebook friends_all (trusted scroll + GraphQL capture), LinkedIn profile (Voyager capture), Partiful mutuals (scroll), Venmo profile/friends, Spotify followers. One note per platform as in Task 3.
+
+### R7: remaining extractors (repo) - Task 4b
+facebook, linkedin, partiful, venmo, spotify modules per the recon notes; Instagram capture pattern -> `graphql/query` with a username-keyed user-object search; run.py uses `Browser.text()`. TDD on synthetic fixtures.
+
+### R8 (multi-day): the runs
+Enabled job on the mini; daily check-in over ssh (`tail` the log, counts from life-data); halts reported the same day. Order: facebook, instagram, linkedin, venmo, spotify, partiful.
+
+### R9: promotion + enriched reconciliation (was Task 8), then batches 2 and 3 with Alex.
+
+### R10: docs (was Task 9) + life-map contract + skill updates + memory.
