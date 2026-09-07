@@ -121,6 +121,8 @@ def scrape(
     platform: str,
     max_n: int | None = None,
     state_path: str = DEFAULT_STATE_PATH,
+    endpoint: str | None = None,
+    data_dir: str | None = None,
 ) -> dict:
     module = import_module(f"contact_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
@@ -131,7 +133,7 @@ def scrape(
     done = 0
     skipped = 0
     halted: str | None = None
-    browser = Browser.connect()
+    browser = Browser.connect(endpoint=endpoint, data_dir=data_dir)
     try:
         for index, record in enumerate(records):
             if not pacer.allow():

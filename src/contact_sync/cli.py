@@ -63,7 +63,13 @@ def cmd_new_person(args: argparse.Namespace) -> None:
 
 
 def cmd_scrape(args: argparse.Namespace) -> None:
-    result = scrape_run.scrape(args.platform, max_n=args.max, state_path=args.state)
+    result = scrape_run.scrape(
+        args.platform,
+        max_n=args.max,
+        state_path=args.state,
+        endpoint=args.endpoint,
+        data_dir=args.data_dir,
+    )
     print(json.dumps(result))
 
 
@@ -103,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_p.add_argument("platform")
     scrape_p.add_argument("--max", type=int, default=None)
     scrape_p.add_argument("--state", default=DEFAULT_STATE_PATH)
+    scrape_p.add_argument(
+        "--endpoint",
+        default=None,
+        help="CDP host:port to drive instead of Chrome's default data dir",
+    )
+    scrape_p.add_argument(
+        "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
+    )
     scrape_p.set_defaults(func=cmd_scrape)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")

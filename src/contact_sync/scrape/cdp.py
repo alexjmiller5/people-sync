@@ -14,6 +14,7 @@ for navigation, `Network.*` for passive response capture.
 
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 import structlog
 import websockets
 from websockets.asyncio.client import connect as ws_connect
@@ -31,6 +33,12 @@ log = structlog.get_logger(__name__)
 DEVTOOLS_ACTIVE_PORT = Path(
     "~/Library/Application Support/Google/Chrome/DevToolsActivePort"
 ).expanduser()
+
+# Endpoint resolution (R1): explicit endpoint (arg or env) > explicit data
+# dir (arg or env) > Chrome's default data dir above.
+CDP_ENDPOINT_ENV = "CONTACT_SYNC_CDP_ENDPOINT"
+CHROME_DATA_DIR_ENV = "CONTACT_SYNC_CHROME_DATA_DIR"
+JSON_VERSION_TIMEOUT = 5.0
 
 HANDSHAKE_TIMEOUT = 30.0
 ALLOW_HINT = "click Allow in the Chrome remote-debugging dialog"
@@ -54,6 +62,50 @@ def _url_host(url: str) -> str:
     return urlsplit(url).netloc
 
 
+def _ws_url_from_data_dir(data_dir: str | Path) -> str:
+    port, ws_path = _read_devtools_port(Path(data_dir).expanduser() / "DevToolsActivePort")
+    return f"ws://127.0.0.1:{port}{ws_path}"
+
+
+def _ws_url_from_endpoint(endpoint: str, data_dir: str | Path | None) -> str:
+    resp = httpx.get(f"http://{endpoint}/json/version", timeout=JSON_VERSION_TIMEOUT)
+    if resp.status_code == 404:
+        # Approval-mode Chrome: no /json/version. Fall back to the
+        # DevToolsActivePort file only when a data dir is also known.
+        if data_dir:
+            log.info("cdp endpoint resolved", via="endpoint-404-data-dir-fallback")
+            return _ws_url_from_data_dir(data_dir)
+        raise CdpError(
+            f"http://{endpoint}/json/version returned 404 (Chrome is running in "
+            "approval mode) and no data dir was given to fall back to "
+            "DevToolsActivePort - pass data_dir or set CONTACT_SYNC_CHROME_DATA_DIR, "
+            "or point endpoint at a Chrome started with a dedicated --user-data-dir "
+            "(no approval dialog, /json/version works there)"
+        )
+    resp.raise_for_status()
+    return resp.json()["webSocketDebuggerUrl"]
+
+
+def _resolve_ws_url(
+    endpoint: str | None,
+    data_dir: str | Path | None,
+    devtools_port_path: str | Path | None,
+) -> str:
+    endpoint = endpoint or os.environ.get(CDP_ENDPOINT_ENV)
+    if endpoint:
+        log.info("cdp endpoint resolved", via="endpoint", host_port=endpoint)
+        return _ws_url_from_endpoint(endpoint, data_dir or os.environ.get(CHROME_DATA_DIR_ENV))
+
+    data_dir = data_dir or os.environ.get(CHROME_DATA_DIR_ENV)
+    if data_dir:
+        log.info("cdp endpoint resolved", via="data_dir")
+        return _ws_url_from_data_dir(data_dir)
+
+    log.info("cdp endpoint resolved", via="default")
+    port, ws_path = _read_devtools_port(devtools_port_path or DEVTOOLS_ACTIVE_PORT)
+    return f"ws://127.0.0.1:{port}{ws_path}"
+
+
 class Browser:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
@@ -75,14 +127,17 @@ class Browser:
     @classmethod
     def connect(
         cls,
-        devtools_port_path: str | Path = DEVTOOLS_ACTIVE_PORT,
+        endpoint: str | None = None,
+        data_dir: str | Path | None = None,
         handshake_timeout: float = HANDSHAKE_TIMEOUT,
+        devtools_port_path: str | Path | None = None,
     ) -> "Browser":
+        ws_url = _resolve_ws_url(endpoint, data_dir, devtools_port_path)
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
         browser = cls(loop)
-        fut = asyncio.run_coroutine_threadsafe(browser._connect_async(devtools_port_path), loop)
+        fut = asyncio.run_coroutine_threadsafe(browser._connect_async(ws_url), loop)
         try:
             fut.result(timeout=handshake_timeout)
         except FutureTimeoutError as e:
@@ -101,9 +156,8 @@ class Browser:
         log.info("cdp connected", target_id=browser._target_id)
         return browser
 
-    async def _connect_async(self, devtools_port_path: str | Path) -> None:
-        port, ws_path = _read_devtools_port(devtools_port_path)
-        self._ws = await ws_connect(f"ws://127.0.0.1:{port}{ws_path}", max_size=None)
+    async def _connect_async(self, ws_url: str) -> None:
+        self._ws = await ws_connect(ws_url, max_size=None)
         self._recv_task = asyncio.ensure_future(self._recv_loop())
         await self._handshake()
 

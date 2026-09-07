@@ -1,4 +1,5 @@
 import asyncio
+import http.server
 import json
 import threading
 import time
@@ -689,3 +690,157 @@ def test_close_sends_close_target_and_closes_socket(tmp_path, fake_chrome):
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     browser.close()
     assert any(m.get("method") == "Target.closeTarget" for m in fake_chrome.messages)
+
+
+# -- endpoint resolution (R1) ------------------------------------------------
+
+
+class FakeJsonVersionServer:
+    """A minimal /json/version HTTP endpoint - status/body configurable per
+    test, standing in for a real Chrome's remote-debugging HTTP surface."""
+
+    def __init__(self, status: int = 200, body: dict | None = None):
+        self.status = status
+        self.body = body or {}
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                payload = json.dumps(outer.body).encode()
+                self.send_response(outer.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *a):
+                pass
+
+        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self.endpoint = f"127.0.0.1:{self.port}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture
+def fake_json_server():
+    servers = []
+
+    def make(status: int = 200, body: dict | None = None) -> FakeJsonVersionServer:
+        server = FakeJsonVersionServer(status=status, body=body)
+        servers.append(server)
+        return server
+
+    yield make
+    for server in servers:
+        server.stop()
+
+
+def _data_dir(tmp_path, port: str, ws_path: str):
+    (tmp_path / "DevToolsActivePort").write_text(f"{port}\n{ws_path}\n")
+    return tmp_path
+
+
+def test_resolve_ws_url_endpoint_arg_wins_over_env(monkeypatch, fake_json_server):
+    winner = fake_json_server(body={"webSocketDebuggerUrl": "ws://winner/"})
+    loser = fake_json_server(body={"webSocketDebuggerUrl": "ws://loser/"})
+    monkeypatch.setenv(cdp.CDP_ENDPOINT_ENV, loser.endpoint)
+
+    assert cdp._resolve_ws_url(winner.endpoint, None, None) == "ws://winner/"
+
+
+def test_resolve_ws_url_env_endpoint_used_when_arg_absent(monkeypatch, fake_json_server):
+    server = fake_json_server(body={"webSocketDebuggerUrl": "ws://from-env/"})
+    monkeypatch.setenv(cdp.CDP_ENDPOINT_ENV, server.endpoint)
+
+    assert cdp._resolve_ws_url(None, None, None) == "ws://from-env/"
+
+
+def test_resolve_ws_url_endpoint_wins_over_data_dir_when_both_set(tmp_path, fake_json_server):
+    server = fake_json_server(body={"webSocketDebuggerUrl": "ws://from-endpoint/"})
+    data_dir = _data_dir(tmp_path, "9999", "/devtools/browser/should-not-be-used")
+
+    assert cdp._resolve_ws_url(server.endpoint, str(data_dir), None) == "ws://from-endpoint/"
+
+
+def test_resolve_ws_url_data_dir_reads_two_line_file(monkeypatch, tmp_path):
+    monkeypatch.delenv(cdp.CDP_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(cdp.CHROME_DATA_DIR_ENV, raising=False)
+    data_dir = _data_dir(tmp_path, "9333", "/devtools/browser/abc")
+
+    assert (
+        cdp._resolve_ws_url(None, str(data_dir), None) == "ws://127.0.0.1:9333/devtools/browser/abc"
+    )
+
+
+def test_resolve_ws_url_data_dir_env_used_when_arg_absent(monkeypatch, tmp_path):
+    monkeypatch.delenv(cdp.CDP_ENDPOINT_ENV, raising=False)
+    data_dir = _data_dir(tmp_path, "9334", "/devtools/browser/def")
+    monkeypatch.setenv(cdp.CHROME_DATA_DIR_ENV, str(data_dir))
+
+    assert cdp._resolve_ws_url(None, None, None) == "ws://127.0.0.1:9334/devtools/browser/def"
+
+
+def test_resolve_ws_url_default_used_when_nothing_set(monkeypatch, tmp_path):
+    monkeypatch.delenv(cdp.CDP_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(cdp.CHROME_DATA_DIR_ENV, raising=False)
+    port_file = tmp_path / "DevToolsActivePort"
+    port_file.write_text("9335\n/devtools/browser/default\n")
+
+    assert (
+        cdp._resolve_ws_url(None, None, str(port_file))
+        == "ws://127.0.0.1:9335/devtools/browser/default"
+    )
+
+
+def test_resolve_ws_url_endpoint_404_without_data_dir_raises_naming_both_options(
+    monkeypatch, fake_json_server
+):
+    monkeypatch.delenv(cdp.CHROME_DATA_DIR_ENV, raising=False)
+    server = fake_json_server(status=404)
+
+    with pytest.raises(cdp.CdpError) as exc_info:
+        cdp._resolve_ws_url(server.endpoint, None, None)
+
+    message = str(exc_info.value)
+    assert "data_dir" in message
+    assert cdp.CHROME_DATA_DIR_ENV in message
+
+
+def test_resolve_ws_url_endpoint_404_falls_back_to_data_dir(
+    monkeypatch, tmp_path, fake_json_server
+):
+    server = fake_json_server(status=404)
+    data_dir = _data_dir(tmp_path, "9336", "/devtools/browser/fallback")
+
+    result = cdp._resolve_ws_url(server.endpoint, str(data_dir), None)
+
+    assert result == "ws://127.0.0.1:9336/devtools/browser/fallback"
+
+
+def test_connect_via_endpoint_performs_full_handshake(fake_chrome, fake_json_server):
+    server = fake_json_server(
+        body={"webSocketDebuggerUrl": f"ws://127.0.0.1:{fake_chrome.port}/devtools/browser/fake"}
+    )
+    browser = cdp.Browser.connect(endpoint=server.endpoint)
+    try:
+        assert browser._target_id == "T1"
+        assert browser._session_id == "S1"
+    finally:
+        browser.close()
+
+
+def test_connect_via_data_dir_performs_full_handshake(tmp_path, fake_chrome):
+    data_dir = _data_dir(tmp_path, str(fake_chrome.port), "/devtools/browser/fake")
+
+    browser = cdp.Browser.connect(data_dir=str(data_dir))
+    try:
+        assert browser._target_id == "T1"
+        assert browser._session_id == "S1"
+    finally:
+        browser.close()
