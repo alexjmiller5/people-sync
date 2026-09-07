@@ -10,7 +10,8 @@ triage, sweeps); this file is how to work on the code.
 
 ```
 src/contact_sync/
-  cli.py           argparse surface: ingest / match / queue / new-person / photos store
+  cli.py           argparse surface: ingest / match / queue / new-person / scrape /
+                   login / photos store
   lifedata.py      the ONLY life-data write path (shells out to the `life` CLI)
   ledger.py        contact_records upserts, keyed <source>:<source_id>
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
@@ -18,6 +19,9 @@ src/contact_sync/
   match.py         conservative auto-linker
   photos.py        R2 profile-photo storage, sha256-deduped, plus per-platform fetchers
   notion_people.py Notion People stub-page creation (the row-id invariant)
+  scrape/          CDP harness (cdp.py), human pacing (pace.py), the scrape loop
+                   (run.py), per-platform extractors, and the login flow
+                   (login.py) with its selector table (login_specs.py)
 tests/             pytest, synthetic fixtures only
 scripts/           reconcile.py (triage link/merge/create), one-off migrations,
                    the Google write-back cleanup, contact-sync-agent (the
@@ -42,9 +46,10 @@ The module is a thin options-to-environment translator: it launches each
 platform's dedicated, headed Chrome (its own `--user-data-dir` and
 `--remote-debugging-port`, no signed `.app` bundle - this job never touches
 TCC-protected data, unlike the FDA-gated jobs this shape is usually mirrored
-from) and runs `contact-sync scrape <platform>` against it on a schedule. All
-actual behavior lives in `bin/contact-sync-agent`, which ships as part of
-the package.
+from), signs it in (`contact-sync login <platform>`, idempotent - see
+"Logins"), and runs `contact-sync scrape <platform>` against it on a
+schedule. All actual behavior lives in `bin/contact-sync-agent`, which ships
+as part of the package.
 
 Consume it from another flake (e.g. a nix-config host):
 
@@ -83,6 +88,49 @@ yet load-bearing.
 `nix build .#default` and `nix flake check` (an eval-only smoke test of the
 darwin module, since there's no nix-darwin flake input to build a full
 `darwinConfiguration` against) both need to stay clean.
+
+## Logins
+
+`contact-sync login <platform>` signs that platform's dedicated Chrome
+profile in, over CDP, at human pace: trusted per-key events with 80-200 ms
+jitter, 300-900 ms pauses between fields, trusted mouse clicks at an
+element's center. It is idempotent - an already signed-in profile is
+detected and left alone before anything is typed, which is the ordering to
+preserve when editing `_sign_in`.
+
+Credentials never live in this repo or its config. Three commands supply
+them; each gets the platform as `$1` and prints to stdout:
+
+- `CONTACT_SYNC_CREDENTIAL_COMMAND` - `{"username": ..., "password": ..., "totp": ...}`
+- `CONTACT_SYNC_EMAIL_CODE_COMMAND` - the newest one-time code from email
+- `CONTACT_SYNC_SMS_CODE_COMMAND` - the newest one-time code from SMS
+
+The product never knows what those commands do, and must not learn: no
+credential store, no vault, no path from any machine belongs in this code.
+Command output is a secret - it is used and dropped, never logged or written
+to the state dir.
+
+The 2FA dispatcher picks the field the site actually shows (TOTP, then
+email, then SMS) and skips a kind it has no source for, so a site sharing
+one input across kinds still works. Email/SMS codes are polled for up to
+90 s with 5-10 s gaps.
+
+Halt rules, all of which have tests:
+
+- A captcha, a "confirm on your phone" prompt, an unusual-login
+  interstitial, a page with no login form, or an unrecognized page after
+  submit: screenshot to `<state dir>/login-<platform>-<ts>.png`, one
+  `("login halted", platform=..., reason=...)` line, exit non-zero. Never
+  guess at an unknown page.
+- A password the site did not accept is retried exactly once
+  (`MAX_PASSWORD_ATTEMPTS = 2`). There is never a third attempt - a lockout
+  costs far more than a skipped run.
+- Logs carry platform, step, and reason only. Never a username, never a
+  code, never page text.
+
+Selectors are the one thing expected to drift: they all live in
+`login_specs.py`, one entry per platform, and a stale one halts (loudly)
+rather than typing into the wrong field.
 
 ## Write path
 

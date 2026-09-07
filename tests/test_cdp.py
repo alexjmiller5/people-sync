@@ -872,3 +872,162 @@ def test_connect_via_data_dir_performs_full_handshake(tmp_path, fake_chrome):
         assert browser._session_id == "S1"
     finally:
         browser.close()
+
+
+# -- trusted input helpers (R3) ----------------------------------------------
+
+
+def _key_events(fake_chrome) -> list[dict]:
+    return [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchKeyEvent"]
+
+
+def test_type_text_emits_keydown_char_keyup_per_character(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.type_text("ab")
+        events = _key_events(fake_chrome)
+        assert [e["params"]["type"] for e in events] == [
+            "keyDown",
+            "char",
+            "keyUp",
+            "keyDown",
+            "char",
+            "keyUp",
+        ]
+        assert [e["params"]["key"] for e in events] == ["a", "a", "a", "b", "b", "b"]
+        assert events[1]["params"]["text"] == "a"
+        assert all(e["sessionId"] == "S1" for e in events)
+    finally:
+        browser.close()
+
+
+def test_type_text_pauses_between_characters_within_jitter_range(tmp_path, fake_chrome, mocker):
+    sleep = mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.type_text("hello", jitter_ms=(80, 200))
+        delays = [call.args[0] for call in sleep.call_args_list]
+        assert len(delays) == 5
+        assert all(0.08 <= d <= 0.2 for d in delays)
+        assert len(set(delays)) > 1  # jittered, not a fixed cadence
+    finally:
+        browser.close()
+
+
+def test_insert_text_uses_insert_text_not_key_events(tmp_path, fake_chrome):
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.insert_text("pasted")
+        assert not _key_events(fake_chrome)
+        inserts = [m for m in fake_chrome.messages if m.get("method") == "Input.insertText"]
+        assert inserts and inserts[0]["params"]["text"] == "pasted"
+    finally:
+        browser.close()
+
+
+def _rect_evaluate(rect):
+    async def handle(ws, msg):
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "result": {"result": {"value": rect}},
+                }
+            )
+        )
+
+    return handle
+
+
+def test_click_dispatches_trusted_press_and_release_at_element_center(tmp_path, fake_chrome):
+    fake_chrome.on(
+        "Runtime.evaluate",
+        _rect_evaluate({"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}),
+    )
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.click("input#username")
+        mouse = [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"]
+        assert [m["params"]["type"] for m in mouse] == ["mousePressed", "mouseReleased"]
+        for m in mouse:
+            assert m["params"]["button"] == "left"
+            assert m["params"]["clickCount"] == 1
+            assert abs(m["params"]["x"] - 60.0) <= 5
+            assert abs(m["params"]["y"] - 40.0) <= 5
+        assert mouse[0]["params"]["x"] == mouse[1]["params"]["x"]
+    finally:
+        browser.close()
+
+
+def test_click_raises_when_selector_is_not_on_the_page(tmp_path, fake_chrome):
+    fake_chrome.on("Runtime.evaluate", _rect_evaluate(None))
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        with pytest.raises(cdp.CdpError, match="input#nope"):
+            browser.click("input#nope")
+    finally:
+        browser.close()
+
+
+def test_wait_for_returns_true_once_the_predicate_turns_true(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    answers = [False, False, True]
+
+    async def handle(ws, msg):
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "result": {"result": {"value": answers.pop(0)}},
+                }
+            )
+        )
+
+    fake_chrome.on("Runtime.evaluate", handle)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        assert browser.wait_for("ready", timeout_s=5) is True
+        assert answers == []
+    finally:
+        browser.close()
+
+
+def test_wait_for_returns_false_when_the_predicate_never_turns_true(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    clock = {"t": 0.0}
+    mocker.patch.object(
+        cdp, "_now", side_effect=lambda: clock.__setitem__("t", clock["t"] + 0.4) or clock["t"]
+    )
+    fake_chrome.on("Runtime.evaluate", _rect_evaluate(False))
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        assert browser.wait_for("ready", timeout_s=1) is False
+    finally:
+        browser.close()
+
+
+def test_screenshot_writes_decoded_png_bytes(tmp_path, fake_chrome):
+    import base64
+
+    async def handle(ws, msg):
+        await ws.send(
+            json.dumps(
+                {
+                    "id": msg["id"],
+                    "sessionId": msg.get("sessionId"),
+                    "result": {"data": base64.b64encode(b"PNGBYTES").decode()},
+                }
+            )
+        )
+
+    fake_chrome.on("Page.captureScreenshot", handle)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        out = tmp_path / "shots" / "shot.png"
+        browser.screenshot(out)
+        assert out.read_bytes() == b"PNGBYTES"
+    finally:
+        browser.close()
