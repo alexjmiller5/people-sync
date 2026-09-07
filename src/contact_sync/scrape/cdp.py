@@ -67,8 +67,23 @@ def _ws_url_from_data_dir(data_dir: str | Path) -> str:
     return f"ws://127.0.0.1:{port}{ws_path}"
 
 
+def _no_data_dir_message(endpoint: str, reason: str) -> str:
+    return (
+        f"{reason} and no data dir was given to fall back to DevToolsActivePort - "
+        "pass data_dir or set CONTACT_SYNC_CHROME_DATA_DIR, or point endpoint at a "
+        "Chrome started with a dedicated --user-data-dir (no approval dialog, "
+        "/json/version works there)"
+    )
+
+
 def _ws_url_from_endpoint(endpoint: str, data_dir: str | Path | None) -> str:
-    resp = httpx.get(f"http://{endpoint}/json/version", timeout=JSON_VERSION_TIMEOUT)
+    try:
+        resp = httpx.get(f"http://{endpoint}/json/version", timeout=JSON_VERSION_TIMEOUT)
+    except httpx.HTTPError as e:
+        raise CdpError(
+            _no_data_dir_message(endpoint, f"http://{endpoint}/json/version was unreachable ({e})")
+        ) from e
+
     if resp.status_code == 404:
         # Approval-mode Chrome: no /json/version. Fall back to the
         # DevToolsActivePort file only when a data dir is also known.
@@ -76,14 +91,16 @@ def _ws_url_from_endpoint(endpoint: str, data_dir: str | Path | None) -> str:
             log.info("cdp endpoint resolved", via="endpoint-404-data-dir-fallback")
             return _ws_url_from_data_dir(data_dir)
         raise CdpError(
-            f"http://{endpoint}/json/version returned 404 (Chrome is running in "
-            "approval mode) and no data dir was given to fall back to "
-            "DevToolsActivePort - pass data_dir or set CONTACT_SYNC_CHROME_DATA_DIR, "
-            "or point endpoint at a Chrome started with a dedicated --user-data-dir "
-            "(no approval dialog, /json/version works there)"
+            _no_data_dir_message(
+                endpoint,
+                f"http://{endpoint}/json/version returned 404 (Chrome is running in approval mode)",
+            )
         )
     resp.raise_for_status()
-    return resp.json()["webSocketDebuggerUrl"]
+    ws_url = resp.json().get("webSocketDebuggerUrl")
+    if not ws_url:
+        raise CdpError(f"no webSocketDebuggerUrl in http://{endpoint}/json/version response")
+    return ws_url
 
 
 def _resolve_ws_url(
