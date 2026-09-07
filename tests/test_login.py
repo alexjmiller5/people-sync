@@ -1,0 +1,552 @@
+"""Automated login flows, driven end to end through the real CDP client
+against the fake Chrome from test_cdp.py.
+
+`FakeSite` is a tiny stand-in for a login page: it answers the presence,
+rect, and page-text evals the flow makes, and records what was typed and
+clicked, so the tests assert on the actual CDP traffic rather than on mocks.
+No network, no real site, no real credential - every value here is invented.
+"""
+
+import json
+import re
+
+import pytest
+
+from contact_sync.scrape import cdp, login, login_specs
+from tests.test_cdp import fake_chrome  # noqa: F401  (pytest fixture)
+
+SPEC = login.LoginSpec(
+    platform="testsite",
+    url="https://test.example/login",
+    username_selector="input#user",
+    password_selector="input#pass",
+    submit_selector="button#submit",
+    logged_in_js="IS_LOGGED_IN",
+    totp_selector="input#totp",
+    email_code_selector="input#emailcode",
+    sms_code_selector="input#smscode",
+    remember_selector="input#remember",
+)
+
+CRED_COMMAND = """printf '{"username":"%s","password":"pw-synthetic","totp":null}' "$1" """
+CRED_COMMAND_TOTP = (
+    """printf '{"username":"user-synthetic","password":"pw-synthetic","totp":"654321"}' """
+)
+
+
+class FakeSite:
+    """A scripted login page. `present` is the set of selectors currently on
+    it; `on_submit`/`on_navigate` let a test advance it to the next step."""
+
+    def __init__(self, chrome, logged_in_js="IS_LOGGED_IN"):
+        self.logged_in_js = logged_in_js
+        self.present = {"input#user", "input#pass", "button#submit"}
+        self.logged_in = False
+        self.text = "Log in to Testsite"
+        self.typed: dict[str, str] = {}
+        self.clicks: list[str] = []
+        self.focus: str | None = None
+        self.navigations: list[str] = []
+        self.on_submit = None
+        self.on_navigate = None
+        for method in (
+            "Runtime.evaluate",
+            "Input.dispatchKeyEvent",
+            "Input.dispatchMouseEvent",
+            "Page.navigate",
+            "Page.captureScreenshot",
+        ):
+            chrome.on(method, getattr(self, "_" + method.split(".")[1].lower()))
+
+    # -- CDP handlers ---------------------------------------------------
+
+    @staticmethod
+    async def _reply(ws, msg, result):
+        await ws.send(
+            json.dumps({"id": msg["id"], "sessionId": msg.get("sessionId"), "result": result})
+        )
+
+    @staticmethod
+    def _selector(expression):
+        match = re.search(r"querySelector\((\".*?\")\)", expression)
+        return json.loads(match.group(1)) if match else None
+
+    async def _evaluate(self, ws, msg):
+        expression = msg["params"]["expression"]
+        selector = self._selector(expression)
+        if expression == self.logged_in_js:
+            value = self.logged_in
+        elif "getBoundingClientRect" in expression:
+            if selector in self.present:
+                self.focus = selector
+                value = {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}
+            else:
+                value = None
+        elif expression.startswith("!!document.querySelector("):
+            value = selector in self.present
+        elif "document.title" in expression:
+            value = self.text
+        else:
+            value = None
+        await self._reply(ws, msg, {"result": {"value": value}})
+
+    async def _dispatchkeyevent(self, ws, msg):
+        params = msg["params"]
+        if params["type"] == "char" and self.focus:
+            self.typed[self.focus] = self.typed.get(self.focus, "") + params["text"]
+        await self._reply(ws, msg, {})
+
+    async def _dispatchmouseevent(self, ws, msg):
+        if msg["params"]["type"] == "mousePressed" and self.focus:
+            self.clicks.append(self.focus)
+            if self.focus in ("button#submit", "button#code-submit") and self.on_submit:
+                self.on_submit(self)
+        await self._reply(ws, msg, {})
+
+    async def _navigate(self, ws, msg):
+        self.navigations.append(msg["params"]["url"])
+        if self.on_navigate:
+            self.on_navigate(self)
+        sid = msg.get("sessionId")
+        await self._reply(ws, msg, {})
+        await ws.send(json.dumps({"method": "Page.loadEventFired", "sessionId": sid, "params": {}}))
+
+    async def _capturescreenshot(self, ws, msg):
+        import base64
+
+        await self._reply(ws, msg, {"data": base64.b64encode(b"PNG").decode()})
+
+
+@pytest.fixture
+def site(fake_chrome):  # noqa: F811
+    return FakeSite(fake_chrome)
+
+
+@pytest.fixture(autouse=True)
+def _fast(mocker, monkeypatch):
+    """No real waiting anywhere: typing jitter, inter-field pauses, and the
+    2FA poll all run on patched clocks."""
+    clock = {"t": 0.0}
+
+    # cdp's own waits (typing jitter, wait_for polling) advance the same
+    # clock but are not recorded - the assertions here are about the flow's
+    # pauses, not about keystrokes.
+    mocker.patch.object(cdp, "_sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+
+    def sleep(seconds):
+        clock["t"] += seconds
+        sleep.calls.append(seconds)
+
+    sleep.calls = []
+    mocker.patch.object(login, "_sleep", sleep)
+    mocker.patch.object(login, "_now", lambda: clock["t"])
+    mocker.patch.object(cdp, "_now", lambda: clock["t"])
+    monkeypatch.setitem(login_specs.SPECS, "testsite", SPEC)
+    return sleep
+
+
+def run(fake_chrome, tmp_path, platform="testsite"):  # noqa: F811
+    return login.login(
+        platform,
+        state_dir=str(tmp_path),
+        devtools_port_path=fake_chrome.devtools_port_file(tmp_path),
+    )
+
+
+def shots(tmp_path):
+    return sorted(p.name for p in tmp_path.glob("login-*.png"))
+
+
+# -- idempotence -------------------------------------------------------------
+
+
+def test_already_logged_in_exits_without_typing_anything(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.logged_in = True
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result == {"platform": "testsite", "status": "already-logged-in", "reason": None}
+    assert site.typed == {}
+    assert not any(m.get("method") == "Input.dispatchKeyEvent" for m in fake_chrome.messages)
+
+
+def test_logged_in_check_happens_before_any_typing(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """Mutation guard: reorder the flow so a key is typed before the detector
+    runs and this fails."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    run(fake_chrome, tmp_path)
+
+    methods = [m.get("method") for m in fake_chrome.messages]
+    first_key = methods.index("Input.dispatchKeyEvent")
+    detector = next(
+        i
+        for i, m in enumerate(fake_chrome.messages)
+        if m.get("method") == "Runtime.evaluate" and m["params"].get("expression") == "IS_LOGGED_IN"
+    )
+    assert detector < first_key
+
+
+# -- the happy path ----------------------------------------------------------
+
+
+def test_types_username_and_password_then_submits(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    _fast,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    # the credential command receives the platform as $1
+    assert site.typed == {"input#user": "testsite", "input#pass": "pw-synthetic"}
+    assert site.clicks == ["input#user", "input#pass", "button#submit"]
+    assert site.navigations == ["https://test.example/login"]
+    pauses = [s for s in _fast.calls if 0.3 <= s <= 0.9]
+    assert len(pauses) >= 2  # a natural pause between fields and before submit
+
+
+def test_two_page_flow_clicks_the_username_submit_first(
+    fake_chrome,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+):
+    spec = SPEC.__class__(**{**SPEC.__dict__, "username_submit_selector": "button#next"})
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site = FakeSite(fake_chrome)
+    site.present = {"input#user", "button#next"}
+
+    def reveal_password(s):
+        s.present |= {"input#pass", "button#submit"}
+
+    original = site._dispatchmouseevent
+
+    async def mouse(ws, msg):
+        if msg["params"]["type"] == "mousePressed" and site.focus == "button#next":
+            reveal_password(site)
+        await original(ws, msg)
+
+    fake_chrome.on("Input.dispatchMouseEvent", mouse)
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.clicks == ["input#user", "button#next", "input#pass", "button#submit"]
+
+
+# -- 2FA dispatch ------------------------------------------------------------
+
+
+def _show_totp(site):
+    site.present = {"input#totp", "button#submit"}
+
+
+def test_totp_code_comes_from_the_credential_json(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            _show_totp(s)
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.typed["input#totp"] == "654321"
+
+
+def test_email_code_is_polled_until_it_arrives(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    _fast,
+):
+    counter = tmp_path / "count"
+    counter.write_text("0")
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(
+        login.EMAIL_CODE_COMMAND_ENV,
+        f"n=$(cat {counter}); echo $((n+1)) > {counter}; "
+        f'if [ "$n" -ge 2 ]; then echo "424242 $1"; fi',
+    )
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#emailcode", "button#submit"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    # the code command also receives the platform as $1
+    assert site.typed["input#emailcode"] == "424242 testsite"
+    gaps = [s for s in _fast.calls if 5.0 <= s <= 10.0]
+    assert len(gaps) == 2
+    assert sum(_fast.calls) < login.CODE_POLL_TIMEOUT_S
+
+
+def test_sms_code_used_when_the_sms_field_is_the_one_shown(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.SMS_CODE_COMMAND_ENV, "echo 111222")
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#smscode", "button#submit"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.typed["input#smscode"] == "111222"
+
+
+def test_remember_this_device_is_ticked_when_offered(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#totp", "input#remember", "button#submit"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    run(fake_chrome, tmp_path)
+
+    assert "input#remember" in site.clicks
+    assert site.clicks.index("input#remember") == len(site.clicks) - 2
+    assert site.clicks[-1] == "button#submit"  # ticked before the code is submitted
+
+
+def test_missing_code_command_halts_naming_the_env_var(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.delenv(login.EMAIL_CODE_COMMAND_ENV, raising=False)
+    site.on_submit = lambda s: setattr(s, "present", {"input#emailcode", "button#submit"})
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert login.EMAIL_CODE_COMMAND_ENV in result["reason"]
+    assert shots(tmp_path)
+
+
+def test_code_that_never_arrives_halts_after_the_poll_window(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    _fast,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.EMAIL_CODE_COMMAND_ENV, "true")
+    site.on_submit = lambda s: setattr(s, "present", {"input#emailcode", "button#submit"})
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert "code" in result["reason"]
+    assert sum(_fast.calls) >= login.CODE_POLL_TIMEOUT_S
+
+
+# -- halts -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "page_text",
+    [
+        "Confirm your identity - solve the CAPTCHA below",
+        "Check your notifications - approve this login on your phone",
+        "We noticed an unusual login attempt",
+    ],
+)
+def test_challenge_pages_halt_with_a_screenshot(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    page_text,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.text = page_text
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert site.typed == {}
+    assert len(shots(tmp_path)) == 1
+    assert shots(tmp_path)[0].startswith("login-testsite-")
+
+
+def test_unknown_page_without_a_login_form_halts(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.present = set()
+    site.text = "Service temporarily unavailable"
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert site.typed == {}
+    assert shots(tmp_path)
+
+
+def test_second_password_failure_halts_without_a_third_attempt(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """Mutation guard on the one-retry cap: widen the retry loop and the
+    submit count goes to 3."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    submits = []
+    site.on_submit = lambda s: submits.append(1)  # never logs in
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert len(submits) == 2
+    assert site.navigations == ["https://test.example/login"] * 2
+    assert shots(tmp_path)
+
+
+def test_no_credential_command_errors_naming_the_env_var(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv(login.CREDENTIAL_COMMAND_ENV, raising=False)
+
+    with pytest.raises(login.LoginError, match=login.CREDENTIAL_COMMAND_ENV):
+        run(fake_chrome, tmp_path)
+
+
+def test_credential_command_that_prints_non_json_errors_clearly(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, "echo not-json")
+
+    with pytest.raises(login.LoginError, match="JSON"):
+        run(fake_chrome, tmp_path)
+
+
+def test_unknown_platform_errors_before_connecting(tmp_path):
+    with pytest.raises(login.LoginError, match="nosuchsite"):
+        login.login("nosuchsite", state_dir=str(tmp_path))
+
+
+# -- the shipped specs -------------------------------------------------------
+
+
+def test_every_spec_is_complete_and_self_consistent():
+    shipped = set(login_specs.SPECS) - {"testsite"}  # the fixture's synthetic spec
+    assert shipped == {
+        "instagram",
+        "facebook",
+        "linkedin",
+        "venmo",
+        "spotify",
+        "partiful",
+        "google",
+    }
+    for platform in shipped:
+        spec = login_specs.SPECS[platform]
+        assert spec.platform == platform
+        assert spec.url.startswith("https://")
+        assert spec.username_selector and spec.submit_selector and spec.logged_in_js
+        # every spec can answer at least one kind of 2FA prompt
+        assert any([spec.totp_selector, spec.email_code_selector, spec.sms_code_selector])
+
+
+def test_passwordless_spec_skips_the_password_step(
+    fake_chrome,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+):
+    spec = SPEC.__class__(**{**SPEC.__dict__, "password_selector": None})
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.SMS_CODE_COMMAND_ENV, "echo 999888")
+    site = FakeSite(fake_chrome)
+    site.present = {"input#user", "button#submit"}
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#smscode", "button#submit"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert "input#pass" not in site.typed
+    assert site.typed["input#smscode"] == "999888"

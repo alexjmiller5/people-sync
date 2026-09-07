@@ -6,6 +6,7 @@ import os
 import sys
 
 from contact_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from contact_sync.scrape import login as scrape_login
 from contact_sync.scrape import run as scrape_run
 from contact_sync.scrape.pace import DEFAULT_STATE_PATH
 
@@ -73,6 +74,16 @@ def cmd_scrape(args: argparse.Namespace) -> None:
     print(json.dumps(result))
 
 
+def cmd_login(args: argparse.Namespace) -> None:
+    try:
+        result = scrape_login.login(args.platform, endpoint=args.endpoint, data_dir=args.data_dir)
+    except scrape_login.LoginError as e:
+        sys.exit(str(e))
+    print(json.dumps(result))
+    if result["status"] == "halted":
+        sys.exit(1)
+
+
 def cmd_photos_store(args: argparse.Namespace) -> None:
     with open(args.file, "rb") as f:
         image = f.read()
@@ -118,6 +129,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
     )
     scrape_p.set_defaults(func=cmd_scrape)
+
+    login_p = sub.add_parser(
+        "login", help="sign this platform's Chrome profile in (idempotent, halts on anything odd)"
+    )
+    login_p.add_argument("platform")
+    login_p.add_argument(
+        "--endpoint",
+        default=None,
+        help="CDP host:port to drive instead of Chrome's default data dir",
+    )
+    login_p.add_argument(
+        "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
+    )
+    login_p.set_defaults(func=cmd_login)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")
     photos_sub = photos_p.add_subparsers(dest="photos_command", required=True)

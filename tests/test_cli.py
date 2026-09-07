@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from contact_sync import cli
+from contact_sync.scrape import login as scrape_login
 
 
 def test_ingest_instagram_reads_directory_and_upserts(mocker, capsys):
@@ -244,3 +245,44 @@ def test_photos_store_prints_duplicate_when_store_returns_none(mocker, tmp_path,
     )
 
     assert capsys.readouterr().out.strip() == "duplicate"
+
+
+def test_login_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
+    login = mocker.patch(
+        "contact_sync.scrape.login.login",
+        return_value={"platform": "instagram", "status": "logged-in", "reason": None},
+    )
+
+    cli.main(
+        ["login", "instagram", "--endpoint", "127.0.0.1:9333", "--data-dir", "/tmp/profiles/ig"]
+    )
+
+    login.assert_called_once_with(
+        "instagram", endpoint="127.0.0.1:9333", data_dir="/tmp/profiles/ig"
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "logged-in"
+
+
+def test_login_exits_non_zero_when_the_flow_halts(mocker, capsys):
+    mocker.patch(
+        "contact_sync.scrape.login.login",
+        return_value={"platform": "facebook", "status": "halted", "reason": "challenge page"},
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["login", "facebook"])
+
+    assert exit_info.value.code == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "challenge page"
+
+
+def test_login_reports_a_missing_credential_command_without_a_traceback(mocker):
+    mocker.patch(
+        "contact_sync.scrape.login.login",
+        side_effect=scrape_login.LoginError("CONTACT_SYNC_CREDENTIAL_COMMAND is not set"),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["login", "venmo"])
+
+    assert "CONTACT_SYNC_CREDENTIAL_COMMAND" in str(exit_info.value.code)

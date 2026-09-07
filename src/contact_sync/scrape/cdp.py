@@ -13,8 +13,10 @@ for navigation, `Network.*` for passive response capture.
 """
 
 import asyncio
+import base64
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -30,6 +32,11 @@ from websockets.asyncio.client import connect as ws_connect
 
 log = structlog.get_logger(__name__)
 
+# Indirected so tests can drive the clock (typing jitter, wait_for polling)
+# without patching the `time` module out from under the asyncio loop.
+_sleep = time.sleep
+_now = time.monotonic
+
 DEVTOOLS_ACTIVE_PORT = Path(
     "~/Library/Application Support/Google/Chrome/DevToolsActivePort"
 ).expanduser()
@@ -42,6 +49,20 @@ JSON_VERSION_TIMEOUT = 5.0
 
 HANDSHAKE_TIMEOUT = 30.0
 ALLOW_HINT = "click Allow in the Chrome remote-debugging dialog"
+
+# Trusted input (Input.dispatchKeyEvent / Input.dispatchMouseEvent - the
+# chrome-control skill's "trusted" tier: the page sees isTrusted events,
+# unlike anything dispatched from Runtime.evaluate).
+TYPE_JITTER_MS = (80, 200)
+CLICK_JITTER_PX = 3
+WAIT_POLL_S = 0.5
+
+RECT_JS = (
+    "(function(){{var e=document.querySelector({selector});if(!e)return null;"
+    'e.scrollIntoView({{block:"center",inline:"center"}});'
+    "var r=e.getBoundingClientRect();"
+    "return {{x:r.x,y:r.y,width:r.width,height:r.height}};}})()"
+)
 
 # A single Network.getResponseBody must never hang navigate() forever - a
 # request whose body Chrome never returns (evicted, aborted, redirected) is
@@ -121,6 +142,30 @@ def _resolve_ws_url(
     log.info("cdp endpoint resolved", via="default")
     port, ws_path = _read_devtools_port(devtools_port_path or DEVTOOLS_ACTIVE_PORT)
     return f"ws://127.0.0.1:{port}{ws_path}"
+
+
+def _key_events(char: str) -> list[dict]:
+    """The keyDown/char/keyUp triple Chrome expects for one printable
+    character - `text` is what actually lands in the field, `key` is what a
+    site's keydown handlers read."""
+    code = ord(char.upper()) if char.isalnum() else 0
+    return [
+        {
+            "type": "keyDown",
+            "text": char,
+            "unmodifiedText": char,
+            "key": char,
+            "windowsVirtualKeyCode": code,
+            "nativeVirtualKeyCode": code,
+        },
+        {"type": "char", "text": char, "unmodifiedText": char, "key": char},
+        {
+            "type": "keyUp",
+            "key": char,
+            "windowsVirtualKeyCode": code,
+            "nativeVirtualKeyCode": code,
+        },
+    ]
 
 
 class Browser:
@@ -336,6 +381,75 @@ class Browser:
             {"type": "mouseWheel", "x": 400, "y": 400, "deltaX": 0, "deltaY": px},
             session_id=self._session_id,
         )
+
+    # -- trusted input ------------------------------------------------------
+
+    def type_text(self, text: str, jitter_ms: tuple[int, int] = TYPE_JITTER_MS) -> None:
+        """Type into whatever has focus, one trusted keyDown/char/keyUp triple
+        per character, with a human pause between characters. Click the field
+        first - this does not focus anything itself."""
+        for char in text:
+            for params in _key_events(char):
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._send("Input.dispatchKeyEvent", params, session_id=self._session_id),
+                    self._loop,
+                )
+                fut.result(timeout=10)
+            _sleep(random.uniform(jitter_ms[0], jitter_ms[1]) / 1000)
+
+    def insert_text(self, text: str) -> None:
+        """Paste `text` into the focused field in one shot. NOT human-like -
+        no key events reach the page, which a site's input handlers can spot.
+        Kept for bulk, non-login fields; the login flow never uses it."""
+        fut = asyncio.run_coroutine_threadsafe(
+            self._send("Input.insertText", {"text": text}, session_id=self._session_id), self._loop
+        )
+        fut.result(timeout=10)
+
+    def click(self, selector: str) -> None:
+        """Scroll the element into view and click its center (jittered by a
+        few pixels) with trusted mouse events."""
+        rect = self.eval(RECT_JS.format(selector=json.dumps(selector)))
+        if not rect:
+            raise CdpError(f"click target not on the page: {selector}")
+        x = rect["x"] + rect["width"] / 2 + random.uniform(-CLICK_JITTER_PX, CLICK_JITTER_PX)
+        y = rect["y"] + rect["height"] / 2 + random.uniform(-CLICK_JITTER_PX, CLICK_JITTER_PX)
+        for event_type in ("mousePressed", "mouseReleased"):
+            fut = asyncio.run_coroutine_threadsafe(
+                self._send(
+                    "Input.dispatchMouseEvent",
+                    {
+                        "type": event_type,
+                        "x": x,
+                        "y": y,
+                        "button": "left",
+                        "buttons": 1,
+                        "clickCount": 1,
+                    },
+                    session_id=self._session_id,
+                ),
+                self._loop,
+            )
+            fut.result(timeout=10)
+
+    def wait_for(self, js_predicate: str, timeout_s: float = 10.0) -> bool:
+        """Poll `js_predicate` until it evaluates truthy. Returns False on
+        timeout - callers decide whether that is a halt."""
+        deadline = _now() + timeout_s
+        while True:
+            if self.eval(js_predicate):
+                return True
+            if _now() >= deadline:
+                return False
+            _sleep(WAIT_POLL_S)
+
+    def screenshot(self, path) -> None:
+        result = asyncio.run_coroutine_threadsafe(
+            self._send("Page.captureScreenshot", session_id=self._session_id), self._loop
+        ).result(timeout=30)
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode((result or {}).get("data", "")))
 
     # -- passive response capture -------------------------------------------
 
