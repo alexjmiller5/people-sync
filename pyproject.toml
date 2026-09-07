@@ -9,6 +9,9 @@ dependencies = [
     "websockets>=17.1",
 ]
 
+[project.scripts]
+contact-sync = "contact_sync.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.3",

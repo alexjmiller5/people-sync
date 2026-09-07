@@ -812,6 +812,34 @@ def test_resolve_ws_url_endpoint_404_without_data_dir_raises_naming_both_options
     assert cdp.CHROME_DATA_DIR_ENV in message
 
 
+def test_resolve_ws_url_endpoint_connection_failure_raises_cdp_error_naming_both_options(
+    monkeypatch,
+):
+    import socket
+
+    monkeypatch.delenv(cdp.CHROME_DATA_DIR_ENV, raising=False)
+    # Grab a free port and close it immediately, so nothing listens there -
+    # a deterministic connection-refused.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+
+    with pytest.raises(cdp.CdpError) as exc_info:
+        cdp._resolve_ws_url(f"127.0.0.1:{dead_port}", None, None)
+
+    message = str(exc_info.value)
+    assert "data_dir" in message
+    assert cdp.CHROME_DATA_DIR_ENV in message
+
+
+def test_resolve_ws_url_endpoint_missing_ws_url_key_raises_clear_cdp_error(fake_json_server):
+    server = fake_json_server(body={"Browser": "Chrome/1.0"})
+
+    with pytest.raises(cdp.CdpError, match=f"webSocketDebuggerUrl.*{server.endpoint}"):
+        cdp._resolve_ws_url(server.endpoint, None, None)
+
+
 def test_resolve_ws_url_endpoint_404_falls_back_to_data_dir(
     monkeypatch, tmp_path, fake_json_server
 ):
