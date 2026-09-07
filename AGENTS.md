@@ -20,10 +20,69 @@ src/contact_sync/
   notion_people.py Notion People stub-page creation (the row-id invariant)
 tests/             pytest, synthetic fixtures only
 scripts/           reconcile.py (triage link/merge/create), one-off migrations,
-                   the Google write-back cleanup
+                   the Google write-back cleanup, contact-sync-agent (the
+                   packaged launchd runner, see "Installing on a Mac")
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
+flake.nix          packages.default (the CLI) + darwinModules.default
+                   (the launchd agent module)
+nix/darwin.nix     services.contact-sync-scrape - see "Installing on a Mac"
 ```
+
+## Installing on a Mac
+
+`flake.nix` exposes `packages.<system>.default` (the `contact-sync` CLI,
+built with plain `buildPythonApplication` - all three runtime deps ship as
+nixpkgs `python313Packages`, so no uv2nix machinery is needed) and
+`darwinModules.default`, a `services.contact-sync-scrape` nix-darwin module
+for running the profile scraper (R4+ of the profile-scraping plan) as a
+declared launchd user agent.
+
+The module is a thin options-to-environment translator: it launches each
+platform's dedicated, headed Chrome (its own `--user-data-dir` and
+`--remote-debugging-port`, no signed `.app` bundle - this job never touches
+TCC-protected data, unlike the FDA-gated jobs this shape is usually mirrored
+from) and runs `contact-sync scrape <platform>` against it on a schedule. All
+actual behavior lives in `bin/contact-sync-agent`, which ships as part of
+the package.
+
+Consume it from another flake (e.g. a nix-config host):
+
+```nix
+{
+  inputs.contact-sync.url = "github:<owner>/contact-sync";
+
+  outputs = { contact-sync, ... }: {
+    darwinConfigurations.somehost = darwinSystem {
+      modules = [
+        contact-sync.darwinModules.default
+        {
+          services.contact-sync-scrape = {
+            enable = true;
+            user = "someuser";
+            # Commands the scraper runs to obtain a login credential JSON /
+            # a 2FA code - the module never knows what they are.
+            credentialCommand = "some-credential-command <platform>";
+            emailCodeCommand = "some-email-code-command";
+            smsCodeCommand = "some-sms-code-command";
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+`platforms`, `dailyCaps`, `stateDir`, `profileDir`, `basePort`, `chromePath`,
+and `schedule` all have generic defaults; override what your setup needs.
+`dailyCaps` is wired through as `CONTACT_SYNC_DAILY_CAPS` (JSON) but
+`contact_sync.scrape.pace` doesn't read it yet - it still uses its own
+built-in per-platform caps, so the option is a forward-compatible hook, not
+yet load-bearing.
+
+`nix build .#default` and `nix flake check` (an eval-only smoke test of the
+darwin module, since there's no nix-darwin flake input to build a full
+`darwinConfiguration` against) both need to stay clean.
 
 ## Write path
 
