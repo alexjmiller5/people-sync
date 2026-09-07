@@ -174,6 +174,50 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
     assert "life-data insert failed" in err
 
 
+def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
+    scrape = mocker.patch(
+        "contact_sync.scrape.run.scrape",
+        return_value={"done": 1, "skipped": 0, "halted": None},
+    )
+
+    cli.main(
+        [
+            "scrape",
+            "instagram",
+            "--endpoint",
+            "mini.local:9333",
+            "--data-dir",
+            "/tmp/instagram-profile",
+        ]
+    )
+
+    scrape.assert_called_once_with(
+        "instagram",
+        max_n=None,
+        state_path=cli.DEFAULT_STATE_PATH,
+        endpoint="mini.local:9333",
+        data_dir="/tmp/instagram-profile",
+    )
+    assert json.loads(capsys.readouterr().out) == {"done": 1, "skipped": 0, "halted": None}
+
+
+def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker, capsys):
+    scrape = mocker.patch(
+        "contact_sync.scrape.run.scrape",
+        return_value={"done": 0, "skipped": 0, "halted": None},
+    )
+
+    cli.main(["scrape", "instagram"])
+
+    scrape.assert_called_once_with(
+        "instagram",
+        max_n=None,
+        state_path=cli.DEFAULT_STATE_PATH,
+        endpoint=None,
+        data_dir=None,
+    )
+
+
 def test_photos_store_prints_r2_key_on_new_photo(mocker, tmp_path, capsys):
     file_path = tmp_path / "avatar.jpg"
     file_path.write_bytes(b"image-bytes")

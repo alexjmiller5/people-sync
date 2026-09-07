@@ -66,6 +66,28 @@ def _patch_common(mocker, records, browser=None, allow=True):
     return browser, pacer
 
 
+def test_scrape_passes_endpoint_and_data_dir_to_browser_connect(mocker):
+    mocker.patch("contact_sync.scrape.run._select_records", return_value=[])
+    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
+    connect = mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
+    mocker.patch("contact_sync.scrape.run.Pacer")
+
+    run.scrape("testplatform", endpoint="mini.local:9333", data_dir="/tmp/profile")
+
+    connect.assert_called_once_with(endpoint="mini.local:9333", data_dir="/tmp/profile")
+
+
+def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
+    mocker.patch("contact_sync.scrape.run._select_records", return_value=[])
+    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
+    connect = mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
+    mocker.patch("contact_sync.scrape.run.Pacer")
+
+    run.scrape("testplatform")
+
+    connect.assert_called_once_with(endpoint=None, data_dir=None)
+
+
 def test_cap_reached_stops_before_navigating(mocker):
     browser, pacer = _patch_common(mocker, [_record()], allow=False)
     put_object = mocker.patch("contact_sync.photos.put_object")
