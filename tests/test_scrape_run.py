@@ -119,7 +119,7 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
 
     result = run.scrape("testplatform")
 
-    assert result == {"done": 0, "skipped": 0, "halted": "challenge page"}
+    assert result == {"done": 0, "skipped": 0, "halted": "challenge page: log in to continue"}
     assert browser.navigated == ["https://example.test/u1/"]
     put_object.assert_not_called()
     upsert.assert_not_called()
@@ -425,3 +425,17 @@ def test_scrape_waits_for_a_module_ready_predicate_before_extracting(mocker):
 
     wait = browser.calls.index(f"wait:READY():{run.READY_TIMEOUT_S}")
     assert wait < browser.calls.index("eval:EXTRACT()")
+
+
+def test_challenge_halt_names_the_marker_and_saves_a_screenshot(mocker, tmp_path):
+    browser = FakeBrowser(page_text="Please log in to continue")
+    browser.screenshot = mocker.Mock()
+    _patch_common(mocker, [_record()], browser=browser)
+
+    result = run.scrape("testplatform", state_path=str(tmp_path / "state.json"))
+
+    assert result["halted"] == "challenge page: log in to continue"
+    shot = browser.screenshot.call_args.args[0]
+    assert (
+        shot.startswith(str(tmp_path)) and "scrape-testplatform-" in shot and shot.endswith(".png")
+    )

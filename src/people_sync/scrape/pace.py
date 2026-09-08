@@ -45,9 +45,18 @@ BREAK_EVERY = 25
 # Split in two because the login flow (scrape/login.py) reuses
 # CHALLENGE_MARKERS but must NOT halt on LOGIN_MARKERS - those words are the
 # page it is deliberately driving.
+# A signed-out wall. Phrases only: bare "log in" / "login" matched the
+# navigation of ordinary pages (LinkedIn's 404, "Log in with Facebook"
+# buttons) and halted whole runs.
 LOGIN_MARKERS = (
-    "log in",
-    "login",
+    "log in to continue",
+    "login to continue",
+    "please log in",
+    "login required",
+    "log in required",
+    "sign in to view",
+    "sign in to continue",
+    "join now to see",
 )
 
 CHALLENGE_MARKERS = (
@@ -82,9 +91,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def is_challenge(text: str) -> bool:
+def challenge_marker(text: str) -> str | None:
+    """The first challenge or signed-out phrase in `text` (our own wording,
+    safe to log), or None."""
     lowered = text.lower()
-    return any(marker in lowered for marker in LOGIN_MARKERS + CHALLENGE_MARKERS)
+    return next((m for m in LOGIN_MARKERS + CHALLENGE_MARKERS if m in lowered), None)
+
+
+def is_challenge(text: str) -> bool:
+    return challenge_marker(text) is not None
 
 
 def daily_caps() -> dict[str, int]:
