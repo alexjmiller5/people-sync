@@ -68,7 +68,7 @@ WAIT_POLL_S = 0.5
 # that also catch opacity:0 / visibility:hidden) accepts, and misses otherwise.
 _VISIBLE_OPTS = "{opacityProperty:true,visibilityProperty:true,contentVisibilityAuto:true}"
 _FIRST_VISIBLE = (
-    "var e=null,l=document.querySelectorAll(SELECTOR);"
+    "var e=null;var l=document.querySelectorAll(SELECTOR);"
     "for(var i=0;i<l.length;i++){var c=l[i],r=c.getBoundingClientRect();"
     "if(r.width>0&&r.height>0&&(c.checkVisibility?c.checkVisibility(" + _VISIBLE_OPTS + ")"
     ":c.offsetParent!==null)){e=c;break;}}"
@@ -76,11 +76,32 @@ _FIRST_VISIBLE = (
 )
 
 
+# `text=<label>` selectors: the first visible clickable element whose text
+# starts with the label - for the div[role=button] / label / radio controls
+# Meta's pages ship with no attribute at all besides their wording.
+TEXT_PREFIX = "text="
+_CLICKABLE = (
+    "button,[role=button],[role=radio],[role=checkbox],[role=link],label,a,input[type=submit]"
+)
+_BY_TEXT = (
+    "var sel=SELECTOR,l=[].filter.call(document.querySelectorAll(" + json.dumps(_CLICKABLE) + "),"
+    "function(c){return ((c.innerText||c.value||'')+'').trim().indexOf(sel.slice(5))===0;});"
+)
+
+
+def _candidates_js(selector: str) -> str:
+    if selector.startswith(TEXT_PREFIX):
+        return _BY_TEXT.replace("SELECTOR", json.dumps(selector))
+    return "var l=document.querySelectorAll(" + json.dumps(selector) + ");"
+
+
 def element_js(selector: str, body: str, miss: str) -> str:
-    """An IIFE that binds `e` to the first VISIBLE match of `selector` and
-    runs `body` (which must `return`), or returns the JS literal `miss` when
-    nothing visible matches."""
-    prelude = _FIRST_VISIBLE.replace("SELECTOR", json.dumps(selector)).replace("MISS", miss)
+    """An IIFE that binds `e` to the first VISIBLE match of `selector` (a CSS
+    selector, or `text=<label>`) and runs `body` (which must `return`), or
+    returns the JS literal `miss` when nothing visible matches."""
+    prelude = _FIRST_VISIBLE.replace(
+        "var l=document.querySelectorAll(SELECTOR);", _candidates_js(selector)
+    ).replace("MISS", miss)
     return "(function(){" + prelude + body + "})()"
 
 

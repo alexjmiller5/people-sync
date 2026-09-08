@@ -113,6 +113,11 @@ class LoginSpec:
     sms_code_selector: str | None = None
     # None = reuse submit_selector; ENTER = press Enter in the code field.
     code_submit_selector: str | None = None
+    # Clicks that turn the site's default second step (a push notification
+    # to another device) into a code prompt we can answer: each selector is
+    # clicked in order as soon as it is visible. Walked only when the first
+    # one is on the page, before any challenge marker can halt the run.
+    code_path: tuple[str, ...] = ()
     remember_selector: str | None = None
 
 
@@ -261,6 +266,10 @@ def _next_step(browser: Browser, spec: LoginSpec) -> str:
             return "logged-in"
         if _code_field(browser, spec):
             return "2fa"
+        if spec.code_path and _present(browser, spec.code_path[0]):
+            _walk_code_path(browser, spec)
+            deadline = _now() + STEP_TIMEOUT_S
+            continue
         _guard(browser)
         if _now() >= deadline:
             break
@@ -269,6 +278,16 @@ def _next_step(browser: Browser, spec: LoginSpec) -> str:
     if _present(browser, spec.password_selector or spec.username_selector):
         return "retry"
     raise LoginHalt("unrecognized page after submit")
+
+
+def _walk_code_path(browser: Browser, spec: LoginSpec) -> None:
+    log.info("switching to a code prompt", platform=spec.platform)
+    for selector in spec.code_path:
+        if not browser.wait_for(visible_js(selector), FORM_TIMEOUT_S):
+            raise LoginHalt("code path step never appeared")
+        _pause()
+        browser.click(selector)
+    _pause()
 
 
 def _pick_code_source(browser: Browser, spec: LoginSpec, credential: dict) -> tuple[str, str]:
