@@ -221,6 +221,9 @@ def test_record_self_heals_after_corrupt_state_file(tmp_path, mocker):
         "Action Blocked",
         "Try again later",
         "Please complete this CAPTCHA",
+        "Solve the CAPTCHA to continue",
+        "CAPTCHA challenge",
+        "Check the box: I'm not a robot",
         "We've detected unusual activity on your account",
         "Please verify it's you before continuing",
         "Your account has been restricted",
@@ -240,6 +243,10 @@ def test_is_challenge_true_on_markers(text):
         "500 followers, 300 following",
         "Bio: vegetarian, on a restricted diet, loves hiking",
         "Works at Checkpoint Systems",
+        # the reCAPTCHA badge sits on ordinary pages - matching a bare
+        # "captcha" substring here halted every run before it started
+        "This site is protected by reCAPTCHA and the Google Privacy Policy "
+        "and Terms of Service apply.",
     ],
 )
 def test_is_challenge_false_on_ordinary_text(text):
@@ -248,3 +255,11 @@ def test_is_challenge_false_on_ordinary_text(text):
 
 def test_is_challenge_case_insensitive():
     assert pace.is_challenge("LOGIN REQUIRED") is True
+
+
+def test_login_markers_are_kept_separate_from_challenge_markers():
+    """The login flow reuses CHALLENGE_MARKERS but must not halt on the words
+    that merely mean "this is a login page"."""
+    assert "log in" in pace.LOGIN_MARKERS
+    assert not any("log in" == marker for marker in pace.CHALLENGE_MARKERS)
+    assert pace.is_challenge("Please log in to continue") is True

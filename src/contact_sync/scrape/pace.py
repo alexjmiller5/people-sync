@@ -36,21 +36,36 @@ BREAK_EVERY = 25
 # Markers observed on login/checkpoint/rate-limit pages across platforms.
 # Matched case-insensitively as substrings against page text or title.
 # Phrases, not bare nouns - "restricted"/"checkpoint" alone trip on ordinary
-# bios and employer names ("restricted diet", "Checkpoint Systems").
-CHALLENGE_MARKERS = [
+# bios and employer names ("restricted diet", "Checkpoint Systems"), and a
+# bare "captcha" trips on the reCAPTCHA badge ("This site is protected by
+# reCAPTCHA...") that sits on perfectly ordinary login pages.
+#
+# Split in two because the login flow (scrape/login.py) reuses
+# CHALLENGE_MARKERS but must NOT halt on LOGIN_MARKERS - those words are the
+# page it is deliberately driving.
+LOGIN_MARKERS = (
     "log in",
     "login",
+)
+
+CHALLENGE_MARKERS = (
     "checkpoint required",
     "checkpoint/",
     "action blocked",
     "try again later",
-    "captcha",
+    "solve the captcha",
+    "complete the captcha",
+    "complete this captcha",
+    "captcha challenge",
+    "i'm not a robot",
+    "verify you are human",
+    "verify you're human",
     "unusual activity",
     "verify it's you",
     "account restricted",
     "your account has been restricted",
     "we restrict certain activity",
-]
+)
 
 
 def _utcnow() -> datetime:
@@ -59,7 +74,7 @@ def _utcnow() -> datetime:
 
 def is_challenge(text: str) -> bool:
     lowered = text.lower()
-    return any(marker in lowered for marker in CHALLENGE_MARKERS)
+    return any(marker in lowered for marker in LOGIN_MARKERS + CHALLENGE_MARKERS)
 
 
 class Pacer:
