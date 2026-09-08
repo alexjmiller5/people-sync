@@ -130,3 +130,9 @@ def test_list_command_assigns_handles(mocker, capsys):
         "assigned": 1,
         "unmatched_records": 1,
     }
+
+
+def test_extractor_js_reports_a_missing_profile_as_unavailable():
+    from people_sync.scrape import facebook as mod
+
+    assert 'error:"unavailable"' in mod.EXTRACTOR_JS

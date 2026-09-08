@@ -54,6 +54,11 @@ uv run python -m people_sync <command>
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
 | `new-person --name <name>` | Creates a Notion People stub page, then the life-data `people` row using that page id |
 | `photos store --person <id> --platform <p> --file <path>` | Stores a profile photo in R2 and appends a `person_photos` row, deduped by sha256 |
+| `login <platform>` | Signs the browser's profile into a platform at human pace (TOTP / SMS / mailed codes via the wired commands); idempotent |
+| `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (human-paced, daily-capped) and writes `people_sync_profiles` rows + pictures |
+| `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |
+| `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
+| `list strava` | Followers and following of the signed-in athlete into the ledger |
 
 Every ingest prints `{"new": N, "updated": N}`; `match` prints
 `{"auto": N, "suggested": N, "left_pending": N}`. Re-running an ingest on the

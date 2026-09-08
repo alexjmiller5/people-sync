@@ -22,7 +22,7 @@ from websockets.exceptions import ConnectionClosed
 from people_sync import lifedata, photos
 from people_sync.scrape.cdp import Browser, CdpError
 from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, challenge_marker
-from people_sync.scrape.profile import ExtractError, upsert_profile
+from people_sync.scrape.profile import ExtractError, upsert_profile, Profile
 
 # A CDP protocol error or a dropped websocket means the browser session
 # itself is gone - halt rather than spin through the remaining records.
@@ -36,6 +36,8 @@ PAGE_TEXT_JS = "document.title + '\\n' + document.body.innerText.slice(0,3000)"
 # Client-rendered profiles paint after the load event; a module's READY_JS
 # names what "rendered" looks like and the loop waits for it (bounded).
 READY_TIMEOUT_S = 15.0
+# The extractor sentinel for "this profile no longer exists".
+UNAVAILABLE = "unavailable"
 
 
 def _stale_cutoff() -> str:
@@ -215,9 +217,23 @@ def scrape(
                 halted = "browser lost"
                 log.error("scrape halted", platform=platform, index=index, reason=halted)
                 break
+            except ExtractError as e:
+                if str(e) == UNAVAILABLE:
+                    # a deleted/renamed account: remember that so the record is
+                    # not re-fetched every pass (it comes back when stale)
+                    upsert_profile(
+                        Profile(
+                            record_id=record["id"], platform=platform, raw={"unavailable": True}
+                        )
+                    )
+                log.warning("record failed", platform=platform, index=index, reason=str(e))
+                skipped += 1
+                time.sleep(pacer.next_gap())
+                continue
             except Exception as e:
-                reason = str(e) if isinstance(e, ExtractError) else type(e).__name__
-                log.warning("record failed", platform=platform, index=index, reason=reason)
+                log.warning(
+                    "record failed", platform=platform, index=index, reason=type(e).__name__
+                )
                 skipped += 1
                 time.sleep(pacer.next_gap())
                 continue
