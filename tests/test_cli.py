@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from people_sync import cli
+from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 
 
@@ -175,7 +176,7 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
     assert "life-data insert failed" in err
 
 
-def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
+def test_scrape_passes_endpoint_data_dir_and_approve_command_through(mocker, capsys):
     scrape = mocker.patch(
         "people_sync.scrape.run.scrape",
         return_value={"done": 1, "skipped": 0, "halted": None},
@@ -189,6 +190,8 @@ def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
             "mini.local:9333",
             "--data-dir",
             "/tmp/instagram-profile",
+            "--approve-command",
+            "approve-helper 25",
         ]
     )
 
@@ -198,6 +201,7 @@ def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
         state_path=cli.DEFAULT_STATE_PATH,
         endpoint="mini.local:9333",
         data_dir="/tmp/instagram-profile",
+        approve_command="approve-helper 25",
     )
     assert json.loads(capsys.readouterr().out) == {"done": 1, "skipped": 0, "halted": None}
 
@@ -216,6 +220,7 @@ def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker, capsys):
         state_path=cli.DEFAULT_STATE_PATH,
         endpoint=None,
         data_dir=None,
+        approve_command=None,
     )
 
 
@@ -247,18 +252,30 @@ def test_photos_store_prints_duplicate_when_store_returns_none(mocker, tmp_path,
     assert capsys.readouterr().out.strip() == "duplicate"
 
 
-def test_login_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
+def test_login_passes_endpoint_data_dir_and_approve_command_through(mocker, capsys):
     login = mocker.patch(
         "people_sync.scrape.login.login",
         return_value={"platform": "instagram", "status": "logged-in", "reason": None},
     )
 
     cli.main(
-        ["login", "instagram", "--endpoint", "127.0.0.1:9333", "--data-dir", "/tmp/profiles/ig"]
+        [
+            "login",
+            "instagram",
+            "--endpoint",
+            "127.0.0.1:9333",
+            "--data-dir",
+            "/tmp/profiles/ig",
+            "--approve-command",
+            "approve-helper 25",
+        ]
     )
 
     login.assert_called_once_with(
-        "instagram", endpoint="127.0.0.1:9333", data_dir="/tmp/profiles/ig"
+        "instagram",
+        endpoint="127.0.0.1:9333",
+        data_dir="/tmp/profiles/ig",
+        approve_command="approve-helper 25",
     )
     assert json.loads(capsys.readouterr().out)["status"] == "logged-in"
 
@@ -286,3 +303,13 @@ def test_login_reports_a_missing_credential_command_without_a_traceback(mocker):
         cli.main(["login", "venmo"])
 
     assert "PEOPLE_SYNC_CREDENTIAL_COMMAND" in str(exit_info.value.code)
+
+
+@pytest.mark.parametrize("command", ["scrape", "login"])
+def test_approve_command_help_names_its_environment_fallback(command, capsys):
+    with pytest.raises(SystemExit):
+        cli.main([command, "--help"])
+
+    help_text = capsys.readouterr().out
+    assert "--approve-command" in help_text
+    assert cdp.CDP_APPROVE_COMMAND_ENV in help_text

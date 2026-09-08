@@ -41,12 +41,10 @@ in
       type = lib.types.attrsOf lib.types.int;
       default = { };
       description = ''
-        Per-platform daily scrape-call caps, passed through as
-        `PEOPLE_SYNC_DAILY_CAPS` (JSON). `people_sync.scrape.pace` ships its
-        own defaults for the platforms above; this is a forward-compatible
-        override hook until pace.py reads it (not yet wired - see AGENTS.md).
+        Per-platform daily scrape-call caps, exported as `PEOPLE_SYNC_DAILY_CAPS`
+        (a JSON object) and merged over the scraper's built-in defaults when it
+        starts; platforms not listed keep their default.
       '';
-      example = { facebook = 150; instagram = 250; linkedin = 80; };
     };
 
     stateDir = lib.mkOption {
@@ -82,9 +80,13 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Command the scraper runs to obtain a platform's login credential JSON
-        (exported as PEOPLE_SYNC_CREDENTIAL_COMMAND). The module never knows
-        what this command is or does - it just wires it through.
+        Command that prints a platform's login credential as JSON
+        (`{"username": ..., "password": ..., "totp": ...}`, `totp` being the
+        current one-time code or null). Exported as
+        PEOPLE_SYNC_CREDENTIAL_COMMAND and run by `login` as
+        `sh -c "<command>" people-sync-login <platform>` (the platform is `$1`)
+        with a 60 s timeout; a non-zero exit halts the login. The module
+        never knows what the command does.
       '';
     };
 
@@ -92,8 +94,10 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Command the scraper runs to fetch a 2FA code from email (exported as
-        PEOPLE_SYNC_EMAIL_CODE_COMMAND).
+        Command that prints the newest one-time code received by email, or
+        nothing when none has arrived yet (`login` polls it every 5-10 s for
+        up to 90 s). Same invocation and timeout as credentialCommand;
+        exported as PEOPLE_SYNC_EMAIL_CODE_COMMAND.
       '';
     };
 
@@ -101,8 +105,10 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Command the scraper runs to fetch a 2FA code from SMS (exported as
-        PEOPLE_SYNC_SMS_CODE_COMMAND).
+        Command that prints the newest one-time code received by SMS on this
+        machine, or nothing when none has arrived yet. Same invocation,
+        polling and timeout as emailCodeCommand; exported as
+        PEOPLE_SYNC_SMS_CODE_COMMAND.
       '';
     };
 

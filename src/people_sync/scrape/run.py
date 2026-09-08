@@ -123,6 +123,7 @@ def scrape(
     state_path: str = DEFAULT_STATE_PATH,
     endpoint: str | None = None,
     data_dir: str | None = None,
+    approve_command: str | None = None,
 ) -> dict:
     module = import_module(f"people_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
@@ -133,7 +134,7 @@ def scrape(
     done = 0
     skipped = 0
     halted: str | None = None
-    browser = Browser.connect(endpoint=endpoint, data_dir=data_dir)
+    browser = Browser.connect(endpoint=endpoint, data_dir=data_dir, approve_command=approve_command)
     try:
         for index, record in enumerate(records):
             if not pacer.allow():

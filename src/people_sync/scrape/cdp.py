@@ -18,6 +18,8 @@ import json
 import os
 import random
 import re
+import shlex
+import subprocess
 import threading
 import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -45,6 +47,7 @@ DEVTOOLS_ACTIVE_PORT = Path(
 # dir (arg or env) > Chrome's default data dir above.
 CDP_ENDPOINT_ENV = "PEOPLE_SYNC_CDP_ENDPOINT"
 CHROME_DATA_DIR_ENV = "PEOPLE_SYNC_CHROME_DATA_DIR"
+CDP_APPROVE_COMMAND_ENV = "PEOPLE_SYNC_CDP_APPROVE_COMMAND"
 JSON_VERSION_TIMEOUT = 5.0
 
 HANDSHAKE_TIMEOUT = 30.0
@@ -58,30 +61,43 @@ WAIT_POLL_S = 0.5
 
 # A hidden element is NOT a match. `querySelector` truthiness alone lets a
 # display:none duplicate (Google's identifier page ships a hidden password
-# input) satisfy a presence check, and its 0x0 rect passes a null-check -
-# so a click lands at ~(0,0) and the next keystrokes go wherever focus
-# actually is. Every element predicate below therefore demands a real box.
-_VISIBLE = (
-    "var r=e.getBoundingClientRect();"
-    "if(!(r.width>0&&r.height>0))return {miss};"
-    "if(!(e.checkVisibility?e.checkVisibility():e.offsetParent!==null))return {miss};"
+# input AHEAD of the visible one) satisfy a presence check, and its 0x0 rect
+# passes a null-check - so a click lands at ~(0,0) and the next keystrokes go
+# wherever focus actually is. Every element predicate therefore binds `e` to
+# the first match with a real box that checkVisibility() (with the options
+# that also catch opacity:0 / visibility:hidden) accepts, and misses otherwise.
+_VISIBLE_OPTS = "{opacityProperty:true,visibilityProperty:true,contentVisibilityAuto:true}"
+_FIRST_VISIBLE = (
+    "var e=null,l=document.querySelectorAll(SELECTOR);"
+    "for(var i=0;i<l.length;i++){var c=l[i],r=c.getBoundingClientRect();"
+    "if(r.width>0&&r.height>0&&(c.checkVisibility?c.checkVisibility(" + _VISIBLE_OPTS + ")"
+    ":c.offsetParent!==null)){e=c;break;}}"
+    "if(!e)return MISS;"
 )
 
-RECT_JS = (
-    "(function(){{var e=document.querySelector({selector});if(!e)return null;"
-    + _VISIBLE.format(miss="null")
-    + 'e.scrollIntoView({{block:"center",inline:"center"}});'
-    "r=e.getBoundingClientRect();"
-    "return {{x:r.x,y:r.y,width:r.width,height:r.height}};}})()"
-)
+
+def element_js(selector: str, body: str, miss: str) -> str:
+    """An IIFE that binds `e` to the first VISIBLE match of `selector` and
+    runs `body` (which must `return`), or returns the JS literal `miss` when
+    nothing visible matches."""
+    prelude = _FIRST_VISIBLE.replace("SELECTOR", json.dumps(selector)).replace("MISS", miss)
+    return "(function(){" + prelude + body + "})()"
 
 
 def visible_js(selector: str) -> str:
     """True only when `selector` matches an element a human could click."""
-    return (
-        f"(function(){{var e=document.querySelector({json.dumps(selector)});if(!e)return false;"
-        + _VISIBLE.format(miss="false")
-        + "return true;})()"
+    return element_js(selector, "return true;", "false")
+
+
+def rect_js(selector: str) -> str:
+    """The viewport box of the first visible match, scrolled to center; null
+    when there is none."""
+    return element_js(
+        selector,
+        'e.scrollIntoView({block:"center",inline:"center"});'
+        "var r=e.getBoundingClientRect();"
+        "return {x:r.x,y:r.y,width:r.width,height:r.height};",
+        "null",
     )
 
 
@@ -143,6 +159,37 @@ def _ws_url_from_endpoint(endpoint: str, data_dir: str | Path | None) -> str:
     if not ws_url:
         raise CdpError(f"no webSocketDebuggerUrl in http://{endpoint}/json/version response")
     return ws_url
+
+
+def _approval_mode(endpoint: str | None) -> bool:
+    """True when the connection goes to a Chrome that raises the "Allow
+    remote debugging?" sheet - its default profile, or one named by a data
+    dir. An explicit host:port is a dedicated profile: no sheet ever appears
+    there, so an approval command aimed at one would click something else."""
+    return not (endpoint or os.environ.get(CDP_ENDPOINT_ENV))
+
+
+def _spawn_approver(command: str) -> None:
+    """Start the caller's approval command detached and walk away: the
+    websocket upgrade that raises the sheet is about to block until the sheet
+    is answered, so nothing here may wait on the child.
+
+    The command line can embed a path from the host it runs on, so neither it
+    nor the OSError text (which quotes it) is ever logged or reported -
+    errors name the kwarg and the env var only."""
+    try:
+        subprocess.Popen(
+            shlex.split(command),
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        raise CdpError(
+            "the remote-debugging approval command could not be started "
+            f"(approve_command / {CDP_APPROVE_COMMAND_ENV})"
+        ) from None
 
 
 def _resolve_ws_url(
@@ -285,16 +332,28 @@ class Browser:
         data_dir: str | Path | None = None,
         handshake_timeout: float = HANDSHAKE_TIMEOUT,
         devtools_port_path: str | Path | None = None,
+        approve_command: str | None = None,
     ) -> "Browser":
+        """`approve_command` (falling back to PEOPLE_SYNC_CDP_APPROVE_COMMAND)
+        is a command that approves the browser's remote-debugging prompt on
+        hosts that show one. It is started, detached, immediately before the
+        websocket upgrade - which is what raises the prompt and then blocks
+        until it is answered - and only on the approval-mode path."""
         ws_url = _resolve_ws_url(endpoint, data_dir, devtools_port_path)
+        approve_command = approve_command or os.environ.get(CDP_APPROVE_COMMAND_ENV)
+        if approve_command and _approval_mode(endpoint):
+            _spawn_approver(approve_command)
         loop = asyncio.new_event_loop()
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
         browser = cls(loop)
-        fut = asyncio.run_coroutine_threadsafe(browser._connect_async(ws_url), loop)
+        fut = asyncio.run_coroutine_threadsafe(
+            browser._connect_async(ws_url, handshake_timeout), loop
+        )
         try:
             fut.result(timeout=handshake_timeout)
-        except FutureTimeoutError as e:
+        except (FutureTimeoutError, TimeoutError) as e:
+            # Either the wait here or websockets' own open_timeout fires first.
             fut.cancel()
             if browser._ws is not None:
                 closer = asyncio.run_coroutine_threadsafe(browser._ws.close(), loop)
@@ -310,8 +369,11 @@ class Browser:
         log.info("cdp connected", target_id=browser._target_id)
         return browser
 
-    async def _connect_async(self, ws_url: str) -> None:
-        self._ws = await ws_connect(ws_url, max_size=None)
+    async def _connect_async(self, ws_url: str, handshake_timeout: float) -> None:
+        # open_timeout, not the library default: the upgrade blocks for as
+        # long as the approval prompt goes unanswered, and aborting it early
+        # is exactly the failure `handshake_timeout` exists to control.
+        self._ws = await ws_connect(ws_url, max_size=None, open_timeout=handshake_timeout)
         self._recv_task = asyncio.ensure_future(self._recv_loop())
         await self._handshake()
 
@@ -507,17 +569,22 @@ class Browser:
                 # modifier alone.
                 params["commands"] = ["selectAll"]
             self._input("Input.dispatchKeyEvent", params)
-        for event_type in ("keyDown", "keyUp"):
-            self._input(
-                "Input.dispatchKeyEvent",
-                {
-                    "type": event_type,
-                    "key": "Backspace",
-                    "code": "Backspace",
-                    "windowsVirtualKeyCode": 8,
-                    "nativeVirtualKeyCode": 8,
-                },
-            )
+        self.press_backspace()
+
+    def press_backspace(self, times: int = 1) -> None:
+        """`times` trusted Backspace presses on the focused field."""
+        for _ in range(times):
+            for event_type in ("keyDown", "keyUp"):
+                self._input(
+                    "Input.dispatchKeyEvent",
+                    {
+                        "type": event_type,
+                        "key": "Backspace",
+                        "code": "Backspace",
+                        "windowsVirtualKeyCode": 8,
+                        "nativeVirtualKeyCode": 8,
+                    },
+                )
 
     def _input(self, method: str, params: dict) -> None:
         asyncio.run_coroutine_threadsafe(
@@ -533,7 +600,7 @@ class Browser:
     def click(self, selector: str) -> None:
         """Scroll the element into view and click its center (jittered by a
         few pixels) with trusted mouse events."""
-        rect = self.eval(RECT_JS.format(selector=json.dumps(selector)))
+        rect = self.eval(rect_js(selector))
         if not rect:
             raise CdpError(f"click target not on the page: {selector}")
         x = rect["x"] + rect["width"] / 2 + random.uniform(-CLICK_JITTER_PX, CLICK_JITTER_PX)

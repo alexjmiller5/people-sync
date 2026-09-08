@@ -6,6 +6,7 @@ import os
 import sys
 
 from people_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
 from people_sync.scrape.pace import DEFAULT_STATE_PATH
@@ -70,13 +71,19 @@ def cmd_scrape(args: argparse.Namespace) -> None:
         state_path=args.state,
         endpoint=args.endpoint,
         data_dir=args.data_dir,
+        approve_command=args.approve_command,
     )
     print(json.dumps(result))
 
 
 def cmd_login(args: argparse.Namespace) -> None:
     try:
-        result = scrape_login.login(args.platform, endpoint=args.endpoint, data_dir=args.data_dir)
+        result = scrape_login.login(
+            args.platform,
+            endpoint=args.endpoint,
+            data_dir=args.data_dir,
+            approve_command=args.approve_command,
+        )
     except scrape_login.LoginError as e:
         sys.exit(str(e))
     print(json.dumps(result))
@@ -90,6 +97,25 @@ def cmd_photos_store(args: argparse.Namespace) -> None:
     ext = os.path.splitext(args.file)[1].lstrip(".").lower()
     result = photos.store_photo(args.person, args.platform, image, ext)
     print(result if result else "duplicate")
+
+
+def _add_browser_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--endpoint",
+        default=None,
+        help="CDP host:port to drive instead of Chrome's default data dir",
+    )
+    parser.add_argument(
+        "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
+    )
+    parser.add_argument(
+        "--approve-command",
+        default=None,
+        help=(
+            "command that approves the browser's remote-debugging prompt on hosts that "
+            f"show one (default: ${cdp.CDP_APPROVE_COMMAND_ENV}); ignored with --endpoint"
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,28 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_p.add_argument("platform")
     scrape_p.add_argument("--max", type=int, default=None)
     scrape_p.add_argument("--state", default=DEFAULT_STATE_PATH)
-    scrape_p.add_argument(
-        "--endpoint",
-        default=None,
-        help="CDP host:port to drive instead of Chrome's default data dir",
-    )
-    scrape_p.add_argument(
-        "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
-    )
+    _add_browser_options(scrape_p)
     scrape_p.set_defaults(func=cmd_scrape)
 
     login_p = sub.add_parser(
         "login", help="sign this platform's Chrome profile in (idempotent, halts on anything odd)"
     )
     login_p.add_argument("platform")
-    login_p.add_argument(
-        "--endpoint",
-        default=None,
-        help="CDP host:port to drive instead of Chrome's default data dir",
-    )
-    login_p.add_argument(
-        "--data-dir", default=None, help="Chrome data dir to read DevToolsActivePort from"
-    )
+    _add_browser_options(login_p)
     login_p.set_defaults(func=cmd_login)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")
