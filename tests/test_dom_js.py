@@ -79,3 +79,17 @@ def test_focus_means_the_element_itself_not_a_descendant():
 def test_rect_scrolls_only_the_element_it_returns():
     setup = "document.els = [el({w: 0, h: 0}), el({})];"
     assert run(setup, cdp.rect_js("input") + " && document.els.map(e => e.scrolled)") == [0, 1]
+
+
+def test_text_selector_picks_the_first_visible_element_whose_text_starts_with_the_label():
+    setup = (
+        "var hidden = el({w: 0, innerText: 'Try another way'});"
+        " var other = el({innerText: 'Continue'});"
+        " var real = el({innerText: 'Try another way\\nsecond line'});"
+        " document.els = [hidden, other, real]; document.querySelectorAll = () => document.els;"
+    )
+    assert run(setup, cdp.visible_js("text=Try another way")) is True
+    assert run(
+        setup, cdp.rect_js("text=Try another way") + " && document.els.map(e => e.scrolled)"
+    ) == [0, 0, 1]
+    assert run(setup, cdp.visible_js("text=Nowhere")) is False
