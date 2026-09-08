@@ -105,8 +105,11 @@ SPECS: dict[str, LoginSpec] = {
         username_selector='input#username, input[name="username"]',
         password_selector=None,
         submit_selector='button[type="submit"], button#login-button',
+        # The login URL redirects a signed-in session to the account status
+        # page; the web player's user widget is the other signed-in shape.
         logged_in_js=(
-            '!!document.querySelector(\'[data-testid="user-widget-link"], '
+            '!!document.querySelector(\'[data-testid="status-logged-in"], '
+            '[data-testid="logout-btn-link"], [data-testid="user-widget-link"], '
             '[data-testid="user-widget-name"]\')'
         ),
         email_code_selector='input[name="code"], input[autocomplete="one-time-code"]',
