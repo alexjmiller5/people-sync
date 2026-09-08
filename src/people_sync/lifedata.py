@@ -2,14 +2,25 @@
 
 import json
 import subprocess
+import time
 from datetime import datetime, timezone
+
+# Another writer (a second scrape, the sync daemon) holds SQLite briefly;
+# a locked statement is retried with a short backoff before it is an error.
+LOCK_RETRIES = 6
+LOCK_BACKOFF_S = 0.5
 
 
 def _run(cmd: list[str], input: str | None = None) -> str:
-    proc = subprocess.run(cmd, input=input, capture_output=True, text=True)
-    if proc.returncode != 0:
+    for attempt in range(1, LOCK_RETRIES + 1):
+        proc = subprocess.run(cmd, input=input, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return proc.stdout
+        if "database is locked" in proc.stderr and attempt < LOCK_RETRIES:
+            time.sleep(LOCK_BACKOFF_S * attempt)
+            continue
         raise RuntimeError(f"{' '.join(cmd)} failed: {proc.stderr.strip()}")
-    return proc.stdout
+    raise AssertionError("unreachable")
 
 
 def sql(query: str) -> list[dict]:
