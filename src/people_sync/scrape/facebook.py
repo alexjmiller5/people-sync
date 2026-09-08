@@ -24,9 +24,9 @@ CAPTURE: list[str] = []
 # Profile handles are either a vanity slug or profile.php?id=<n>; both are
 # kept verbatim as the handle so URL.format() reproduces the page.
 _LINK_RE = (
-    r"facebook\\.com\\/(?!friends|me$|reel|marketplace|groups|watch|gaming|events|"
-    r"bookmarks|messages|notifications|settings|stories|profile\\.php\\?id=\\d+&)"
-    r"([A-Za-z0-9.]+)\\/?(\\?|$)|facebook\\.com\\/(profile\\.php\\?id=\\d+)"
+    r"facebook\.com\/(?!friends|me$|reel|marketplace|groups|watch|gaming|events|"
+    r"bookmarks|messages|notifications|settings|stories|profile\.php\?id=\d+&)"
+    r"([A-Za-z0-9.]+)\/?(\?|$)|facebook\.com\/(profile\.php\?id=\d+)"
 )
 
 LIST_ENTRIES_JS = (
