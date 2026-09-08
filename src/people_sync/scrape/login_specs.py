@@ -126,8 +126,11 @@ SPECS: dict[str, LoginSpec] = {
             'input[autocomplete="one-time-code"], input[name="code"], '
             'input[placeholder="000000"], input[inputmode="numeric"]'
         ),
-        remember_selector='input[type="checkbox"]',
-        code_submit_selector="text=Log in",
+        # The consent box is a 16px input inside a full-width button; the
+        # button toggles it. Log in is a submit button (the sidebar has a
+        # "Log in" link too, hence the tag filter).
+        remember_selector="text[button]=By checking this box",
+        code_submit_selector="text[button]=Log in",
     ),
     # For sites offering only "Continue with Google": the same profile, the
     # same human typing, on Google's own two-page form.

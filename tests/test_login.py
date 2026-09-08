@@ -77,7 +77,14 @@ class FakeSite:
 
     @staticmethod
     def _selector(expression):
-        match = re.search(r"(?:querySelectorAll?\(|var sel=)(\".*?\")", expression)
+        match = re.search(
+            r"var sel=(\".*?\"),l=\[\]\.filter\.call\(document\.querySelectorAll\((\".*?\")\)",
+            expression,
+        )
+        if match:  # a text selector: reconstruct the spec's own spelling
+            label, css = json.loads(match.group(1)), json.loads(match.group(2))
+            return f"text={label}" if css == cdp._CLICKABLE else f"text[{css}]={label}"
+        match = re.search(r"querySelectorAll?\((\".*?\")\)", expression)
         return json.loads(match.group(1)) if match else None
 
     def _visible(self, selector):

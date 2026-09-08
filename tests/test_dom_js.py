@@ -93,3 +93,19 @@ def test_text_selector_picks_the_first_visible_element_whose_text_starts_with_th
         setup, cdp.rect_js("text=Try another way") + " && document.els.map(e => e.scrolled)"
     ) == [0, 0, 1]
     assert run(setup, cdp.visible_js("text=Nowhere")) is False
+
+
+def test_text_selector_with_a_tag_filter_skips_same_text_elements_of_other_tags():
+    setup = (
+        "var link = el({innerText: 'Log in', tagName: 'A'});"
+        " var button = el({innerText: 'Log in', tagName: 'BUTTON'});"
+        " document.els = [link, button];"
+        " document.querySelectorAll = (css) => css === 'button' ? [button] : document.els;"
+    )
+    assert run(
+        setup, cdp.rect_js("text[button]=Log in") + " && document.els.map(e => e.scrolled)"
+    ) == [0, 1]
+    assert run(setup, cdp.rect_js("text=Log in") + " && document.els.map(e => e.scrolled)") == [
+        1,
+        0,
+    ]

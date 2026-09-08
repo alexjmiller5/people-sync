@@ -79,19 +79,26 @@ _FIRST_VISIBLE = (
 # `text=<label>` selectors: the first visible clickable element whose text
 # starts with the label - for the div[role=button] / label / radio controls
 # Meta's pages ship with no attribute at all besides their wording.
-TEXT_PREFIX = "text="
+# `text[<css>]=<label>` narrows the candidates to that CSS selector (a page
+# with a "Log in" link AND a "Log in" button: `text[button]=Log in`).
+TEXT_PREFIX = "text"
+_TEXT_RE = re.compile(r"^text(?:\[(?P<css>[^\]]+)\])?=(?P<label>.*)$", re.S)
 _CLICKABLE = (
     "button,[role=button],[role=radio],[role=checkbox],[role=link],label,a,input[type=submit]"
-)
-_BY_TEXT = (
-    "var sel=SELECTOR,l=[].filter.call(document.querySelectorAll(" + json.dumps(_CLICKABLE) + "),"
-    "function(c){return ((c.innerText||c.value||'')+'').trim().indexOf(sel.slice(5))===0;});"
 )
 
 
 def _candidates_js(selector: str) -> str:
-    if selector.startswith(TEXT_PREFIX):
-        return _BY_TEXT.replace("SELECTOR", json.dumps(selector))
+    m = _TEXT_RE.match(selector) if selector.startswith(TEXT_PREFIX) else None
+    if m:
+        css = m.group("css") or _CLICKABLE
+        return (
+            "var sel="
+            + json.dumps(m.group("label"))
+            + ",l=[].filter.call(document.querySelectorAll("
+            + json.dumps(css)
+            + "),function(c){return ((c.innerText||c.value||'')+'').trim().indexOf(sel)===0;});"
+        )
     return "var l=document.querySelectorAll(" + json.dumps(selector) + ");"
 
 
