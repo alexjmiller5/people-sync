@@ -147,3 +147,9 @@ def test_parse_ignores_captured_entries_with_no_matching_url():
 
     assert p.is_verified is False
     assert "web_profile_info" not in p.raw
+
+
+def test_extractor_js_reports_a_missing_profile_as_unavailable():
+    from people_sync.scrape import instagram as mod
+
+    assert 'error:"unavailable"' in mod.EXTRACTOR_JS

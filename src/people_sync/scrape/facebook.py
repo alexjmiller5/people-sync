@@ -51,7 +51,9 @@ LIST_ENTRIES_JS = (
 LIST_LINK_COUNT_JS = 'document.querySelectorAll("a[href]").length'
 
 EXTRACTOR_JS = (
-    '(function(){var main=document.querySelector("[role=main]")||document.body;'
+    "(function(){if(/This content isn't available right now|This page isn't available/i.test(document.body.innerText))"
+    'return JSON.stringify({error:"unavailable"});'
+    'var main=document.querySelector("[role=main]")||document.body;'
     'var t=main.innerText.split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
     'if(!t.length)return JSON.stringify({error:"no-main",title:document.title});'
     'var name=[].slice.call(document.querySelectorAll("h1")).map(function(e){return e.innerText.trim()})'

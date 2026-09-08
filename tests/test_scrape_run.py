@@ -439,3 +439,37 @@ def test_challenge_halt_names_the_marker_and_saves_a_screenshot(mocker, tmp_path
     assert (
         shot.startswith(str(tmp_path)) and "scrape-testplatform-" in shot and shot.endswith(".png")
     )
+
+
+def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
+    class GoneModule(FakeModule):
+        @staticmethod
+        def parse(eval_result, captured):
+            raise ExtractError(run.UNAVAILABLE)
+
+    browser, pacer = _patch_common(mocker, [_record()])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=GoneModule)
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
+
+    result = run.scrape("testplatform")
+
+    assert result == {"done": 0, "skipped": 1, "halted": None}
+    placeholder = upsert.call_args.args[0]
+    assert placeholder.record_id == "testplatform:u1" and placeholder.raw == {"unavailable": True}
+    assert placeholder.display_name is None
+
+
+def test_other_extract_errors_write_nothing(mocker):
+    class BrokenModule(FakeModule):
+        @staticmethod
+        def parse(eval_result, captured):
+            raise ExtractError("no-header")
+
+    _patch_common(mocker, [_record()])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=BrokenModule)
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
+
+    result = run.scrape("testplatform")
+
+    assert result["skipped"] == 1
+    upsert.assert_not_called()
