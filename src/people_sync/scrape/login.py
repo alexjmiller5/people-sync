@@ -31,6 +31,7 @@ or written to the state dir.
 
 import json
 import os
+from datetime import datetime, timezone
 import random
 import subprocess
 import time
@@ -40,12 +41,17 @@ from pathlib import Path
 import structlog
 
 from people_sync.scrape import pace
-from people_sync.scrape.cdp import Browser, visible_js, element_js
+from people_sync.scrape.cdp import Browser, CdpError, element_js, visible_js
 
 log = structlog.get_logger(__name__)
 
 _sleep = time.sleep
 _now = time.monotonic
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 CREDENTIAL_COMMAND_ENV = "PEOPLE_SYNC_CREDENTIAL_COMMAND"
 EMAIL_CODE_COMMAND_ENV = "PEOPLE_SYNC_EMAIL_CODE_COMMAND"
@@ -61,6 +67,9 @@ STEP_TIMEOUT_S = 30.0  # submit to produce the next step
 CODE_POLL_TIMEOUT_S = 90.0  # a mailed/texted code to arrive
 CODE_POLL_GAP_S = (5.0, 10.0)
 COMMAND_TIMEOUT_S = 60.0
+# Handed to the code commands: ISO-8601 UTC of the moment the credentials
+# were submitted, so a reader ignores any code that arrived before it.
+CODE_AFTER_ENV = "PEOPLE_SYNC_CODE_AFTER"
 MAX_PASSWORD_ATTEMPTS = 2  # one retry, never a third
 
 # Page phrases that mean a human is being asked for something this flow must
@@ -172,7 +181,7 @@ def _pause() -> None:
     _sleep(random.uniform(*FIELD_PAUSE_S))
 
 
-def _run_command(command: str, platform: str, env_name: str) -> str:
+def _run_command(command: str, platform: str, env_name: str, after: str | None = None) -> str:
     """Run a caller-supplied command with the platform as `$1`. Both the
     output and the command line are secrets: only `env_name` is ever named in
     an error, and `from None` keeps TimeoutExpired (whose str embeds the full
@@ -183,6 +192,7 @@ def _run_command(command: str, platform: str, env_name: str) -> str:
             capture_output=True,
             text=True,
             timeout=COMMAND_TIMEOUT_S,
+            env={**os.environ, CODE_AFTER_ENV: after} if after else None,
         )
     except subprocess.TimeoutExpired:
         raise LoginHalt(f"{env_name} timed out after {COMMAND_TIMEOUT_S:.0f}s") from None
@@ -318,7 +328,7 @@ def _pick_code_source(browser: Browser, spec: LoginSpec, credential: dict) -> tu
     raise LoginHalt("2FA step with no field this spec knows")
 
 
-def _obtain_code(kind: str, platform: str, credential: dict) -> str:
+def _obtain_code(kind: str, platform: str, credential: dict, after: str) -> str:
     if kind == "totp":
         return str(credential["totp"])
 
@@ -326,7 +336,7 @@ def _obtain_code(kind: str, platform: str, credential: dict) -> str:
     command = os.environ[env]
     deadline = _now() + CODE_POLL_TIMEOUT_S
     while True:
-        code = _run_command(command, platform, env)
+        code = _run_command(command, platform, env, after)
         if code:
             return code
         if _now() >= deadline:
@@ -335,10 +345,10 @@ def _obtain_code(kind: str, platform: str, credential: dict) -> str:
         _sleep(random.uniform(*CODE_POLL_GAP_S))
 
 
-def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
+def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict, requested_at: str) -> None:
     kind, selector = _pick_code_source(browser, spec, credential)
     log.info("2fa step", platform=spec.platform, kind=kind)
-    code = _obtain_code(kind, spec.platform, credential)
+    code = _obtain_code(kind, spec.platform, credential, requested_at)
 
     _type_into(browser, selector, code, "code")
     _pause()
@@ -349,10 +359,17 @@ def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
         browser.click(spec.remember_selector)
         _pause()
 
-    _submit(
-        browser,
-        spec.submit_selector if spec.code_submit_selector is None else spec.code_submit_selector,
-    )
+    try:
+        _submit(
+            browser,
+            spec.submit_selector
+            if spec.code_submit_selector is None
+            else spec.code_submit_selector,
+        )
+    except CdpError:
+        # Some forms submit themselves on the last digit and move on before
+        # we get to the button; the signed-in check below is what matters.
+        log.info("code form submitted itself", platform=spec.platform)
     if not browser.wait_for(spec.logged_in_js, STEP_TIMEOUT_S):
         raise LoginHalt(f"{kind} code was not accepted")
 
@@ -376,12 +393,13 @@ def _sign_in(browser: Browser, spec: LoginSpec) -> str:
             if not browser.wait_for(visible_js(spec.username_selector), FORM_TIMEOUT_S):
                 raise LoginHalt("no login form on the page")
 
+            requested_at = _now_iso()
             _fill_credentials(browser, spec, credential)
             outcome = _next_step(browser, spec)
             if outcome == "logged-in":
                 return "logged-in"
             if outcome == "2fa":
-                _do_2fa(browser, spec, credential)
+                _do_2fa(browser, spec, credential, requested_at)
                 return "logged-in"
         raise LoginHalt("credentials not accepted")
     finally:

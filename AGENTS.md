@@ -136,7 +136,7 @@ platform is `$1`), with a 60 s timeout; a non-zero exit or timeout halts the
 login (screenshot, reason naming only the variable):
 
 - `PEOPLE_SYNC_CREDENTIAL_COMMAND` - prints `{"username": ..., "password": ..., "totp": ...}`; `totp` is the current code or null
-- `PEOPLE_SYNC_EMAIL_CODE_COMMAND` - prints the newest one-time code from email, or nothing if none has arrived (polled every 5-10 s for 90 s)
+- `PEOPLE_SYNC_EMAIL_CODE_COMMAND` - prints the newest one-time code from email that arrived after `$PEOPLE_SYNC_CODE_AFTER` (ISO-8601 UTC: when the credentials were submitted; a reader that ignores it can hand back last attempt's code), or nothing if none has yet (polled every 5-10 s for 90 s)
 - `PEOPLE_SYNC_SMS_CODE_COMMAND` - same, from SMS on the machine running the job
 
 `PEOPLE_SYNC_CDP_APPROVE_COMMAND` (or `--approve-command`) is different in
