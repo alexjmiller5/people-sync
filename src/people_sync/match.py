@@ -46,7 +46,7 @@ def _url_from_raw(source: str, raw: dict) -> str | None:
     """Only sources whose export actually carries a profile URL return one."""
     if source == "linkedin":
         return raw.get("URL") or None
-    if source == "partiful":
+    if source in ("partiful", "strava"):
         return raw.get("url") or None
     if source == "instagram":
         for key in ("followers", "following"):
