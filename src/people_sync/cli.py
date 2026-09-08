@@ -91,6 +91,40 @@ def cmd_login(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_list(args: argparse.Namespace) -> None:
+    """Capture a platform's friend/connection list from the logged-in browser
+    and give the ledger's name-only records their profile handles."""
+    from people_sync.scrape import facebook
+    from people_sync.scrape.cdp import Browser
+
+    browser = Browser.connect(
+        endpoint=args.endpoint, data_dir=args.data_dir, approve_command=args.approve_command
+    )
+    try:
+        entries = facebook.list_friends(browser)
+    finally:
+        browser.close()
+    records = lifedata.sql(
+        "SELECT id, name, handle FROM people_sync_records "
+        "WHERE source = 'facebook' AND deleted_at IS NULL"
+    )
+    updates = facebook.assign_handles(entries, records)
+    for u in updates:
+        lifedata.sql(
+            f"UPDATE people_sync_records SET handle = {lifedata.sq(u['handle'])} "
+            f"WHERE id = {lifedata.sq(u['id'])}"
+        )
+    print(
+        json.dumps(
+            {
+                "entries": len(entries),
+                "assigned": len(updates),
+                "unmatched_records": sum(1 for r in records if not r.get("handle")) - len(updates),
+            }
+        )
+    )
+
+
 def cmd_photos_store(args: argparse.Namespace) -> None:
     with open(args.file, "rb") as f:
         image = f.read()
@@ -155,6 +189,13 @@ def build_parser() -> argparse.ArgumentParser:
     login_p.add_argument("platform")
     _add_browser_options(login_p)
     login_p.set_defaults(func=cmd_login)
+
+    list_p = sub.add_parser(
+        "list", help="capture a platform's friends list and give name-only records their handles"
+    )
+    list_p.add_argument("platform", choices=["facebook"])
+    _add_browser_options(list_p)
+    list_p.set_defaults(func=cmd_list)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")
     photos_sub = photos_p.add_subparsers(dest="photos_command", required=True)
