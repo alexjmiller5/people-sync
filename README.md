@@ -134,7 +134,7 @@ stored by the app.
 | `--approve-command` / `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | Command that approves the browser's remote-debugging prompt on hosts that show one; started detached before connecting, never with `--endpoint` |
 | `PEOPLE_SYNC_DAILY_CAPS` | JSON object `{"<platform>": <int>}` merged over the built-in per-platform daily caps; malformed values fail at startup |
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND` | Run as `sh -c "<command>" people-sync-login <platform>`; prints `{"username": ..., "password": ..., "totp": ...}` (`totp` = current code or null) |
-| `PEOPLE_SYNC_EMAIL_CODE_COMMAND` | Same invocation; prints the newest one-time code from email, or nothing if none has arrived yet (polled every 5-10 s for up to 90 s) |
+| `PEOPLE_SYNC_EMAIL_CODE_COMMAND` | Same invocation; prints the newest one-time code from email that arrived after `$PEOPLE_SYNC_CODE_AFTER` (ISO-8601 UTC, set by `login` to the moment it submitted the credentials), or nothing if none has yet (polled every 5-10 s for up to 90 s) |
 | `PEOPLE_SYNC_SMS_CODE_COMMAND` | Same, for a code delivered by SMS to the machine running the job |
 
 Every command has 60 s; a non-zero exit or a timeout halts the login with a

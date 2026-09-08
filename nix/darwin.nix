@@ -113,9 +113,10 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Command that prints the newest one-time code received by email, or
-        nothing when none has arrived yet (`login` polls it every 5-10 s for
-        up to 90 s). Same invocation and timeout as credentialCommand;
+        Command that prints the newest one-time code received by email after
+        `$PEOPLE_SYNC_CODE_AFTER` (ISO-8601 UTC, the moment the credentials
+        were submitted), or nothing when none has arrived yet (`login` polls
+        it every 5-10 s for up to 90 s). Same invocation and timeout as credentialCommand;
         exported as PEOPLE_SYNC_EMAIL_CODE_COMMAND.
       '';
     };
