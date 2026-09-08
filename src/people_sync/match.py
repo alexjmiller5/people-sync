@@ -46,6 +46,8 @@ def _url_from_raw(source: str, raw: dict) -> str | None:
     """Only sources whose export actually carries a profile URL return one."""
     if source == "linkedin":
         return raw.get("URL") or None
+    if source == "partiful":
+        return raw.get("url") or None
     if source == "instagram":
         for key in ("followers", "following"):
             entry = raw.get(key) or {}
@@ -54,6 +56,28 @@ def _url_from_raw(source: str, raw: dict) -> str | None:
                 return items[0]["href"]
         return None
     return None
+
+
+def _instagram_owners() -> dict[str, set[str]]:
+    """Instagram handle (letters) -> people who hold that account."""
+    owners: dict[str, set[str]] = defaultdict(set)
+    for a in lifedata.sql(
+        "SELECT person_id, handle FROM person_accounts "
+        "WHERE deleted_at IS NULL AND platform = 'instagram' AND handle IS NOT NULL"
+    ):
+        owners[letters(a["handle"])].add(a["person_id"])
+    return owners
+
+
+def _partiful_candidates(record: dict, ig_owner: dict[str, set[str]]) -> set[str]:
+    try:
+        raw = json.loads(record["raw"]) if record.get("raw") else {}
+    except json.JSONDecodeError:
+        return set()
+    found: set[str] = set()
+    for handle in raw.get("instagram_handles") or []:
+        found |= ig_owner.get(letters(handle), set())
+    return found
 
 
 def run_match() -> dict:
@@ -82,8 +106,12 @@ def run_match() -> dict:
     # is ambiguous (which account is really theirs?), but the same person turning up in
     # google AND apple contacts is confirmation, not ambiguity.
     person_matches: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    ig_owner = _instagram_owners()
     for r in pending:
-        if r["source"] == "instagram":
+        if r["source"] == "partiful":
+            # never by name: only the Instagram handle on the mutual's profile
+            candidates = _partiful_candidates(r, ig_owner)
+        elif r["source"] == "instagram":
             key = letters(r["handle"]) if r.get("handle") else ""
             candidates = letters_to_people.get(key, set()) if key else set()
         else:
@@ -103,7 +131,7 @@ def run_match() -> dict:
         record = records[0]
         person = people_by_id[person_id]
         word_count = len(normalize(person.get("name") or "").split())
-        if word_count < 2:
+        if word_count < 2 and record["source"] != "partiful":
             lifedata.sql(
                 f"UPDATE people_sync_records SET suggested_person_id = {lifedata.sq(person_id)} "
                 f"WHERE id = {lifedata.sq(record['id'])}"

@@ -230,3 +230,51 @@ def test_cross_source_records_both_automatch(mocker):
     ]
 
     assert out == {"auto": 2, "suggested": 0, "left_pending": 0}
+
+
+def test_partiful_records_match_by_instagram_handle_never_by_name(mocker):
+    from people_sync import match
+
+    def fake_sql(query):
+        if "FROM people " in query:
+            return [
+                {
+                    "id": "p1",
+                    "name": "Some Body",
+                    "first_name": "Some",
+                    "last_name": "Body",
+                    "nickname": None,
+                },
+                {
+                    "id": "p2",
+                    "name": "Test Person",
+                    "first_name": "Test",
+                    "last_name": "Person",
+                    "nickname": None,
+                },
+            ]
+        if "FROM people_sync_records" in query:
+            return [
+                {
+                    "id": "partiful:u1",
+                    "source": "partiful",
+                    "source_id": "u1",
+                    "handle": "u1",
+                    "name": "Test Person",
+                    "raw": '{"url": "https://partiful.com/u/u1", "instagram_handles": ["some.body"]}',
+                }
+            ]
+        if "FROM person_accounts" in query:
+            return [{"person_id": "p1", "handle": "some_body"}]
+        return []
+
+    sql = mocker.patch("people_sync.match.lifedata.sql", side_effect=fake_sql)
+    insert = mocker.patch("people_sync.match.lifedata.insert")
+
+    result = match.run_match()
+
+    assert result["auto"] == 1
+    updates = [c.args[0] for c in sql.call_args_list if "UPDATE" in c.args[0]]
+    assert any("person_id = 'p1'" in u for u in updates)  # the handle owner, not the name-alike
+    row = insert.call_args.args[1][0]
+    assert row["platform"] == "partiful" and row["url"] == "https://partiful.com/u/u1"
