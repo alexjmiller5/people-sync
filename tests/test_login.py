@@ -112,7 +112,11 @@ class FakeSite:
         field = self.focus
         if field is None:
             pass
-        elif params["type"] == "char":
+        elif (
+            params["type"] == "keyDown"
+            and params.get("text")
+            and params.get("key") not in ("Enter", "Backspace")
+        ):
             if self.selected == field:  # typing replaces a selection
                 self.typed[field] = ""
                 self.selected = None
