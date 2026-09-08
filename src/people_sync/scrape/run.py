@@ -21,7 +21,7 @@ from websockets.exceptions import ConnectionClosed
 
 from people_sync import lifedata, photos
 from people_sync.scrape.cdp import Browser, CdpError
-from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, is_challenge
+from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, challenge_marker
 from people_sync.scrape.profile import ExtractError, upsert_profile
 
 # A CDP protocol error or a dropped websocket means the browser session
@@ -120,6 +120,18 @@ def _resolve_avatar(
     return key, sha
 
 
+def _halt_screenshot(browser: Browser, platform: str, state_path: str) -> str | None:
+    """What the page looked like when a run halted, next to the state file;
+    None when the capture itself fails (the halt still stands)."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = os.path.join(os.path.dirname(state_path) or ".", f"scrape-{platform}-{stamp}.png")
+    try:
+        browser.screenshot(path)
+    except Exception:
+        return None
+    return path
+
+
 def scrape(
     platform: str,
     max_n: int | None = None,
@@ -162,9 +174,17 @@ def scrape(
                     )
 
                 page_text = browser.eval(PAGE_TEXT_JS) or ""
-                if is_challenge(page_text):
-                    halted = "challenge page"
-                    log.warning("scrape halted", platform=platform, index=index, reason=halted)
+                marker = challenge_marker(page_text)
+                if marker:
+                    halted = f"challenge page: {marker}"
+                    shot = _halt_screenshot(browser, platform, state_path)
+                    log.warning(
+                        "scrape halted",
+                        platform=platform,
+                        index=index,
+                        reason=halted,
+                        screenshot=shot,
+                    )
                     break
 
                 raw_eval = browser.eval(module.EXTRACTOR_JS)
