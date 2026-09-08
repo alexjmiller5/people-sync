@@ -14,7 +14,7 @@ one-time-code flows - the credential command's `password` is ignored and the
 code step does the signing in.
 """
 
-from people_sync.scrape.login import LoginSpec
+from people_sync.scrape.login import ENTER, LoginSpec
 
 SPECS: dict[str, LoginSpec] = {
     "instagram": LoginSpec(
@@ -31,9 +31,13 @@ SPECS: dict[str, LoginSpec] = {
         # Instagram shows one field for both the authenticator code and an
         # SMS code, so both kinds point at it; the dispatcher prefers the
         # TOTP when the credential carries one.
-        totp_selector='input[name="verificationCode"]',
-        sms_code_selector='input[name="verificationCode"]',
-        remember_selector='input[name="rememberDevice"]',
+        # The current two_step_verification page: an unnamed text input, a
+        # pre-checked "Trust this device" checkbox named "checkbox", and a
+        # div[role=button] Continue with no attributes - Enter submits.
+        totp_selector='input[name="verificationCode"], input[type="text"][autocomplete="off"]',
+        sms_code_selector='input[name="verificationCode"], input[type="text"][autocomplete="off"]',
+        code_submit_selector=ENTER,
+        remember_selector='input[name="rememberDevice"], input[name="checkbox"]',
     ),
     "facebook": LoginSpec(
         platform="facebook",
