@@ -7,7 +7,7 @@ import time
 import pytest
 from websockets.asyncio.server import serve
 
-from contact_sync.scrape import cdp
+from people_sync.scrape import cdp
 
 
 class FakeChrome:
@@ -314,7 +314,7 @@ def test_fetch_body_that_never_replies_times_out_instead_of_hanging(tmp_path, fa
     # request. Without a bound, navigate() hangs until the outer sync
     # wrapper's own timeout, and the still-running coroutine gets destroyed
     # while pending. Patched to a tiny bound so the test stays fast.
-    mocker.patch("contact_sync.scrape.cdp.RESPONSE_BODY_TIMEOUT", 0.05)
+    mocker.patch("people_sync.scrape.cdp.RESPONSE_BODY_TIMEOUT", 0.05)
     warn = mocker.patch.object(cdp.log, "warning")
 
     async def handle_navigate(ws, msg):

@@ -20,9 +20,9 @@ Credentials never reach this repo's configuration. Three commands supply
 them, named only by environment variable; each receives the platform as `$1`
 and prints to stdout:
 
-    CONTACT_SYNC_CREDENTIAL_COMMAND  {"username": ..., "password": ..., "totp": ...}
-    CONTACT_SYNC_EMAIL_CODE_COMMAND  the newest one-time code from email
-    CONTACT_SYNC_SMS_CODE_COMMAND    the newest one-time code from SMS
+    PEOPLE_SYNC_CREDENTIAL_COMMAND  {"username": ..., "password": ..., "totp": ...}
+    PEOPLE_SYNC_EMAIL_CODE_COMMAND  the newest one-time code from email
+    PEOPLE_SYNC_SMS_CODE_COMMAND    the newest one-time code from SMS
 
 What those commands do is none of this product's business. Their output
 lives in memory for the duration of the call and is never logged, stored,
@@ -39,18 +39,18 @@ from pathlib import Path
 
 import structlog
 
-from contact_sync.scrape import pace
-from contact_sync.scrape.cdp import Browser, visible_js
+from people_sync.scrape import pace
+from people_sync.scrape.cdp import Browser, visible_js
 
 log = structlog.get_logger(__name__)
 
 _sleep = time.sleep
 _now = time.monotonic
 
-CREDENTIAL_COMMAND_ENV = "CONTACT_SYNC_CREDENTIAL_COMMAND"
-EMAIL_CODE_COMMAND_ENV = "CONTACT_SYNC_EMAIL_CODE_COMMAND"
-SMS_CODE_COMMAND_ENV = "CONTACT_SYNC_SMS_CODE_COMMAND"
-STATE_DIR_ENV = "CONTACT_SYNC_STATE_DIR"
+CREDENTIAL_COMMAND_ENV = "PEOPLE_SYNC_CREDENTIAL_COMMAND"
+EMAIL_CODE_COMMAND_ENV = "PEOPLE_SYNC_EMAIL_CODE_COMMAND"
+SMS_CODE_COMMAND_ENV = "PEOPLE_SYNC_SMS_CODE_COMMAND"
+STATE_DIR_ENV = "PEOPLE_SYNC_STATE_DIR"
 DEFAULT_STATE_DIR = "data"
 
 NAV_WAIT_MS = 15000
@@ -162,7 +162,7 @@ def _run_command(command: str, platform: str, env_name: str) -> str:
     argv) out of the chained traceback."""
     try:
         result = subprocess.run(
-            ["sh", "-c", command, "contact-sync-login", platform],
+            ["sh", "-c", command, "people-sync-login", platform],
             capture_output=True,
             text=True,
             timeout=COMMAND_TIMEOUT_S,
@@ -397,6 +397,6 @@ def login(
 
 def _specs() -> dict:
     # Imported lazily: login_specs imports LoginSpec from this module.
-    from contact_sync.scrape import login_specs as specs
+    from people_sync.scrape import login_specs as specs
 
     return specs.SPECS

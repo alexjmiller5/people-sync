@@ -3,9 +3,9 @@ import hashlib
 import json
 import sqlite3
 
-from contact_sync.scrape import run
-from contact_sync.scrape.cdp import CdpError
-from contact_sync.scrape.profile import ExtractError, Profile
+from people_sync.scrape import run
+from people_sync.scrape.cdp import CdpError
+from people_sync.scrape.profile import ExtractError, Profile
 
 
 class FakeModule:
@@ -54,23 +54,23 @@ def _record(**overrides) -> dict:
 
 
 def _patch_common(mocker, records, browser=None, allow=True):
-    mocker.patch("contact_sync.scrape.run._select_records", return_value=records)
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
+    mocker.patch("people_sync.scrape.run._select_records", return_value=records)
+    mocker.patch("people_sync.scrape.run.import_module", return_value=FakeModule)
     browser = browser or FakeBrowser()
-    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=browser)
-    pacer_cls = mocker.patch("contact_sync.scrape.run.Pacer")
+    mocker.patch("people_sync.scrape.run.Browser.connect", return_value=browser)
+    pacer_cls = mocker.patch("people_sync.scrape.run.Pacer")
     pacer = pacer_cls.return_value
     pacer.allow.return_value = allow
     pacer.next_gap.return_value = 0.0
-    mocker.patch("contact_sync.scrape.run.time.sleep")
+    mocker.patch("people_sync.scrape.run.time.sleep")
     return browser, pacer
 
 
 def test_scrape_passes_endpoint_and_data_dir_to_browser_connect(mocker):
-    mocker.patch("contact_sync.scrape.run._select_records", return_value=[])
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
-    connect = mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
-    mocker.patch("contact_sync.scrape.run.Pacer")
+    mocker.patch("people_sync.scrape.run._select_records", return_value=[])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=FakeModule)
+    connect = mocker.patch("people_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
+    mocker.patch("people_sync.scrape.run.Pacer")
 
     run.scrape("testplatform", endpoint="mini.local:9333", data_dir="/tmp/profile")
 
@@ -78,10 +78,10 @@ def test_scrape_passes_endpoint_and_data_dir_to_browser_connect(mocker):
 
 
 def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
-    mocker.patch("contact_sync.scrape.run._select_records", return_value=[])
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
-    connect = mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
-    mocker.patch("contact_sync.scrape.run.Pacer")
+    mocker.patch("people_sync.scrape.run._select_records", return_value=[])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=FakeModule)
+    connect = mocker.patch("people_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
+    mocker.patch("people_sync.scrape.run.Pacer")
 
     run.scrape("testplatform")
 
@@ -90,8 +90,8 @@ def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
 
 def test_cap_reached_stops_before_navigating(mocker):
     browser, pacer = _patch_common(mocker, [_record()], allow=False)
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
 
@@ -107,8 +107,8 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
     browser, pacer = _patch_common(
         mocker, [_record()], browser=FakeBrowser(page_text="Please log in to continue")
     )
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
 
@@ -122,9 +122,9 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
 
 def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     browser, pacer = _patch_common(mocker, [_record()])
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     manager = mocker.MagicMock()
     manager.attach_mock(put_object, "put_object")
@@ -165,9 +165,9 @@ def test_avatar_dedupe_skips_reupload_when_sha_matches(mocker):
         avatar_sha256=sha,
     )
     browser, pacer = _patch_common(mocker, [record])
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
 
@@ -185,9 +185,9 @@ def test_avatar_upload_happens_when_sha_changes(mocker):
         avatar_sha256="a-different-sha",
     )
     browser, pacer = _patch_common(mocker, [record])
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=b"new-avatar-bytes")
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"new-avatar-bytes")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
 
@@ -200,7 +200,7 @@ def test_avatar_upload_happens_when_sha_changes(mocker):
 
 def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
     _patch_common(mocker, [_record()])
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=None)
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
     b64 = base64.b64encode(b"page-fetched-bytes").decode()
 
     class PageFetchBrowser(FakeBrowser):
@@ -211,9 +211,9 @@ def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
                 return b64
             return json.dumps({"username": "u1", "full_name": "Test User"})
 
-    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=PageFetchBrowser())
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.scrape.run.Browser.connect", return_value=PageFetchBrowser())
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
 
@@ -227,7 +227,7 @@ def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
 
 def test_records_with_no_handle_are_skipped_not_navigated(mocker):
     browser, pacer = _patch_common(mocker, [_record(handle=None)])
-    put_object = mocker.patch("contact_sync.photos.put_object")
+    put_object = mocker.patch("people_sync.photos.put_object")
 
     result = run.scrape("testplatform")
 
@@ -247,9 +247,9 @@ def test_max_n_limits_records_processed(mocker):
         for i in range(3)
     ]
     browser, pacer = _patch_common(mocker, records)
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=None)
-    mocker.patch("contact_sync.photos.put_object")
-    mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
+    mocker.patch("people_sync.photos.put_object")
+    mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform", max_n=2)
 
@@ -273,18 +273,18 @@ def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
                 raise ValueError("boom")
             return FakeModule.parse(eval_result, captured)
 
-    mocker.patch("contact_sync.scrape.run._select_records", return_value=records)
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=FlakyModule)
+    mocker.patch("people_sync.scrape.run._select_records", return_value=records)
+    mocker.patch("people_sync.scrape.run.import_module", return_value=FlakyModule)
     browser = FakeBrowser()
-    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=browser)
-    pacer_cls = mocker.patch("contact_sync.scrape.run.Pacer")
+    mocker.patch("people_sync.scrape.run.Browser.connect", return_value=browser)
+    pacer_cls = mocker.patch("people_sync.scrape.run.Pacer")
     pacer = pacer_cls.return_value
     pacer.allow.return_value = True
     pacer.next_gap.return_value = 0.0
-    sleep = mocker.patch("contact_sync.scrape.run.time.sleep")
-    mocker.patch("contact_sync.photos.fetch_url_photo", return_value=None)
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    sleep = mocker.patch("people_sync.scrape.run.time.sleep")
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
     result = run.scrape("testplatform")
@@ -307,9 +307,9 @@ def test_extractor_error_sentinel_skips_without_any_writes(mocker):
             raise ExtractError(eval_result.get("error", "no-header"))
 
     browser, pacer = _patch_common(mocker, [_record()])
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=SentinelModule)
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    mocker.patch("people_sync.scrape.run.import_module", return_value=SentinelModule)
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
     result = run.scrape("testplatform")
@@ -328,14 +328,14 @@ def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
             raise CdpError("boom")
 
     browser = DyingBrowser()
-    mocker.patch("contact_sync.scrape.run._select_records", return_value=[_record()])
-    mocker.patch("contact_sync.scrape.run.import_module", return_value=FakeModule)
-    mocker.patch("contact_sync.scrape.run.Browser.connect", return_value=browser)
-    pacer_cls = mocker.patch("contact_sync.scrape.run.Pacer")
+    mocker.patch("people_sync.scrape.run._select_records", return_value=[_record()])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=FakeModule)
+    mocker.patch("people_sync.scrape.run.Browser.connect", return_value=browser)
+    pacer_cls = mocker.patch("people_sync.scrape.run.Pacer")
     pacer = pacer_cls.return_value
     pacer.allow.return_value = True
-    put_object = mocker.patch("contact_sync.photos.put_object")
-    upsert = mocker.patch("contact_sync.scrape.run.upsert_profile")
+    put_object = mocker.patch("people_sync.photos.put_object")
+    upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
 
@@ -349,16 +349,16 @@ def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
 def test_records_sql_filters_deleted_ignored_and_stale_window():
     conn = sqlite3.connect(":memory:")
     conn.execute(
-        "CREATE TABLE contact_records "
+        "CREATE TABLE people_sync_records "
         "(id TEXT, source TEXT, handle TEXT, name TEXT, status TEXT, "
         "deleted_at TEXT, first_seen TEXT)"
     )
     conn.execute(
-        "CREATE TABLE contact_profiles (record_id TEXT, scraped_at TEXT, "
+        "CREATE TABLE people_sync_profiles (record_id TEXT, scraped_at TEXT, "
         "avatar_r2_key TEXT, avatar_sha256 TEXT)"
     )
     conn.executemany(
-        "INSERT INTO contact_records VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO people_sync_records VALUES (?,?,?,?,?,?,?)",
         [
             ("testplatform:new", "testplatform", "new", None, "pending", None, "3"),
             ("testplatform:stale", "testplatform", "stale", None, "matched", None, "2"),
@@ -377,7 +377,7 @@ def test_records_sql_filters_deleted_ignored_and_stale_window():
         ],
     )
     conn.executemany(
-        "INSERT INTO contact_profiles VALUES (?,?,?,?)",
+        "INSERT INTO people_sync_profiles VALUES (?,?,?,?)",
         [
             ("testplatform:fresh", "2026-08-01T00:00:00.000Z", None, None),  # recent: excluded
             ("testplatform:stale", "2026-01-01T00:00:00.000Z", None, None),  # stale: included

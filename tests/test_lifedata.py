@@ -1,6 +1,6 @@
 import json
 import subprocess
-from contact_sync import lifedata
+from people_sync import lifedata
 
 
 def test_sql_parses_json(mocker):
@@ -29,9 +29,9 @@ def test_insert_pipes_rows(mocker):
         "subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
     )
-    lifedata.insert("contact_records", [{"id": "x:1"}])
+    lifedata.insert("people_sync_records", [{"id": "x:1"}])
     assert run.call_args.kwargs["input"] == json.dumps([{"id": "x:1"}])
-    assert run.call_args.args[0][:3] == ["life", "insert", "contact_records"]
+    assert run.call_args.args[0][:3] == ["life", "insert", "people_sync_records"]
 
 
 def test_insert_empty_is_noop(mocker):

@@ -12,7 +12,7 @@ immediately before it is cleared, so a value that changed since the last ingest
 (and was therefore never verified) is left alone.
 
     uv run python scripts/google_cleanup.py             # dry run (the default)
-    uv run python scripts/google_cleanup.py --apply     # with Alex watching
+    uv run python scripts/google_cleanup.py --apply     # with a human watching
     uv run python scripts/google_cleanup.py --selftest  # offline assert check
 """
 
@@ -20,11 +20,11 @@ import argparse
 import json
 import sys
 
-from contact_sync import lifedata, sources
+from people_sync import lifedata, sources
 
 RECORDS_QUERY = """
     SELECT c.source_id, c.raw, c.person_id, p.name, p.circles
-    FROM contact_records c
+    FROM people_sync_records c
     JOIN people p ON p.id = c.person_id
     WHERE c.deleted_at IS NULL AND p.deleted_at IS NULL
       AND c.source = 'google_contacts' AND c.status = 'matched'

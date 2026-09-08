@@ -1,6 +1,6 @@
 import pytest
 
-from contact_sync import parsers
+from people_sync import parsers
 
 FIX = "tests/fixtures"
 

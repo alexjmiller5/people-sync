@@ -1,4 +1,4 @@
-from contact_sync.cli import main
+from people_sync.cli import main
 
 if __name__ == "__main__":
     main()

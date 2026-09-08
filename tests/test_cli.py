@@ -3,13 +3,13 @@ import sqlite3
 
 import pytest
 
-from contact_sync import cli
-from contact_sync.scrape import login as scrape_login
+from people_sync import cli
+from people_sync.scrape import login as scrape_login
 
 
 def test_ingest_instagram_reads_directory_and_upserts(mocker, capsys):
-    parse = mocker.patch("contact_sync.parsers.parse_instagram", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 1, "updated": 0})
+    parse = mocker.patch("people_sync.parsers.parse_instagram", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 1, "updated": 0})
 
     cli.main(["ingest", "instagram", "--path", "/tmp/export"])
 
@@ -19,8 +19,8 @@ def test_ingest_instagram_reads_directory_and_upserts(mocker, capsys):
 
 
 def test_ingest_facebook_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("contact_sync.parsers.parse_facebook", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 0, "updated": 1})
+    parse = mocker.patch("people_sync.parsers.parse_facebook", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 0, "updated": 1})
 
     cli.main(["ingest", "facebook", "--path", "/tmp/your_friends.json"])
 
@@ -30,8 +30,8 @@ def test_ingest_facebook_reads_file_and_upserts(mocker, capsys):
 
 
 def test_ingest_snapchat_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("contact_sync.parsers.parse_snapchat", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 1, "updated": 1})
+    parse = mocker.patch("people_sync.parsers.parse_snapchat", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 1, "updated": 1})
 
     cli.main(["ingest", "snapchat", "--path", "/tmp/friends.json"])
 
@@ -41,8 +41,8 @@ def test_ingest_snapchat_reads_file_and_upserts(mocker, capsys):
 
 
 def test_ingest_linkedin_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("contact_sync.parsers.parse_linkedin", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 3, "updated": 0})
+    parse = mocker.patch("people_sync.parsers.parse_linkedin", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 3, "updated": 0})
 
     cli.main(["ingest", "linkedin", "--path", "/tmp/Connections.csv"])
 
@@ -52,8 +52,8 @@ def test_ingest_linkedin_reads_file_and_upserts(mocker, capsys):
 
 
 def test_ingest_google_calls_fetch_with_no_path_and_upserts(mocker, capsys):
-    fetch = mocker.patch("contact_sync.sources.fetch_google", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 2, "updated": 0})
+    fetch = mocker.patch("people_sync.sources.fetch_google", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 2, "updated": 0})
 
     cli.main(["ingest", "google"])
 
@@ -63,8 +63,8 @@ def test_ingest_google_calls_fetch_with_no_path_and_upserts(mocker, capsys):
 
 
 def test_ingest_apple_calls_fetch_with_no_path_and_upserts(mocker, capsys):
-    fetch = mocker.patch("contact_sync.sources.fetch_apple", return_value=["rec"])
-    upsert = mocker.patch("contact_sync.ledger.upsert", return_value={"new": 0, "updated": 4})
+    fetch = mocker.patch("people_sync.sources.fetch_apple", return_value=["rec"])
+    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 0, "updated": 4})
 
     cli.main(["ingest", "apple"])
 
@@ -75,7 +75,7 @@ def test_ingest_apple_calls_fetch_with_no_path_and_upserts(mocker, capsys):
 
 def test_match_runs_and_prints_result(mocker, capsys):
     run = mocker.patch(
-        "contact_sync.match.run_match",
+        "people_sync.match.run_match",
         return_value={"auto": 1, "suggested": 2, "left_pending": 3},
     )
 
@@ -96,7 +96,7 @@ def test_cmd_queue_runs_fixed_query_and_prints_result(mocker, capsys):
             "suggested_name": "Alice Smith",
         }
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", return_value=rows)
+    sql = mocker.patch("people_sync.lifedata.sql", return_value=rows)
 
     cli.main(["queue"])
 
@@ -107,13 +107,13 @@ def test_cmd_queue_runs_fixed_query_and_prints_result(mocker, capsys):
 def test_queue_query_orders_suggested_first_and_joins_person_name():
     conn = sqlite3.connect(":memory:")
     conn.execute(
-        "CREATE TABLE contact_records (id TEXT, source TEXT, handle TEXT, name TEXT, "
+        "CREATE TABLE people_sync_records (id TEXT, source TEXT, handle TEXT, name TEXT, "
         "status TEXT, suggested_person_id TEXT)"
     )
     conn.execute("CREATE TABLE people (id TEXT, name TEXT)")
     conn.execute("INSERT INTO people VALUES ('p1', 'Suggested Person')")
     conn.executemany(
-        "INSERT INTO contact_records VALUES (?,?,?,?,?,?)",
+        "INSERT INTO people_sync_records VALUES (?,?,?,?,?,?)",
         [
             ("instagram:noone", "instagram", "noone", None, "pending", None),
             ("instagram:alice", "instagram", "alice", None, "pending", "p1"),
@@ -133,10 +133,10 @@ def test_new_person_creates_stub_inserts_dashstripped_row_and_prints_id(
 ):
     monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
     create = mocker.patch(
-        "contact_sync.notion_people.create_stub",
+        "people_sync.notion_people.create_stub",
         return_value="1a80-3953-a8af-80ab-000bfe407316",
     )
-    insert = mocker.patch("contact_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.lifedata.insert")
 
     cli.main(["new-person", "--name", "Test Person"])
 
@@ -149,7 +149,7 @@ def test_new_person_creates_stub_inserts_dashstripped_row_and_prints_id(
 
 def test_new_person_exits_with_clear_error_when_token_missing(monkeypatch, mocker):
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
-    insert = mocker.patch("contact_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.lifedata.insert")
 
     with pytest.raises(SystemExit):
         cli.main(["new-person", "--name", "Test Person"])
@@ -162,10 +162,10 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
 ):
     monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
     mocker.patch(
-        "contact_sync.notion_people.create_stub",
+        "people_sync.notion_people.create_stub",
         return_value="1a80-3953-a8af-80ab-000bfe407316",
     )
-    mocker.patch("contact_sync.lifedata.insert", side_effect=RuntimeError("life insert failed"))
+    mocker.patch("people_sync.lifedata.insert", side_effect=RuntimeError("life insert failed"))
 
     with pytest.raises(RuntimeError, match="life insert failed"):
         cli.main(["new-person", "--name", "Test Person"])
@@ -177,7 +177,7 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
 
 def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
     scrape = mocker.patch(
-        "contact_sync.scrape.run.scrape",
+        "people_sync.scrape.run.scrape",
         return_value={"done": 1, "skipped": 0, "halted": None},
     )
 
@@ -204,7 +204,7 @@ def test_scrape_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
 
 def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker, capsys):
     scrape = mocker.patch(
-        "contact_sync.scrape.run.scrape",
+        "people_sync.scrape.run.scrape",
         return_value={"done": 0, "skipped": 0, "halted": None},
     )
 
@@ -223,7 +223,7 @@ def test_photos_store_prints_r2_key_on_new_photo(mocker, tmp_path, capsys):
     file_path = tmp_path / "avatar.jpg"
     file_path.write_bytes(b"image-bytes")
     store = mocker.patch(
-        "contact_sync.photos.store_photo",
+        "people_sync.photos.store_photo",
         return_value="photos/people/p1/instagram-abcd1234.jpg",
     )
 
@@ -238,7 +238,7 @@ def test_photos_store_prints_r2_key_on_new_photo(mocker, tmp_path, capsys):
 def test_photos_store_prints_duplicate_when_store_returns_none(mocker, tmp_path, capsys):
     file_path = tmp_path / "avatar.png"
     file_path.write_bytes(b"image-bytes")
-    mocker.patch("contact_sync.photos.store_photo", return_value=None)
+    mocker.patch("people_sync.photos.store_photo", return_value=None)
 
     cli.main(
         ["photos", "store", "--person", "p1", "--platform", "instagram", "--file", str(file_path)]
@@ -249,7 +249,7 @@ def test_photos_store_prints_duplicate_when_store_returns_none(mocker, tmp_path,
 
 def test_login_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
     login = mocker.patch(
-        "contact_sync.scrape.login.login",
+        "people_sync.scrape.login.login",
         return_value={"platform": "instagram", "status": "logged-in", "reason": None},
     )
 
@@ -265,7 +265,7 @@ def test_login_passes_endpoint_and_data_dir_flags_through(mocker, capsys):
 
 def test_login_exits_non_zero_when_the_flow_halts(mocker, capsys):
     mocker.patch(
-        "contact_sync.scrape.login.login",
+        "people_sync.scrape.login.login",
         return_value={"platform": "facebook", "status": "halted", "reason": "challenge page"},
     )
 
@@ -278,11 +278,11 @@ def test_login_exits_non_zero_when_the_flow_halts(mocker, capsys):
 
 def test_login_reports_a_missing_credential_command_without_a_traceback(mocker):
     mocker.patch(
-        "contact_sync.scrape.login.login",
-        side_effect=scrape_login.LoginError("CONTACT_SYNC_CREDENTIAL_COMMAND is not set"),
+        "people_sync.scrape.login.login",
+        side_effect=scrape_login.LoginError("PEOPLE_SYNC_CREDENTIAL_COMMAND is not set"),
     )
 
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["login", "venmo"])
 
-    assert "CONTACT_SYNC_CREDENTIAL_COMMAND" in str(exit_info.value.code)
+    assert "PEOPLE_SYNC_CREDENTIAL_COMMAND" in str(exit_info.value.code)

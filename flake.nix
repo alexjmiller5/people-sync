@@ -1,5 +1,5 @@
 {
-  description = "contact-sync: consolidate contact sources into the life-data people estate";
+  description = "people-sync: consolidate contact sources into the life-data people estate";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -12,9 +12,9 @@
       # All three runtime deps ship as nixpkgs python313Packages, so a plain
       # buildPythonApplication builds offline from the binary cache - no
       # uv2nix/pyproject-nix inputs needed for a dependency set this small.
-      mkContactSync = pkgs:
+      mkPeopleSync = pkgs:
         pkgs.python313Packages.buildPythonApplication {
-          pname = "contact-sync";
+          pname = "people-sync";
           version = "0.1.0";
           pyproject = true;
           src = ./.;
@@ -22,14 +22,14 @@
           dependencies = with pkgs.python313Packages; [ httpx structlog websockets ];
           doCheck = false; # `just test` / `nix flake check` cover the suite
 
-          # bin/contact-sync-agent: the launchd runner script, part of the
+          # bin/people-sync-agent: the launchd runner script, part of the
           # package so the nix-darwin module stays a thin options-to-env
-          # translator (see nix/darwin.nix). @contact_sync_bin@ is resolved
-          # to this same package's `contact-sync` entry point.
+          # translator (see nix/darwin.nix). @people_sync_bin@ is resolved
+          # to this same package's `people-sync` entry point.
           postInstall = ''
-            install -Dm755 ${./scripts/contact-sync-agent} $out/bin/contact-sync-agent
-            substituteInPlace $out/bin/contact-sync-agent \
-              --replace-fail '@contact_sync_bin@' "$out/bin/contact-sync"
+            install -Dm755 ${./scripts/people-sync-agent} $out/bin/people-sync-agent
+            substituteInPlace $out/bin/people-sync-agent \
+              --replace-fail '@people_sync_bin@' "$out/bin/people-sync"
           '';
         };
 
@@ -56,17 +56,17 @@
             modules = [
               fixture
               self.darwinModules.default
-              { services.contact-sync-scrape = { enable = true; user = "test"; }; }
+              { services.people-sync-scrape = { enable = true; user = "test"; }; }
             ];
             specialArgs = { inherit pkgs; };
           };
           forced = builtins.toJSON {
             agents = builtins.attrNames evaluated.config.launchd.user.agents;
-            env = evaluated.config.launchd.user.agents.contact-sync-scrape.serviceConfig.EnvironmentVariables;
+            env = evaluated.config.launchd.user.agents.people-sync-scrape.serviceConfig.EnvironmentVariables;
             hasActivation = evaluated.config.system.activationScripts.postActivation.text != "";
           };
         in
-        pkgs.runCommand "contact-sync-darwin-module-eval" { } ''
+        pkgs.runCommand "people-sync-darwin-module-eval" { } ''
           cat > "$out" <<'EOF'
           ${forced}
           EOF
@@ -74,7 +74,7 @@
     in
     {
       packages = forAllSystems (pkgs: {
-        default = mkContactSync pkgs;
+        default = mkPeopleSync pkgs;
       });
 
       darwinModules.default = import ./nix/darwin.nix self;

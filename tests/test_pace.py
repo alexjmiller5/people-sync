@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from contact_sync.scrape import pace
+from people_sync.scrape import pace
 
 
 def _dt(iso: str) -> datetime:
@@ -11,20 +11,20 @@ def _dt(iso: str) -> datetime:
 
 
 def test_next_gap_uniform_range(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace.random.uniform", return_value=15.0)
+    mocker.patch("people_sync.scrape.pace.random.uniform", return_value=15.0)
     p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     assert p.next_gap() == 15.0
 
 
 def test_next_gap_calls_uniform_with_8_25_bounds(tmp_path, mocker):
-    uniform = mocker.patch("contact_sync.scrape.pace.random.uniform", return_value=10.0)
+    uniform = mocker.patch("people_sync.scrape.pace.random.uniform", return_value=10.0)
     p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     p.next_gap()
     uniform.assert_called_once_with(8.0, 25.0)
 
 
 def test_next_gap_adds_break_every_25_calls(tmp_path, mocker):
-    uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
+    uniform = mocker.patch("people_sync.scrape.pace.random.uniform")
     uniform.side_effect = [10.0] * 24 + [10.0, 200.0]
     p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
     gaps = [p.next_gap() for _ in range(25)]
@@ -35,7 +35,7 @@ def test_next_gap_adds_break_every_25_calls(tmp_path, mocker):
 
 
 def test_next_gap_break_cadence_repeats(tmp_path, mocker):
-    uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
+    uniform = mocker.patch("people_sync.scrape.pace.random.uniform")
     # calls 1-24: base only. call 25: base + break. same pattern for 26-50.
     uniform.side_effect = [10.0] * 24 + [10.0, 200.0] + [10.0] * 24 + [10.0, 200.0]
     p = pace.Pacer("instagram", state_path=str(tmp_path / "state.json"))
@@ -45,7 +45,7 @@ def test_next_gap_break_cadence_repeats(tmp_path, mocker):
 
 
 def test_next_gap_break_counter_survives_restart(tmp_path, mocker):
-    uniform = mocker.patch("contact_sync.scrape.pace.random.uniform")
+    uniform = mocker.patch("people_sync.scrape.pace.random.uniform")
     state_path = str(tmp_path / "state.json")
 
     uniform.side_effect = [10.0] * 24
@@ -71,7 +71,7 @@ def test_next_gap_break_counter_survives_restart(tmp_path, mocker):
 )
 def test_allow_respects_daily_cap(tmp_path, mocker, platform, cap):
     mocker.patch(
-        "contact_sync.scrape.pace._utcnow",
+        "people_sync.scrape.pace._utcnow",
         return_value=_dt("2026-09-04T12:00:00"),
     )
     state_path = tmp_path / "state.json"
@@ -83,13 +83,13 @@ def test_allow_respects_daily_cap(tmp_path, mocker, platform, cap):
 
 
 def test_allow_true_when_state_file_missing(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     p = pace.Pacer("instagram", state_path=str(tmp_path / "missing.json"))
     assert p.allow() is True
 
 
 def test_record_persists_state_to_json_file(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     p = pace.Pacer("instagram", state_path=str(state_path))
     p.record()
@@ -100,7 +100,7 @@ def test_record_persists_state_to_json_file(tmp_path, mocker):
 
 
 def test_record_is_scoped_per_platform(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     ig = pace.Pacer("instagram", state_path=str(state_path))
     fb = pace.Pacer("facebook", state_path=str(state_path))
@@ -115,7 +115,7 @@ def test_record_is_scoped_per_platform(tmp_path, mocker):
 
 def test_cap_rolls_over_at_utc_midnight(tmp_path, mocker):
     state_path = tmp_path / "state.json"
-    clock = mocker.patch("contact_sync.scrape.pace._utcnow")
+    clock = mocker.patch("people_sync.scrape.pace._utcnow")
 
     clock.return_value = _dt("2026-09-04T23:59:00")
     p = pace.Pacer("linkedin", state_path=str(state_path))
@@ -130,7 +130,7 @@ def test_cap_rolls_over_at_utc_midnight(tmp_path, mocker):
 
 
 def test_record_loads_existing_state_file(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps({"instagram": {"2026-09-04": {"calls": 5, "gap_calls": 5}}}))
 
@@ -151,7 +151,7 @@ def test_two_pacer_instances_see_each_others_writes(tmp_path, mocker):
     # Sequential interleaving on the same state file, two separate instances
     # (simulating two processes): each re-reads under the lock rather than
     # trusting an in-memory snapshot.
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     a = pace.Pacer("instagram", state_path=str(state_path))
     b = pace.Pacer("instagram", state_path=str(state_path))
@@ -167,7 +167,7 @@ def test_two_pacer_instances_see_each_others_writes(tmp_path, mocker):
 
 
 def test_write_is_atomic_no_tmp_file_left_behind(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     pace.Pacer("instagram", state_path=str(state_path)).record()
 
@@ -176,7 +176,7 @@ def test_write_is_atomic_no_tmp_file_left_behind(tmp_path, mocker):
 
 
 def test_allow_false_and_quarantines_corrupt_state_file(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     state_path.write_text("{not valid json")
 
@@ -189,7 +189,7 @@ def test_allow_false_and_quarantines_corrupt_state_file(tmp_path, mocker):
 
 
 def test_allow_logs_corruption_with_platform_and_reason_only(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     warn = mocker.patch.object(pace.log, "warning")
     state_path = tmp_path / "state.json"
     state_path.write_text("{not valid json")
@@ -202,7 +202,7 @@ def test_allow_logs_corruption_with_platform_and_reason_only(tmp_path, mocker):
 
 
 def test_record_self_heals_after_corrupt_state_file(tmp_path, mocker):
-    mocker.patch("contact_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
+    mocker.patch("people_sync.scrape.pace._utcnow", return_value=_dt("2026-09-04T12:00:00"))
     state_path = tmp_path / "state.json"
     state_path.write_text("not json at all")
 
@@ -238,7 +238,7 @@ def test_is_challenge_true_on_markers(text):
 @pytest.mark.parametrize(
     "text",
     [
-        "Alex Smith - Photos",
+        "Nova Quill - Photos",
         "Welcome to the profile page",
         "500 followers, 300 following",
         "Bio: vegetarian, on a restricted diet, loves hiking",

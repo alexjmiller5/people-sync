@@ -1,6 +1,6 @@
 import pytest
 
-from contact_sync import notion_people
+from people_sync import notion_people
 
 
 class _Resp:
@@ -19,7 +19,7 @@ class _Resp:
 def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
     monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
     post = mocker.patch(
-        "contact_sync.notion_people.httpx.post",
+        "people_sync.notion_people.httpx.post",
         return_value=_Resp(json_data={"id": "1a80-3953-a8af-80ab-000bfe407316"}),
     )
 
@@ -41,7 +41,7 @@ def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
 
 def test_create_stub_raises_clear_error_when_token_missing(monkeypatch, mocker):
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
-    post = mocker.patch("contact_sync.notion_people.httpx.post")
+    post = mocker.patch("people_sync.notion_people.httpx.post")
 
     with pytest.raises(RuntimeError, match=notion_people.MISSING_TOKEN_MSG):
         notion_people.create_stub("Test Person")
