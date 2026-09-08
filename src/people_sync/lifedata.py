@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 
 # Another writer (a second scrape, the sync daemon) holds SQLite briefly;
 # a locked statement is retried with a short backoff before it is an error.
-LOCK_RETRIES = 6
-LOCK_BACKOFF_S = 0.5
+LOCK_RETRIES = 10
+LOCK_BACKOFF_S = 0.75
 
 
 def _run(cmd: list[str], input: str | None = None) -> str:
