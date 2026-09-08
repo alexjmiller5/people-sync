@@ -8,7 +8,7 @@ reliable than the header scrape and are preferred when captured.
 
 import json
 
-from contact_sync.scrape.profile import ExtractError, Profile
+from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://www.instagram.com/{handle}/"
 

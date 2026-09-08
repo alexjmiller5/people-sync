@@ -1,4 +1,4 @@
-# People DB & Contact Sync Implementation Plan
+# People DB & People Sync Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
@@ -6,13 +6,13 @@
 > migration decisions). They cannot be completed by an unattended subagent -
 > the executor runs their mechanical steps, then pauses for Alex.
 
-**Goal:** Normalize the life-data people estate (accounts, ledger, locations, employments, photos, circles) and build the ad-hoc monthly contacts-review workflow that feeds it from every contact source.
+**Goal:** Normalize the life-data people estate (accounts, ledger, locations, employments, photos, circles) and build the ad-hoc monthly people-review workflow that feeds it from every contact source.
 
-**Architecture:** Plain-Python scripts in this repo (renamed `contact-sync`) write to life-data exclusively through the `life` CLI; a resolution-ledger table makes ingests idempotent and incremental; Claude drives triage via a `contacts-review` skill. No daemons, no cron.
+**Architecture:** Plain-Python scripts in this repo (renamed `people-sync`) write to life-data exclusively through the `life` CLI; a resolution-ledger table makes ingests idempotent and incremental; Claude drives triage via a `people-review` skill. No daemons, no cron.
 
 **Tech Stack:** uv, Python 3.13, pytest + pytest-mock, ruff, httpx (Notion raw HTTP), boto3 (R2 only), `life` CLI (subprocess), `gog` CLI (subprocess).
 
-**Spec:** `docs/superpowers/specs/2026-09-02-people-db-contact-sync-design.md` (read it first; the preservation invariant and Google-boundary rules there are binding).
+**Spec:** `docs/superpowers/specs/2026-09-02-people-db-people-sync-design.md` (read it first; the preservation invariant and Google-boundary rules there are binding).
 
 ## Global Constraints
 
@@ -29,39 +29,39 @@
 
 ***
 
-### Task 1: Commit spec; strip the repo to its new shape; rename to contact-sync
+### Task 1: Commit spec; strip the repo to its new shape; rename to people-sync
 
 **Files:**
 
-* Delete: `src/notion_contact_sync/` (entire package), `tests/` contents, `nix/darwin.nix`, `scripts/run.sh`
+* Delete: `src/notion_people_sync/` (entire package), `tests/` contents, `nix/darwin.nix`, `scripts/run.sh`
 * Modify: `flake.nix`, `justfile`, `pyproject.toml`, `.env.tpl`, `AGENTS.md`, `README.md`
-* Create: `src/contact_sync/__init__.py` (empty), `tests/__init__.py` (empty)
+* Create: `src/people_sync/__init__.py` (empty), `tests/__init__.py` (empty)
 
 **Interfaces:**
 
-* Produces: package `contact_sync` importable via `uv run python -c "import contact_sync"`; `just test` / `just check` green on an empty suite; repo named `contact-sync` on GitHub and on disk.
+* Produces: package `people_sync` importable via `uv run python -c "import people_sync"`; `just test` / `just check` green on an empty suite; repo named `people-sync` on GitHub and on disk.
 
 * [ ] **Step 1: Commit the spec** (it is written but uncommitted)
 
 ```Shell
-cd ~/Desktop/coding/active-projects/notion-contact-sync
-git add docs/superpowers/specs/2026-09-02-people-db-contact-sync-design.md docs/superpowers/plans/2026-09-02-people-db-contact-sync.md
-git commit -m "Add people db & contact sync design spec and plan"
+cd ~/Desktop/coding/active-projects/notion-people-sync
+git add docs/superpowers/specs/2026-09-02-people-db-people-sync-design.md docs/superpowers/plans/2026-09-02-people-db-people-sync.md
+git commit -m "Add people db & people sync design spec and plan"
 ```
 
 * [ ] **Step 2: Delete the presumed-wrong code and the scheduled-job machinery**
 
 ```Shell
-git rm -r src/notion_contact_sync tests nix scripts/run.sh
-mkdir -p src/contact_sync tests scripts
-touch src/contact_sync/__init__.py tests/__init__.py
+git rm -r src/notion_people_sync tests nix scripts/run.sh
+mkdir -p src/people_sync tests scripts
+touch src/people_sync/__init__.py tests/__init__.py
 ```
 
-* [ ] **Step 3: Rewrite** **`pyproject.toml`** **package name/deps** - name `contact-sync`, package `contact_sync`, dependencies exactly: `httpx`, `structlog`, `boto3`; dev group: `pytest`, `pytest-mock`, `ruff`. Remove `pydantic-settings` (no long-lived config object; scripts read env directly). Run `uv sync`.
+* [ ] **Step 3: Rewrite** **`pyproject.toml`** **package name/deps** - name `people-sync`, package `people_sync`, dependencies exactly: `httpx`, `structlog`, `boto3`; dev group: `pytest`, `pytest-mock`, `ruff`. Remove `pydantic-settings` (no long-lived config object; scripts read env directly). Run `uv sync`.
 
 * [ ] **Step 4: Slim** **`flake.nix`** **and** **`justfile`** - flake: remove the `darwinModules` export (no launchd job anymore), keep the dev shell. justfile: keep `test` (`uv run pytest`), `check` (`uv run ruff check . && uv run ruff format --check .`), `fmt` (`uv run ruff format . && uv run ruff check --fix .`); delete `run`/`dev`/`logs`/`store-op-token`.
 
-* [ ] **Step 5: Stub README.md and AGENTS.md** - three lines each stating: contact-sync consolidates contact sources into life-data via ad-hoc runs driven by the contacts-review skill; spec under `docs/superpowers/specs/`; full docs land in Task 14. (Current-state only; no history notes.)
+* [ ] **Step 5: Stub README.md and AGENTS.md** - three lines each stating: people-sync consolidates contact sources into life-data via ad-hoc runs driven by the people-review skill; spec under `docs/superpowers/specs/`; full docs land in Task 14. (Current-state only; no history notes.)
 
 * [ ] **Step 6: Verify empty suite + lint pass**
 
@@ -71,11 +71,11 @@ Expected: pytest exits 5 (no tests collected) or 0; ruff clean.
 * [ ] **Step 7: Commit, then rename repo and directory**
 
 ```Shell
-git add -A && git commit -m "Strip to contact-sync skeleton: delete legacy parsers, Notion writers, launchd machinery"
-gh repo rename contact-sync --repo alexjmiller5/notion-contact-sync --yes
-cd ~/Desktop/coding/active-projects && mv notion-contact-sync contact-sync && cd contact-sync
-git remote set-url origin https://github.com/alexjmiller5/contact-sync.git
-gh repo edit alexjmiller5/contact-sync --description "Consolidates every contact source (Apple, Google, Instagram, Snapchat, LinkedIn, Facebook) into the life-data people estate via ad-hoc agent-driven review runs"
+git add -A && git commit -m "Strip to people-sync skeleton: delete legacy parsers, Notion writers, launchd machinery"
+gh repo rename people-sync --repo alexjmiller5/notion-people-sync --yes
+cd ~/Desktop/coding/active-projects && mv notion-people-sync people-sync && cd people-sync
+git remote set-url origin https://github.com/alexjmiller5/people-sync.git
+gh repo edit alexjmiller5/people-sync --description "Consolidates every contact source (Apple, Google, Instagram, Snapchat, LinkedIn, Facebook) into the life-data people estate via ad-hoc agent-driven review runs"
 ```
 
 Then follow the `repo-metadata` skill for topics, and update the `projects` skill row for this repo (path + name + description).
@@ -86,7 +86,7 @@ Then follow the `repo-metadata` skill for topics, and update the `projects` skil
 
 **Files:**
 
-* Create: `src/contact_sync/lifedata.py`
+* Create: `src/people_sync/lifedata.py`
 * Test: `tests/test_lifedata.py`
 
 **Interfaces:**
@@ -102,7 +102,7 @@ Then follow the `repo-metadata` skill for topics, and update the `projects` skil
 ```Python
 import json
 import subprocess
-from contact_sync import lifedata
+from people_sync import lifedata
 
 def test_sql_parses_json(mocker):
     mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess(
@@ -119,9 +119,9 @@ def test_sql_raises_on_error(mocker):
 def test_insert_pipes_rows(mocker):
     run = mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess(
         args=[], returncode=0, stdout="", stderr=""))
-    lifedata.insert("contact_records", [{"id": "x:1"}])
+    lifedata.insert("people_sync_records", [{"id": "x:1"}])
     assert run.call_args.kwargs["input"] == json.dumps([{"id": "x:1"}])
-    assert run.call_args.args[0][:3] == ["life", "insert", "contact_records"]
+    assert run.call_args.args[0][:3] == ["life", "insert", "people_sync_records"]
 
 def test_insert_empty_is_noop(mocker):
     run = mocker.patch("subprocess.run")
@@ -180,7 +180,7 @@ def now_iso() -> str:
 
 * [ ] **Step 5: Mutation-check** - temporarily break `sq` (drop the doubling), confirm `test_sq_escapes` fails, restore.
 
-* [ ] **Step 6: Commit** - `git add src/contact_sync/lifedata.py tests/test_lifedata.py && git commit -m "feat: life CLI wrapper (sql/insert/escape/timestamps)"`
+* [ ] **Step 6: Commit** - `git add src/people_sync/lifedata.py tests/test_lifedata.py && git commit -m "feat: life CLI wrapper (sql/insert/escape/timestamps)"`
 
 ### Task 3: Backup + schema creation (direct ops, no repo code)
 
@@ -188,7 +188,7 @@ def now_iso() -> str:
 
 **Interfaces:**
 
-* Produces: tables `person_accounts`, `contact_records`, `person_locations`, `person_employments`, `person_photos`; people columns `circles`, `notes`, `notify_birthday`. Backup file for rollback.
+* Produces: tables `person_accounts`, `people_sync_records`, `person_locations`, `person_employments`, `person_photos`; people columns `circles`, `notes`, `notify_birthday`. Backup file for rollback.
 
 * [ ] **Step 1: Backup** - `life export > ~/Documents/manual-backups/life-data-pre-people-rework-$(date +%Y%m%d).sql` and verify the file is non-trivial (`wc -c` > 100KB).
 
@@ -196,7 +196,7 @@ def now_iso() -> str:
 
 ```Shell
 life table create person_accounts person_id:text platform:text handle:text url:text source_id:text display_name:text active:integer notes:text
-life table create contact_records source:text source_id:text handle:text name:text raw:text follows_me:integer i_follow:integer status:text person_id:text suggested_person_id:text first_seen:text last_seen:text
+life table create people_sync_records source:text source_id:text handle:text name:text raw:text follows_me:integer i_follow:integer status:text person_id:text suggested_person_id:text first_seen:text last_seen:text
 life table create person_locations person_id:text city:text country:text start:text end:text source:text notes:text
 life table create person_employments person_id:text company:text title:text start:text end:text source:text notes:text
 life table create person_photos person_id:text platform:text r2_key:text sha256:text fetched_at:text notes:text
@@ -212,7 +212,7 @@ life sql "ALTER TABLE people ADD COLUMN notes TEXT"
 life sql "ALTER TABLE people ADD COLUMN notify_birthday INTEGER"
 ```
 
-* [ ] **Step 4: Verify + sync** - `life sql "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'person_%' OR name='contact_records'"` lists all five; `life sync` reports ddl\_applied pushed. Column drops happen later (Tasks 5-6), only after their migrations verify.
+* [ ] **Step 4: Verify + sync** - `life sql "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'person_%' OR name='people_sync_records'"` lists all five; `life sync` reports ddl\_applied pushed. Column drops happen later (Tasks 5-6), only after their migrations verify.
 
 ### Task 4: Notion drift reconcile + notify\_birthday migration — INTERACTIVE
 
@@ -298,7 +298,7 @@ print(f"{len(pages)} pages")
 
 ```Python
 """One-off: move flat handle columns into person_accounts, keeping source values verbatim."""
-from contact_sync import lifedata
+from people_sync import lifedata
 
 COLS = {  # people column -> (platform, which field the value fills)
     "instagram": ("instagram", "url"),
@@ -369,7 +369,7 @@ import json
 import pathlib
 import sys
 from collections import defaultdict
-from contact_sync import lifedata
+from people_sync import lifedata
 
 WS = pathlib.Path("data/circles_worksheet.json")
 DEC = pathlib.Path("data/circles_decisions.json")
@@ -462,7 +462,7 @@ life sync
 
 **Files:**
 
-* Create: `src/contact_sync/ledger.py`
+* Create: `src/people_sync/ledger.py`
 * Test: `tests/test_ledger.py`
 
 **Interfaces:**
@@ -475,16 +475,16 @@ life sync
 
 ```Python
 import json
-from contact_sync.ledger import Record, upsert
+from people_sync.ledger import Record, upsert
 
 def rec(sid="alice123"):
     return Record(source="instagram", source_id=sid, handle=sid, name=None,
                   raw={"value": sid}, follows_me=1, i_follow=None)
 
 def test_new_record_inserted_pending(mocker):
-    mocker.patch("contact_sync.lifedata.sql", return_value=[])  # nothing exists
-    ins = mocker.patch("contact_sync.lifedata.insert")
-    mocker.patch("contact_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    mocker.patch("people_sync.lifedata.sql", return_value=[])  # nothing exists
+    ins = mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
     out = upsert([rec()])
     row = ins.call_args.args[1][0]
     assert row["id"] == "instagram:alice123"
@@ -494,17 +494,17 @@ def test_new_record_inserted_pending(mocker):
     assert out == {"new": 1, "updated": 0}
 
 def test_existing_record_updates_not_status(mocker):
-    sql = mocker.patch("contact_sync.lifedata.sql",
+    sql = mocker.patch("people_sync.lifedata.sql",
                        return_value=[{"id": "instagram:alice123"}])
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    ins = mocker.patch("people_sync.lifedata.insert")
     upsert([rec()])
     ins.assert_not_called()
     update = sql.call_args.args[0]
     assert "last_seen" in update and "status" not in update and "first_seen" not in update
 
 def test_double_upsert_idempotent_counts(mocker):
-    mocker.patch("contact_sync.lifedata.insert")
-    mocker.patch("contact_sync.lifedata.sql", side_effect=[
+    mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.sql", side_effect=[
         [], [{"id": "instagram:alice123"}], []])
     assert upsert([rec()]) == {"new": 1, "updated": 0}
     assert upsert([rec()]) == {"new": 0, "updated": 1}
@@ -515,10 +515,10 @@ def test_double_upsert_idempotent_counts(mocker):
 * [ ] **Step 3: Implement**
 
 ```Python
-"""contact_records resolution ledger - idempotent upserts."""
+"""people_sync_records resolution ledger - idempotent upserts."""
 import json
 from dataclasses import dataclass
-from contact_sync import lifedata
+from people_sync import lifedata
 
 
 @dataclass
@@ -545,14 +545,14 @@ def upsert(records: list[Record]) -> dict:
         return {"new": 0, "updated": 0}
     ids = ",".join(lifedata.sq(r.row_id) for r in records)
     existing = {row["id"] for row in lifedata.sql(
-        f"SELECT id FROM contact_records WHERE id IN ({ids})")}
+        f"SELECT id FROM people_sync_records WHERE id IN ({ids})")}
     now = lifedata.now_iso()
     new_rows = []
     updated = 0
     for r in records:
         if r.row_id in existing:
             lifedata.sql(
-                "UPDATE contact_records SET "
+                "UPDATE people_sync_records SET "
                 f"handle = {lifedata.sq(r.handle)}, name = {lifedata.sq(r.name)}, "
                 f"raw = {lifedata.sq(json.dumps(r.raw))}, "
                 f"follows_me = {_int_sql(r.follows_me)}, i_follow = {_int_sql(r.i_follow)}, "
@@ -566,19 +566,19 @@ def upsert(records: list[Record]) -> dict:
                 "follows_me": r.follows_me, "i_follow": r.i_follow,
                 "status": "pending", "person_id": None, "suggested_person_id": None,
                 "first_seen": now, "last_seen": now})
-    lifedata.insert("contact_records", new_rows)
+    lifedata.insert("people_sync_records", new_rows)
     return {"new": len(new_rows), "updated": updated}
 ```
 
 * [ ] **Step 4: Verify pass**, mutation-check (make `upsert` always insert; `test_existing_record_updates_not_status` must fail; restore).
 
-* [ ] **Step 5: Commit** - `git commit -m "feat: contact_records ledger upsert"` (with both files added).
+* [ ] **Step 5: Commit** - `git commit -m "feat: people_sync_records ledger upsert"` (with both files added).
 
 ### Task 8: Export parsers - Instagram, Facebook, Snapchat, LinkedIn
 
 **Files:**
 
-* Create: `src/contact_sync/parsers.py`
+* Create: `src/people_sync/parsers.py`
 * Test: `tests/test_parsers.py`, `tests/fixtures/` (synthetic files: `ig_followers.json`, `ig_following.json`, `fb_friends.json`, `snap_friends.json`, `linkedin_connections.csv`)
 
 **Interfaces:**
@@ -603,7 +603,7 @@ Record the actual shapes in a comment atop `parsers.py`. Adjust the interfaces a
 * [ ] **Step 3: Failing tests** - one per parser asserting: record count, source/source\_id/handle/name mapping, follows flags (IG user present in both files → `follows_me=1, i_follow=1`; only followers → `i_follow=None` or 0 per your Step 1 finding - pick one and test it), LinkedIn preamble skipped, raw preserves the source dict verbatim.
 
 ```Python
-from contact_sync import parsers
+from people_sync import parsers
 
 FIX = "tests/fixtures"
 
@@ -629,13 +629,13 @@ def test_linkedin_skips_preamble_and_slugs():
 
 * [ ] **Step 5: Smoke against the REAL files** - `uv run python -c` one-liner per parser printing `len()` on the real June-2025 exports: expect IG ≈ 1162 followers ∪ 1584 following merged, FB ≈ 375, LinkedIn ≈ 690. Mismatch by >5% = investigate before continuing.
 
-* [ ] **Step 6: Commit** - `git add src/contact_sync/parsers.py tests/test_parsers.py tests/fixtures && git commit -m "feat: export parsers (instagram, facebook, snapchat, linkedin)"`
+* [ ] **Step 6: Commit** - `git add src/people_sync/parsers.py tests/test_parsers.py tests/fixtures && git commit -m "feat: export parsers (instagram, facebook, snapchat, linkedin)"`
 
 ### Task 9: Google + Apple source ingests
 
 **Files:**
 
-* Create: `src/contact_sync/sources.py`
+* Create: `src/people_sync/sources.py`
 * Test: `tests/test_sources.py`
 
 **Interfaces:**
@@ -658,19 +658,19 @@ def test_linkedin_skips_preamble_and_slugs():
 
 **Files:**
 
-* Create: `src/contact_sync/match.py`
+* Create: `src/people_sync/match.py`
 * Test: `tests/test_match.py`
 
 **Interfaces:**
 
 * Consumes: `lifedata`, ledger rows (`status='pending'`), people rows.
 
-* Produces: `normalize(s: str) -> str` (casefold, NFKD-strip accents, drop non-letters, collapse spaces); `letters(s: str) -> str` (normalize then remove spaces); `run_match() -> dict` returning `{"auto": int, "suggested": int, "left_pending": int}`. Auto-link rule (all must hold): exactly one person's variant set matches the record exactly, exactly one pending record matches that person, the matched person name has ≥2 words. Auto-link writes: `contact_records.status='matched'`, `person_id`; plus a `person_accounts` row (`id=f"{platform}:{person_id}:{handle or source_id}"`, active=1, url from raw where present). Handle-only sources (instagram) compare `letters(handle)` against `letters(variant)`. Single fuzzy candidate → `suggested_person_id` only, stays pending.
+* Produces: `normalize(s: str) -> str` (casefold, NFKD-strip accents, drop non-letters, collapse spaces); `letters(s: str) -> str` (normalize then remove spaces); `run_match() -> dict` returning `{"auto": int, "suggested": int, "left_pending": int}`. Auto-link rule (all must hold): exactly one person's variant set matches the record exactly, exactly one pending record matches that person, the matched person name has ≥2 words. Auto-link writes: `people_sync_records.status='matched'`, `person_id`; plus a `person_accounts` row (`id=f"{platform}:{person_id}:{handle or source_id}"`, active=1, url from raw where present). Handle-only sources (instagram) compare `letters(handle)` against `letters(variant)`. Single fuzzy candidate → `suggested_person_id` only, stays pending.
 
 * [ ] **Step 1: Failing tests**
 
 ```Python
-from contact_sync.match import normalize, letters
+from people_sync.match import normalize, letters
 
 def test_normalize():
     assert normalize("  José  O'Brien-2 ") == "jose obrien"
@@ -702,7 +702,7 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 **Files:**
 
-* Create: `src/contact_sync/photos.py`
+* Create: `src/people_sync/photos.py`
 * Test: `tests/test_photos.py`
 * Modify: `.env.tpl` (add R2 credential refs - names, not IDs: it's a bootstrap manifest)
 
@@ -726,14 +726,14 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 **Files:**
 
-* Create: `src/contact_sync/cli.py`, `src/contact_sync/notion_people.py`, `src/contact_sync/__main__.py`
+* Create: `src/people_sync/cli.py`, `src/people_sync/notion_people.py`, `src/people_sync/__main__.py`
 * Test: `tests/test_cli.py`, `tests/test_notion_people.py`
 
 **Interfaces:**
 
 * Consumes: everything above.
 
-* Produces: `uv run python -m contact_sync <cmd>`:
+* Produces: `uv run python -m people_sync <cmd>`:
   * `ingest instagram|facebook|snapchat|linkedin --path <file-or-dir>` / `ingest google` / `ingest apple` → parser/source → `ledger.upsert`, prints the `{"new","updated"}` JSON
   * `match` → `run_match()`, prints its JSON
   * `queue` → prints pending records as JSON (id, source, handle, name, suggested\_person\_id, suggested person's name) for Claude's triage
@@ -742,13 +742,13 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 * Tests: argparse dispatch (mock the underlying functions, assert called with parsed args); `create_stub` mocked-httpx test asserting the POST body and the dash-strip.
 
-* [ ] **Step 1: Failing tests → Step 2: implement (argparse, \~60 lines) → Step 3: pass → Step 4: commit** `git commit -m "feat: contact_sync CLI (ingest/match/queue/new-person)"` (files added). Follow the exact TDD loop of Tasks 7-10; every subcommand's happy path has a test.
+* [ ] **Step 1: Failing tests → Step 2: implement (argparse, \~60 lines) → Step 3: pass → Step 4: commit** `git commit -m "feat: people_sync CLI (ingest/match/queue/new-person)"` (files added). Follow the exact TDD loop of Tasks 7-10; every subcommand's happy path has a test.
 
-### Task 13: contacts-review skill + Google write-back — INTERACTIVE finish
+### Task 13: people-review skill + Google write-back — INTERACTIVE finish
 
 **Files:**
 
-* Create: `~/.config/agent-config/skills/contacts-review/SKILL.md` (private - it references Alex's estate)
+* Create: `~/.config/agent-config/skills/people-review/SKILL.md` (private - it references Alex's estate)
 * Create: `scripts/google_cleanup.py` (in this repo)
 
 **Interfaces:**
@@ -762,7 +762,7 @@ def test_exact_unique_automatch_writes_account(mocker):
 * [ ] **Step 2: Write the skill.** SKILL.md frontmatter description triggers on "contacts review", "triage my contacts/followers", "sync my people". Body sections, in run order:
   1. Per-platform export refresh click-ops (moved from this repo's old README, verified current during Task 8's real-file inspection); stale/missing export = skip source, never block.
   2. The exact ingest/match/queue commands.
-  3. Triage conventions: work `queue` output grouped suggested-first; per item the three verbs (match → `UPDATE contact_records SET status='matched', person_id=... `     + `person_accounts` row; new → `new-person` then match; ignore → `status='ignored'`); circles vocabulary is governed here - new circle names need Alex's word, renames are estate-wide UPDATEs.
+  3. Triage conventions: work `queue` output grouped suggested-first; per item the three verbs (match → `UPDATE people_sync_records SET status='matched', person_id=... `     + `person_accounts` row; new → `new-person` then match; ignore → `status='ignored'`); circles vocabulary is governed here - new circle names need Alex's word, renames are estate-wide UPDATEs.
   4. Apple→Google port procedure (create in Google via gog from the Apple record, link both accounts).
   5. Google boundary + `google_cleanup.py --dry-run` then `--apply` with Alex watching.
   6. Photos step - the spec's capture policy verbatim: EVERY person\_accounts row on EVERY platform with a profile picture gets captured. API platforms (google\_contacts, apple\_contacts, spotify) via `photos fetch`; browser-only platforms (instagram, facebook, linkedin, whatsapp, partiful, anything future) scraped via chrome-control and stored with `photos store`. New/changed accounts every run; periodic full re-sweeps; sha dedupe makes unchanged pics free.
@@ -772,14 +772,14 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 * [ ] **Step 4: Commit** both repos - this repo: `git commit -m "feat: google write-back cleanup script"`; agent-config gets the skill committed per its own conventions.
 
-### Task 14: First real contacts-review run (E2E) — INTERACTIVE
+### Task 14: First real people-review run (E2E) — INTERACTIVE
 
 **Files:** none (this is the E2E test); README/AGENTS updated after.
 
 * [ ] **Step 1: Alex refreshes exports** - fresh IG/FB/Snap/LinkedIn downloads per the skill's procedures (Snapchat especially - none exists on disk). Whatever isn't refreshed gets skipped, per the skill.
 * [ ] **Step 2: Run the full skill flow live** - ingests (all sources), match, triage session, Apple→Google port, cleanup dry-run→apply, photos, sweep, sync. This is the acceptance test for the whole project; every defect found is fixed with a test before the run is called done.
 * [ ] **Step 3: Verify the birthday payoff** - `life sql "SELECT count(*) FROM people WHERE deleted_at IS NULL AND birthday IS NOT NULL"` - report before (24) vs after to Alex.
-* [ ] **Step 4: Rewrite README.md + AGENTS.md fully** (current state only: what the repo is, layout, commands, manual TCC/export steps, .env.tpl notes) and commit: `git commit -m "docs: rewrite README/AGENTS for contact-sync"`.
+* [ ] **Step 4: Rewrite README.md + AGENTS.md fully** (current state only: what the repo is, layout, commands, manual TCC/export steps, .env.tpl notes) and commit: `git commit -m "docs: rewrite README/AGENTS for people-sync"`.
 
 ### Task 15: Estate docs, task consolidation, memory — INTERACTIVE
 
@@ -787,17 +787,17 @@ def test_exact_unique_automatch_writes_account(mocker):
 
 * Modify: `~/.claude/skills/life-map/SKILL.md`, `~/.claude/skills/notion-workspace/SKILL.md` (+ its references/workspace-map.md People section), `~/.claude/skills/projects/SKILL.md`
 
-* Create: memory file `project_contact_sync.md` (+ MEMORY.md line)
+* Create: memory file `project_people_sync.md` (+ MEMORY.md line)
 
 * [ ] **Step 1: life-map** - replace the people section (new schema, counts from live queries, conventions: id invariant, circles governance, ledger semantics) and add person\_accounts/contact\_records/person\_locations/person\_employments/person\_photos sections + the friend\_locations stream contract under a "designed, not yet live" note. Bump last-verified.
 
 * [ ] **Step 2: notion-workspace** - People DB entry: frozen relation-anchor, stub-page convention, notify\_birthday superseded note. Remove stale claims (e.g. tags-absorb note).
 
-* [ ] **Step 3: projects skill** - rename row to contact-sync, update description/path.
+* [ ] **Step 3: projects skill** - rename row to people-sync, update description/path.
 
-* [ ] **Step 4: Notion task consolidation with Alex** - walk the 17 project tasks; propose per-task: absorbed-by-design → Completed, superseded → Completed with a one-line Notes pointer, contradicted (mute-status realtime sync) → Cancel?, still-open content work (Empire note import, WhatsApp pictures) → keep. **Alex confirms each status change; none are made unilaterally.** Also update the Contact Sync project Notes page to point at the spec.
+* [ ] **Step 4: Notion task consolidation with Alex** - walk the 17 project tasks; propose per-task: absorbed-by-design → Completed, superseded → Completed with a one-line Notes pointer, contradicted (mute-status realtime sync) → Cancel?, still-open content work (Empire note import, WhatsApp pictures) → keep. **Alex confirms each status change; none are made unilaterally.** Also update the People Sync project Notes page to point at the spec.
 
-* [ ] **Step 5: Memory** - write `project_contact_sync.md` (shipped state, birthday-reminders migration still pending with spec-section pointer, Snapchat/WhatsApp caveats) + index line; update `project_birthday_reminders.md` to note the pending life-data repoint guidance.
+* [ ] **Step 5: Memory** - write `project_people_sync.md` (shipped state, birthday-reminders migration still pending with spec-section pointer, Snapchat/WhatsApp caveats) + index line; update `project_birthday_reminders.md` to note the pending life-data repoint guidance.
 
 ***
 

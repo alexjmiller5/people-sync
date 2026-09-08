@@ -39,7 +39,7 @@ import subprocess
 
 import structlog
 
-from contact_sync.ledger import Record
+from people_sync.ledger import Record
 
 log = structlog.get_logger(__name__)
 

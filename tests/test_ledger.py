@@ -1,6 +1,6 @@
 import json
 
-from contact_sync.ledger import Record, upsert
+from people_sync.ledger import Record, upsert
 
 
 def rec(sid="alice123"):
@@ -16,9 +16,9 @@ def rec(sid="alice123"):
 
 
 def test_new_record_inserted_pending(mocker):
-    mocker.patch("contact_sync.lifedata.sql", return_value=[])  # nothing exists
-    ins = mocker.patch("contact_sync.lifedata.insert")
-    mocker.patch("contact_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    mocker.patch("people_sync.lifedata.sql", return_value=[])  # nothing exists
+    ins = mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
     out = upsert([rec()])
     row = ins.call_args.args[1][0]
     assert row["id"] == "instagram:alice123"
@@ -29,8 +29,8 @@ def test_new_record_inserted_pending(mocker):
 
 
 def test_existing_record_updates_not_status(mocker):
-    sql = mocker.patch("contact_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
+    ins = mocker.patch("people_sync.lifedata.insert")
     upsert([rec()])
     ins.assert_not_called()
     update = sql.call_args.args[0]
@@ -38,9 +38,9 @@ def test_existing_record_updates_not_status(mocker):
 
 
 def test_double_upsert_idempotent_counts(mocker):
-    mocker.patch("contact_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.insert")
     mocker.patch(
-        "contact_sync.lifedata.sql",
+        "people_sync.lifedata.sql",
         side_effect=[[], [{"id": "instagram:alice123"}], []],
     )
     assert upsert([rec()]) == {"new": 1, "updated": 0}
@@ -52,10 +52,10 @@ def test_duplicate_ids_within_batch_collapse(mocker):
     same row_id twice; a batch must insert it once, not violate the UNIQUE constraint.
     The LAST occurrence wins, and the collapse is logged because it silently drops a
     person from the queue."""
-    mocker.patch("contact_sync.lifedata.sql", return_value=[])
-    ins = mocker.patch("contact_sync.lifedata.insert")
-    mocker.patch("contact_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
-    log = mocker.patch("contact_sync.ledger.log")
+    mocker.patch("people_sync.lifedata.sql", return_value=[])
+    ins = mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    log = mocker.patch("people_sync.ledger.log")
 
     first, second = rec(), rec()
     first.name = "First Seen"
@@ -75,9 +75,9 @@ def test_duplicate_ids_within_batch_collapse(mocker):
 
 
 def test_no_warning_when_batch_has_no_duplicates(mocker):
-    mocker.patch("contact_sync.lifedata.sql", return_value=[])
-    mocker.patch("contact_sync.lifedata.insert")
-    mocker.patch("contact_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
-    log = mocker.patch("contact_sync.ledger.log")
+    mocker.patch("people_sync.lifedata.sql", return_value=[])
+    mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    log = mocker.patch("people_sync.ledger.log")
     upsert([rec(), rec("bob456")])
     log.warning.assert_not_called()

@@ -14,7 +14,7 @@ one-time-code flows - the credential command's `password` is ignored and the
 code step does the signing in.
 """
 
-from contact_sync.scrape.login import LoginSpec
+from people_sync.scrape.login import LoginSpec
 
 SPECS: dict[str, LoginSpec] = {
     "instagram": LoginSpec(

@@ -1,4 +1,4 @@
-# contact-sync
+# people-sync
 
 Consolidates every source where you know people - Instagram, Facebook,
 Snapchat, LinkedIn, Google Contacts, Apple Contacts - into a single
@@ -9,7 +9,7 @@ monthly. The deterministic half of a run lives here - parsing exports,
 upserting the resolution ledger, conservative auto-matching, hashing and
 storing profile photos. The judgment half - who a new handle actually is,
 which circle they belong to, whether to ignore them - is a conversation with
-an agent driving this CLI. That workflow is the `contacts-review` skill; this
+an agent driving this CLI. That workflow is the `people-review` skill; this
 repo is what it calls.
 
 ## Install
@@ -19,12 +19,12 @@ uv sync
 ```
 
 The package is built with hatchling and installs editable into the project
-venv, so `uv run python -m contact_sync ...` works from the repo root.
+venv, so `uv run python -m people_sync ...` works from the repo root.
 
 To run the profile scraper unattended on a Mac, the flake also exposes
-`packages.<system>.default` (the `contact-sync` CLI, packaged with plain
+`packages.<system>.default` (the `people-sync` CLI, packaged with plain
 `buildPythonApplication`) and `darwinModules.default`, a
-`services.contact-sync-scrape` nix-darwin module that runs it as a declared
+`services.people-sync-scrape` nix-darwin module that runs it as a declared
 launchd agent - each platform gets its own headed Chrome profile and debug
 port, on a schedule, with no manual setup beyond enabling the option. See
 "Installing on a Mac" in AGENTS.md for the module's options and an example.
@@ -41,7 +41,7 @@ Runtime dependencies outside Python:
 ## Commands
 
 ```
-uv run python -m contact_sync <command>
+uv run python -m people_sync <command>
 ```
 
 | Command | What it does |
@@ -64,7 +64,7 @@ so a partial run is always safe to repeat.
 
 ## The ledger
 
-`contact_records` holds one row per `(source, source_id)` ever seen, keyed
+`people_sync_records` holds one row per `(source, source_id)` ever seen, keyed
 `<source>:<source_id>`, with a status of `pending`, `matched`, or `ignored`.
 That memory is what makes runs incremental: a `matched` record is never
 re-asked and an `ignored` one never resurfaces, so a monthly run only ever
@@ -92,7 +92,7 @@ These cannot be codified:
   LinkedIn only hand out contact lists through a click-ops request flow, and
   the archives take minutes (Meta) to a day (LinkedIn) to arrive. The exact
   per-platform procedure and where each file lands is in the
-  `contacts-review` skill. A missing or stale export skips that source for
+  `people-review` skill. A missing or stale export skips that source for
   the run; it never blocks it.
 - **Full Disk Access for `ingest apple`.** The first read of the Apple
   Contacts databases triggers a macOS TCC prompt; the invoking terminal needs
@@ -114,7 +114,7 @@ only and no plaintext:
 Run anything that needs them through 1Password:
 
 ```bash
-op run --env-file=.env.tpl -- uv run python -m contact_sync <command>
+op run --env-file=.env.tpl -- uv run python -m people_sync <command>
 ```
 
 `CF_R2_BUCKET` optionally overrides the destination bucket for photos.

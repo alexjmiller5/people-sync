@@ -1,6 +1,6 @@
 """One-off: move flat handle columns into person_accounts, keeping source values verbatim."""
 
-from contact_sync import lifedata
+from people_sync import lifedata
 
 COLS = {  # people column -> (platform, which field the value fills)
     "instagram": ("instagram", "url"),

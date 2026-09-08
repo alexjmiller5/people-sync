@@ -1,5 +1,5 @@
-"""CDP harness against Alex's real, logged-in Chrome (Tier 2 of the
-chrome-control skill).
+"""CDP harness against a real, already-running Chrome, driven over its
+remote-debugging port.
 
 Runs its own asyncio event loop on a background thread so the websocket
 connection stays open across calls (one "Allow" click per run), while the
@@ -43,16 +43,15 @@ DEVTOOLS_ACTIVE_PORT = Path(
 
 # Endpoint resolution (R1): explicit endpoint (arg or env) > explicit data
 # dir (arg or env) > Chrome's default data dir above.
-CDP_ENDPOINT_ENV = "CONTACT_SYNC_CDP_ENDPOINT"
-CHROME_DATA_DIR_ENV = "CONTACT_SYNC_CHROME_DATA_DIR"
+CDP_ENDPOINT_ENV = "PEOPLE_SYNC_CDP_ENDPOINT"
+CHROME_DATA_DIR_ENV = "PEOPLE_SYNC_CHROME_DATA_DIR"
 JSON_VERSION_TIMEOUT = 5.0
 
 HANDSHAKE_TIMEOUT = 30.0
 ALLOW_HINT = "click Allow in the Chrome remote-debugging dialog"
 
-# Trusted input (Input.dispatchKeyEvent / Input.dispatchMouseEvent - the
-# chrome-control skill's "trusted" tier: the page sees isTrusted events,
-# unlike anything dispatched from Runtime.evaluate).
+# Trusted input (Input.dispatchKeyEvent / Input.dispatchMouseEvent: the page
+# sees isTrusted events, unlike anything dispatched from Runtime.evaluate).
 TYPE_JITTER_MS = (80, 200)
 CLICK_JITTER_PX = 3
 WAIT_POLL_S = 0.5
@@ -113,7 +112,7 @@ def _ws_url_from_data_dir(data_dir: str | Path) -> str:
 def _no_data_dir_message(endpoint: str, reason: str) -> str:
     return (
         f"{reason} and no data dir was given to fall back to DevToolsActivePort - "
-        "pass data_dir or set CONTACT_SYNC_CHROME_DATA_DIR, or point endpoint at a "
+        "pass data_dir or set PEOPLE_SYNC_CHROME_DATA_DIR, or point endpoint at a "
         "Chrome started with a dedicated --user-data-dir (no approval dialog, "
         "/json/version works there)"
     )

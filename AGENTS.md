@@ -3,17 +3,17 @@
 Python CLI that consolidates contact sources (Instagram, Facebook, Snapchat,
 LinkedIn, Google Contacts, Apple Contacts) into the life-data people estate.
 No daemon, no cron: it is run ad hoc, roughly monthly, by an agent working
-through the `contacts-review` skill. That skill is the runbook (procedures,
+through the `people-review` skill. That skill is the runbook (procedures,
 triage, sweeps); this file is how to work on the code.
 
 ## Layout
 
 ```
-src/contact_sync/
+src/people_sync/
   cli.py           argparse surface: ingest / match / queue / new-person / scrape /
                    login / photos store
   lifedata.py      the ONLY life-data write path (shells out to the `life` CLI)
-  ledger.py        contact_records upserts, keyed <source>:<source_id>
+  ledger.py        people_sync_records upserts, keyed <source>:<source_id>
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
   sources.py       google (via gog) and apple (local AddressBook sqlite) ingests
   match.py         conservative auto-linker
@@ -24,21 +24,21 @@ src/contact_sync/
                    (login.py) with its selector table (login_specs.py)
 tests/             pytest, synthetic fixtures only
 scripts/           reconcile.py (triage link/merge/create), one-off migrations,
-                   the Google write-back cleanup, contact-sync-agent (the
+                   the Google write-back cleanup, people-sync-agent (the
                    packaged launchd runner, see "Installing on a Mac")
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
 flake.nix          packages.default (the CLI) + darwinModules.default
                    (the launchd agent module)
-nix/darwin.nix     services.contact-sync-scrape - see "Installing on a Mac"
+nix/darwin.nix     services.people-sync-scrape - see "Installing on a Mac"
 ```
 
 ## Installing on a Mac
 
-`flake.nix` exposes `packages.<system>.default` (the `contact-sync` CLI,
+`flake.nix` exposes `packages.<system>.default` (the `people-sync` CLI,
 built with plain `buildPythonApplication` - all three runtime deps ship as
 nixpkgs `python313Packages`, so no uv2nix machinery is needed) and
-`darwinModules.default`, a `services.contact-sync-scrape` nix-darwin module
+`darwinModules.default`, a `services.people-sync-scrape` nix-darwin module
 for running the profile scraper (R4+ of the profile-scraping plan) as a
 declared launchd user agent.
 
@@ -46,23 +46,23 @@ The module is a thin options-to-environment translator: it launches each
 platform's dedicated, headed Chrome (its own `--user-data-dir` and
 `--remote-debugging-port`, no signed `.app` bundle - this job never touches
 TCC-protected data, unlike the FDA-gated jobs this shape is usually mirrored
-from), signs it in (`contact-sync login <platform>`, idempotent - see
-"Logins"), and runs `contact-sync scrape <platform>` against it on a
-schedule. All actual behavior lives in `bin/contact-sync-agent`, which ships
+from), signs it in (`people-sync login <platform>`, idempotent - see
+"Logins"), and runs `people-sync scrape <platform>` against it on a
+schedule. All actual behavior lives in `bin/people-sync-agent`, which ships
 as part of the package.
 
 Consume it from another flake (e.g. a nix-config host):
 
 ```nix
 {
-  inputs.contact-sync.url = "github:<owner>/contact-sync";
+  inputs.people-sync.url = "github:<owner>/people-sync";
 
-  outputs = { contact-sync, ... }: {
+  outputs = { people-sync, ... }: {
     darwinConfigurations.somehost = darwinSystem {
       modules = [
-        contact-sync.darwinModules.default
+        people-sync.darwinModules.default
         {
-          services.contact-sync-scrape = {
+          services.people-sync-scrape = {
             enable = true;
             user = "someuser";
             # Commands the scraper runs to obtain a login credential JSON /
@@ -80,8 +80,8 @@ Consume it from another flake (e.g. a nix-config host):
 
 `platforms`, `dailyCaps`, `stateDir`, `profileDir`, `basePort`, `chromePath`,
 and `schedule` all have generic defaults; override what your setup needs.
-`dailyCaps` is wired through as `CONTACT_SYNC_DAILY_CAPS` (JSON) but
-`contact_sync.scrape.pace` doesn't read it yet - it still uses its own
+`dailyCaps` is wired through as `PEOPLE_SYNC_DAILY_CAPS` (JSON) but
+`people_sync.scrape.pace` doesn't read it yet - it still uses its own
 built-in per-platform caps, so the option is a forward-compatible hook, not
 yet load-bearing.
 
@@ -91,7 +91,7 @@ darwin module, since there's no nix-darwin flake input to build a full
 
 ## Logins
 
-`contact-sync login <platform>` signs that platform's dedicated Chrome
+`people-sync login <platform>` signs that platform's dedicated Chrome
 profile in, over CDP, at human pace: trusted per-key events (real `code`,
 Shift modifier, `Input.insertText` only for a character no US key produces)
 with 80-200 ms jitter, 300-900 ms pauses between fields, a mouse move then a
@@ -117,9 +117,9 @@ profile as signed out.
 Credentials never live in this repo or its config. Three commands supply
 them; each gets the platform as `$1` and prints to stdout:
 
-- `CONTACT_SYNC_CREDENTIAL_COMMAND` - `{"username": ..., "password": ..., "totp": ...}`
-- `CONTACT_SYNC_EMAIL_CODE_COMMAND` - the newest one-time code from email
-- `CONTACT_SYNC_SMS_CODE_COMMAND` - the newest one-time code from SMS
+- `PEOPLE_SYNC_CREDENTIAL_COMMAND` - `{"username": ..., "password": ..., "totp": ...}`
+- `PEOPLE_SYNC_EMAIL_CODE_COMMAND` - the newest one-time code from email
+- `PEOPLE_SYNC_SMS_CODE_COMMAND` - the newest one-time code from SMS
 
 The product never knows what those commands do, and must not learn: no
 credential store, no vault, no path from any machine belongs in this code.
@@ -162,6 +162,14 @@ rather than typing into the wrong field.
 
 ## Write path
 
+**`people_sync_records` and `people_sync_profiles` are this project's own
+tables, not the `people` table.** The `people_sync_` prefix is the project
+name (People Sync): `people_sync_records` is the ingest/resolution ledger and
+`people_sync_profiles` the scraped-profile cache. `people` is the life-data
+person table they resolve INTO, keyed by Notion page id. Never read one
+expecting the other, and note that `FROM people` is a prefix of
+`FROM people_sync_records` - match table names on a word boundary.
+
 **Every life-data write goes through `lifedata.py`, which shells out to the
 `life` CLI. Never open `life.db` with sqlite directly** - the hub's sync
 depends on the CLI's bookkeeping, and a raw write is invisible to it. Soft
@@ -182,7 +190,7 @@ id.
 
 ## Triage reconcile (`scripts/reconcile.py`)
 
-The three moves a `contacts-review` triage session repeats: `link` a pending
+The three moves a `people-review` triage session repeats: `link` a pending
 Google record onto an existing person, `merge` two people rows, `create` a
 person from a Google record. Dry run is the default and prints every statement;
 `--apply` executes.
@@ -213,7 +221,7 @@ fragments every later query.
 
 `person_accounts.platform` and `person_photos.platform` must agree: photos
 join back to accounts on `(person_id, platform)`. Note that the ledger's
-`contact_records.source` uses the same vocabulary, so `match.py` can copy it
+`people_sync_records.source` uses the same vocabulary, so `match.py` can copy it
 straight across into `person_accounts.platform`.
 
 Before adding a value, read sibling rows (`SELECT DISTINCT platform ...`) and
@@ -279,11 +287,11 @@ that way.
 
 ## Gotchas
 
-- **`ModuleNotFoundError: No module named 'contact_sync'`** means iCloud
+- **`ModuleNotFoundError: No module named 'people_sync'`** means iCloud
   stamped the venv's editable `.pth` file hidden (Python 3.13+ ignores hidden
   `.pth`). `chflags nohidden` fixes it for one command at best - iCloud
   re-hides the file within seconds. The reliable form is to bypass the `.pth`:
-  `PYTHONPATH=src uv run python -m contact_sync ...`. `uv run --with .` is NOT
+  `PYTHONPATH=src uv run python -m people_sync ...`. `uv run --with .` is NOT
   a workaround - it can serve a stale cached wheel. `just test` is already
   immune: pyproject sets `pythonpath = ["src"]` for pytest.
 - **Evicted iCloud files hang git and read as empty.** Re-materialize the

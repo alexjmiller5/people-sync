@@ -1,6 +1,6 @@
 import json
 
-from contact_sync import sources
+from people_sync import sources
 
 GOOGLE_LIST_PAGE1 = json.dumps(
     {
@@ -69,7 +69,7 @@ def _fake_run_google(cmd, **kwargs):
 
 
 def test_fetch_google_maps_full_contact(mocker):
-    mocker.patch("contact_sync.sources.subprocess.run", side_effect=_fake_run_google)
+    mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_google)
     recs = {r.source_id: r for r in sources.fetch_google()}
 
     full = recs["people/c1"]
@@ -88,7 +88,7 @@ def test_fetch_google_maps_full_contact(mocker):
 
 
 def test_fetch_google_paginates_and_skips_malformed(mocker):
-    mocker.patch("contact_sync.sources.subprocess.run", side_effect=_fake_run_google)
+    mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_google)
     recs = {r.source_id: r for r in sources.fetch_google()}
 
     # people/c3's raw call returns invalid JSON - must be skipped, not crash
@@ -128,8 +128,8 @@ def test_fetch_google_skips_list_entry_missing_resource(mocker):
             )
         raise AssertionError(f"unexpected command {cmd}")
 
-    mocker.patch("contact_sync.sources.subprocess.run", side_effect=fake_run)
-    log = mocker.patch("contact_sync.sources.log")
+    mocker.patch("people_sync.sources.subprocess.run", side_effect=fake_run)
+    log = mocker.patch("people_sync.sources.log")
 
     recs = sources.fetch_google()
 
@@ -207,9 +207,9 @@ def _fake_run_apple(cmd, **kwargs):
 
 def test_fetch_apple_maps_and_skips_missing_id(mocker):
     mocker.patch(
-        "contact_sync.sources._db_paths", return_value=["/fake/db1.abcddb", "/fake/db2.abcddb"]
+        "people_sync.sources._db_paths", return_value=["/fake/db1.abcddb", "/fake/db2.abcddb"]
     )
-    mocker.patch("contact_sync.sources.subprocess.run", side_effect=_fake_run_apple)
+    mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_apple)
 
     recs = {r.source_id: r for r in sources.fetch_apple()}
 
@@ -249,7 +249,7 @@ def test_fetch_apple_maps_and_skips_missing_id(mocker):
 
 
 def test_fetch_apple_no_databases_found(mocker):
-    mocker.patch("contact_sync.sources._db_paths", return_value=[])
-    run = mocker.patch("contact_sync.sources.subprocess.run")
+    mocker.patch("people_sync.sources._db_paths", return_value=[])
+    run = mocker.patch("people_sync.sources.subprocess.run")
     assert sources.fetch_apple() == []
     run.assert_not_called()

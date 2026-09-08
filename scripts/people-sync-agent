@@ -1,44 +1,44 @@
 #!/usr/bin/env bash
-# Runner for `services.contact-sync-scrape` (nix/darwin.nix). Installed as
-# bin/contact-sync-agent by the package - product behavior lives here, not in
-# the nix module, which only sets the CONTACT_SYNC_* environment variables
+# Runner for `services.people-sync-scrape` (nix/darwin.nix). Installed as
+# bin/people-sync-agent by the package - product behavior lives here, not in
+# the nix module, which only sets the PEOPLE_SYNC_* environment variables
 # below and points launchd at this script.
 #
-# Per platform (in CONTACT_SYNC_PLATFORMS order): make sure that site's
+# Per platform (in PEOPLE_SYNC_PLATFORMS order): make sure that site's
 # dedicated Chrome is listening on its own remote-debugging port (launching
 # it, headed, if not), sign the profile in if it is signed out (idempotent -
-# a live session is left alone), then run one `contact-sync scrape` pass
+# a live session is left alone), then run one `people-sync scrape` pass
 # against it. A login that halts skips that platform for this run.
-# Daily-cap enforcement and pacing already live in contact_sync.scrape.pace;
+# Daily-cap enforcement and pacing already live in people_sync.scrape.pace;
 # this script just runs once per scheduled invocation.
 set -euo pipefail
 
-: "${CONTACT_SYNC_PLATFORMS:?set by the nix-darwin module}"
-: "${CONTACT_SYNC_STATE_DIR:?set by the nix-darwin module}"
-: "${CONTACT_SYNC_PROFILE_DIR:?set by the nix-darwin module}"
-: "${CONTACT_SYNC_BASE_PORT:?set by the nix-darwin module}"
-: "${CONTACT_SYNC_CHROME_PATH:?set by the nix-darwin module}"
-: "${CONTACT_SYNC_LOG_DIR:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_PLATFORMS:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_STATE_DIR:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_PROFILE_DIR:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_BASE_PORT:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_CHROME_PATH:?set by the nix-darwin module}"
+: "${PEOPLE_SYNC_LOG_DIR:?set by the nix-darwin module}"
 
-contact_sync_bin="@contact_sync_bin@"
+people_sync_bin="@people_sync_bin@"
 
-mkdir -p "$CONTACT_SYNC_STATE_DIR" "$CONTACT_SYNC_PROFILE_DIR" "$CONTACT_SYNC_LOG_DIR"
+mkdir -p "$PEOPLE_SYNC_STATE_DIR" "$PEOPLE_SYNC_PROFILE_DIR" "$PEOPLE_SYNC_LOG_DIR"
 
 port_up() {
   curl -sf --max-time 2 "http://127.0.0.1:$1/json/version" >/dev/null 2>&1
 }
 
 i=0
-for platform in $CONTACT_SYNC_PLATFORMS; do
-  port=$((CONTACT_SYNC_BASE_PORT + i))
+for platform in $PEOPLE_SYNC_PLATFORMS; do
+  port=$((PEOPLE_SYNC_BASE_PORT + i))
   i=$((i + 1))
-  profile_dir="$CONTACT_SYNC_PROFILE_DIR/$platform"
-  log="$CONTACT_SYNC_LOG_DIR/$platform.log"
+  profile_dir="$PEOPLE_SYNC_PROFILE_DIR/$platform"
+  log="$PEOPLE_SYNC_LOG_DIR/$platform.log"
   mkdir -p "$profile_dir"
 
   if ! port_up "$port"; then
     echo "$(date -u +%FT%TZ) launching Chrome for $platform on port $port" >> "$log"
-    "$CONTACT_SYNC_CHROME_PATH" \
+    "$PEOPLE_SYNC_CHROME_PATH" \
       --user-data-dir="$profile_dir" \
       --remote-debugging-port="$port" \
       --no-first-run \
@@ -60,15 +60,15 @@ for platform in $CONTACT_SYNC_PLATFORMS; do
   fi
 
   echo "$(date -u +%FT%TZ) logging $platform in via 127.0.0.1:$port" >> "$log"
-  if ! "$contact_sync_bin" login "$platform" --endpoint "127.0.0.1:$port" >> "$log" 2>&1; then
+  if ! "$people_sync_bin" login "$platform" --endpoint "127.0.0.1:$port" >> "$log" 2>&1; then
     echo "$(date -u +%FT%TZ) $platform login halted, skipping its scrape" >> "$log"
     continue
   fi
 
   echo "$(date -u +%FT%TZ) scraping $platform via 127.0.0.1:$port" >> "$log"
-  "$contact_sync_bin" scrape "$platform" \
+  "$people_sync_bin" scrape "$platform" \
     --endpoint "127.0.0.1:$port" \
-    --state "$CONTACT_SYNC_STATE_DIR/scrape-state.json" \
+    --state "$PEOPLE_SYNC_STATE_DIR/scrape-state.json" \
     >> "$log" 2>&1 \
     || echo "$(date -u +%FT%TZ) $platform scrape exited non-zero" >> "$log"
 done

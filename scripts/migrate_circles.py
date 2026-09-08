@@ -2,7 +2,7 @@
 
 PRESERVATION INVARIANT: the default for every value is a verbatim circle.
 Any other action (merge/rename/split/location/employment/met_through/retire)
-exists in the decisions file ONLY because Alex chose it for that value.
+exists in the decisions file ONLY because a human chose it for that value.
 """
 
 import json
@@ -10,7 +10,7 @@ import pathlib
 import sys
 from collections import defaultdict
 
-from contact_sync import lifedata
+from people_sync import lifedata
 
 WS = pathlib.Path("data/circles_worksheet.json")
 DEC = pathlib.Path("data/circles_decisions.json")
