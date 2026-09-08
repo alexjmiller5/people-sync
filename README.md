@@ -25,8 +25,10 @@ To run the profile scraper unattended on a Mac, the flake also exposes
 `packages.<system>.default` (the `people-sync` CLI, packaged with plain
 `buildPythonApplication`) and `darwinModules.default`, a
 `services.people-sync-scrape` nix-darwin module that runs it as a declared
-launchd agent - each platform gets its own headed Chrome profile and debug
-port, on a schedule, with no manual setup beyond enabling the option. See
+launchd agent on a schedule. Point it at an already-running Chrome with
+`endpoint` (one shared profile whose logins every job and every manual
+sign-in on that Mac reuse - the recommended shape) or leave it unset and
+each platform gets its own headed Chrome profile and debug port. See
 "Installing on a Mac" in AGENTS.md for the module's options and an example.
 
 Runtime dependencies outside Python:
