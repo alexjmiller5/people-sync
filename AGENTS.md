@@ -65,6 +65,10 @@ Consume it from another flake (e.g. a nix-config host):
           services.people-sync-scrape = {
             enable = true;
             user = "someuser";
+            # A Chrome already listening for remote debugging: one shared
+            # profile for every platform. Unset it and each platform gets
+            # its own profile + port (profileDir / basePort / chromePath).
+            endpoint = "127.0.0.1:9222";
             # Commands the scraper runs to obtain a login credential JSON /
             # a 2FA code - the module never knows what they are.
             credentialCommand = "some-credential-command <platform>";
@@ -80,6 +84,12 @@ Consume it from another flake (e.g. a nix-config host):
 
 `platforms`, `dailyCaps`, `stateDir`, `profileDir`, `basePort`, `chromePath`,
 and `schedule` all have generic defaults; override what your setup needs.
+Prefer `endpoint`: a browser that holds every login looks like a person's
+browser, and a session established once (by any job, or by a human at the
+screen) serves every later run; per-platform profiles are for when
+isolation between sites is actually wanted. The runner
+(`scripts/people-sync-agent`) exits non-zero without touching anything when
+the shared endpoint is not listening.
 `dailyCaps` is exported as `PEOPLE_SYNC_DAILY_CAPS`, a JSON object of
 per-platform caps that `people_sync.scrape.pace` merges over its built-in
 defaults at `Pacer` construction; anything malformed raises there, before a

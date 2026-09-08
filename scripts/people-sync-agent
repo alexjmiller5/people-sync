@@ -4,39 +4,42 @@
 # the nix module, which only sets the PEOPLE_SYNC_* environment variables
 # below and points launchd at this script.
 #
-# Per platform (in PEOPLE_SYNC_PLATFORMS order): make sure that site's
-# dedicated Chrome is listening on its own remote-debugging port (launching
-# it, headed, if not), sign the profile in if it is signed out (idempotent -
-# a live session is left alone), then run one `people-sync scrape` pass
-# against it. A login that halts skips that platform for this run.
+# Per platform (in PEOPLE_SYNC_PLATFORMS order): reach a Chrome - the shared
+# one at PEOPLE_SYNC_ENDPOINT when set (nothing is launched; a down endpoint
+# ends the run), otherwise that site's dedicated Chrome on its own
+# remote-debugging port (launched, headed, if not listening) - sign the
+# profile in if it is signed out (idempotent - a live session is left
+# alone), then run one `people-sync scrape` pass against it. A login that
+# halts skips that platform for this run.
 # Daily-cap enforcement and pacing already live in people_sync.scrape.pace;
 # this script just runs once per scheduled invocation.
 set -euo pipefail
 
 : "${PEOPLE_SYNC_PLATFORMS:?set by the nix-darwin module}"
 : "${PEOPLE_SYNC_STATE_DIR:?set by the nix-darwin module}"
-: "${PEOPLE_SYNC_PROFILE_DIR:?set by the nix-darwin module}"
-: "${PEOPLE_SYNC_BASE_PORT:?set by the nix-darwin module}"
-: "${PEOPLE_SYNC_CHROME_PATH:?set by the nix-darwin module}"
 : "${PEOPLE_SYNC_LOG_DIR:?set by the nix-darwin module}"
+shared="${PEOPLE_SYNC_ENDPOINT:-}"
+if [ -z "$shared" ]; then
+  : "${PEOPLE_SYNC_PROFILE_DIR:?set by the nix-darwin module}"
+  : "${PEOPLE_SYNC_BASE_PORT:?set by the nix-darwin module}"
+  : "${PEOPLE_SYNC_CHROME_PATH:?set by the nix-darwin module}"
+fi
 
 people_sync_bin="@people_sync_bin@"
 
-mkdir -p "$PEOPLE_SYNC_STATE_DIR" "$PEOPLE_SYNC_PROFILE_DIR" "$PEOPLE_SYNC_LOG_DIR"
+mkdir -p "$PEOPLE_SYNC_STATE_DIR" "$PEOPLE_SYNC_LOG_DIR"
 
-port_up() {
-  curl -sf --max-time 2 "http://127.0.0.1:$1/json/version" >/dev/null 2>&1
+endpoint_up() {
+  curl -sf --max-time 2 "http://$1/json/version" >/dev/null 2>&1
 }
 
-i=0
-for platform in $PEOPLE_SYNC_PLATFORMS; do
-  port=$((PEOPLE_SYNC_BASE_PORT + i))
-  i=$((i + 1))
-  profile_dir="$PEOPLE_SYNC_PROFILE_DIR/$platform"
-  log="$PEOPLE_SYNC_LOG_DIR/$platform.log"
+# Launch (if needed) and print the endpoint of a dedicated per-site Chrome;
+# empty when it never came up.
+site_endpoint() {
+  local platform="$1" port="$2" log="$3"
+  local endpoint="127.0.0.1:$port" profile_dir="$PEOPLE_SYNC_PROFILE_DIR/$platform"
   mkdir -p "$profile_dir"
-
-  if ! port_up "$port"; then
+  if ! endpoint_up "$endpoint"; then
     echo "$(date -u +%FT%TZ) launching Chrome for $platform on port $port" >> "$log"
     "$PEOPLE_SYNC_CHROME_PATH" \
       --user-data-dir="$profile_dir" \
@@ -44,10 +47,9 @@ for platform in $PEOPLE_SYNC_PLATFORMS; do
       --no-first-run \
       >> "$log" 2>&1 &
     disown
-
-    up=0
+    local up=0
     for _ in $(seq 1 30); do
-      if port_up "$port"; then
+      if endpoint_up "$endpoint"; then
         up=1
         break
       fi
@@ -55,19 +57,37 @@ for platform in $PEOPLE_SYNC_PLATFORMS; do
     done
     if [ "$up" -ne 1 ]; then
       echo "$(date -u +%FT%TZ) $platform Chrome never came up on port $port, skipping" >> "$log"
-      continue
+      return
     fi
   fi
+  echo "$endpoint"
+}
 
-  echo "$(date -u +%FT%TZ) logging $platform in via 127.0.0.1:$port" >> "$log"
-  if ! "$people_sync_bin" login "$platform" --endpoint "127.0.0.1:$port" >> "$log" 2>&1; then
+if [ -n "$shared" ] && ! endpoint_up "$shared"; then
+  echo "$(date -u +%FT%TZ) shared Chrome at $shared is not listening, nothing to do" >> "$PEOPLE_SYNC_LOG_DIR/launchd.log"
+  exit 1
+fi
+
+i=0
+for platform in $PEOPLE_SYNC_PLATFORMS; do
+  log="$PEOPLE_SYNC_LOG_DIR/$platform.log"
+  if [ -n "$shared" ]; then
+    endpoint="$shared"
+  else
+    endpoint="$(site_endpoint "$platform" $((PEOPLE_SYNC_BASE_PORT + i)) "$log")"
+  fi
+  i=$((i + 1))
+  [ -n "$endpoint" ] || continue
+
+  echo "$(date -u +%FT%TZ) logging $platform in via $endpoint" >> "$log"
+  if ! "$people_sync_bin" login "$platform" --endpoint "$endpoint" >> "$log" 2>&1; then
     echo "$(date -u +%FT%TZ) $platform login halted, skipping its scrape" >> "$log"
     continue
   fi
 
-  echo "$(date -u +%FT%TZ) scraping $platform via 127.0.0.1:$port" >> "$log"
+  echo "$(date -u +%FT%TZ) scraping $platform via $endpoint" >> "$log"
   "$people_sync_bin" scrape "$platform" \
-    --endpoint "127.0.0.1:$port" \
+    --endpoint "$endpoint" \
     --state "$PEOPLE_SYNC_STATE_DIR/scrape-state.json" \
     >> "$log" 2>&1 \
     || echo "$(date -u +%FT%TZ) $platform scrape exited non-zero" >> "$log"

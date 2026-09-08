@@ -9,8 +9,13 @@
 # needs a Full Disk Access grant.
 #
 # The module is a thin options-to-environment translator: all product
-# behavior (launching each site's Chrome, running the scrape, logging) lives
-# in bin/people-sync-agent, which ships as part of `packages.default`.
+# behavior (attaching to or launching Chrome, running the scrape, logging)
+# lives in bin/people-sync-agent, which ships as part of `packages.default`.
+#
+# Two ways to reach a browser: `endpoint` attaches every platform to one
+# already-running Chrome (a shared profile whose logins persist for every
+# job on the machine - the recommended shape), or, with `endpoint` unset,
+# each platform gets its own headed Chrome profile and debug port.
 self:
 { config, lib, pkgs, ... }:
 
@@ -32,8 +37,22 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ "facebook" "instagram" "linkedin" ];
       description = ''
-        Platforms to scrape, in order. Each gets its own Chrome profile and a
-        remote-debugging port of `basePort + <index in this list>`.
+        Platforms to scrape, in order. With `endpoint` unset each gets its
+        own Chrome profile and a remote-debugging port of
+        `basePort + <index in this list>`.
+      '';
+    };
+
+    endpoint = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "127.0.0.1:9222";
+      description = ''
+        `host:port` of a Chrome that is already listening for remote
+        debugging. When set, every platform attaches to it (one shared
+        profile, its sessions reused by every job and every manual login on
+        the machine) and no Chrome is launched - `profileDir`, `basePort` and
+        `chromePath` are unused. Exported as PEOPLE_SYNC_ENDPOINT.
       '';
     };
 
@@ -155,6 +174,9 @@ in
             PEOPLE_SYNC_CHROME_PATH = cfg.chromePath;
             PEOPLE_SYNC_LOG_DIR = cfg.logDir;
             PATH = "${pkg}/bin:/usr/bin:/bin";
+          }
+          // lib.optionalAttrs (cfg.endpoint != null) {
+            PEOPLE_SYNC_ENDPOINT = cfg.endpoint;
           }
           // lib.optionalAttrs (cfg.credentialCommand != null) {
             PEOPLE_SYNC_CREDENTIAL_COMMAND = cfg.credentialCommand;
