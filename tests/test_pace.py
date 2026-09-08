@@ -255,13 +255,15 @@ def test_is_challenge_false_on_ordinary_text(text):
 
 def test_is_challenge_case_insensitive():
     assert pace.is_challenge("LOGIN REQUIRED") is True
+    assert pace.is_challenge("Log in with Facebook / This page doesn't exist") is False
+    assert pace.challenge_marker("please LOG IN to see more") == "please log in"
 
 
 def test_login_markers_are_kept_separate_from_challenge_markers():
     """The login flow reuses CHALLENGE_MARKERS but must not halt on the words
     that merely mean "this is a login page"."""
-    assert "log in" in pace.LOGIN_MARKERS
-    assert not any("log in" == marker for marker in pace.CHALLENGE_MARKERS)
+    assert "please log in" in pace.LOGIN_MARKERS
+    assert not any("log in" in marker for marker in pace.CHALLENGE_MARKERS)
     assert pace.is_challenge("Please log in to continue") is True
 
 
