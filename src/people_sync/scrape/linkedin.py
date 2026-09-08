@@ -31,9 +31,9 @@ EXTRACTOR_JS = (
     "if(t[i]&&deg.test(t[i]))i++;"
     "var headline=t[i]&&!deg.test(t[i])?t[i]:null;"
     'var ci=head.indexOf("Contact info");'
-    "var location=null;"
-    'if(ci>0){var j=ci-1;if(head[j]==="·")j--;location=head[j]||null}'
-    "if(!location){location=head.find(x=>/, .*(United States|USA|UK|Canada|Spain|France|Germany|Area)$|Area$/.test(x))||null}"
+    "var loc=null;"
+    'if(ci>0){var j=ci-1;if(head[j]==="·")j--;loc=head[j]||null}'
+    "if(!loc){loc=head.find(x=>/, .*(United States|USA|UK|Canada|Spain|France|Germany|Area)$|Area$/.test(x))||null}"
     "var orgs=ci>0?head.slice(ci+1,ci+3).filter(x=>!/connections$|followers$|mutual connection/.test(x)):[];"
     "var f=re=>head.find(x=>re.test(x))||null;"
     "var mut=f(/mutual connection/);var conn=f(/connections$/);var fol=f(/followers$/);"
@@ -42,7 +42,7 @@ EXTRACTOR_JS = (
     'var about=ab>=0?t.slice(ab+1,ab+6).filter(x=>!/^(… more|Top skills)$/.test(x)).join("\\n"):null;'
     'var img=m.querySelector("img[src*=profile-displayphoto]")||'
     'm.querySelector("img[alt*=profile i], img.pv-top-card-profile-picture__image");'
-    "return JSON.stringify({name:name,pronouns:pronouns,headline:headline,location:location,"
+    "return JSON.stringify({name:name,pronouns:pronouns,headline:headline,location:loc,"
     "orgs:orgs,mutual_text:mut,connections:conn,followers:fol,highlights:hl,about:about,"
     "avatar:img?img.src:null,path:location.pathname});})()"
 )

@@ -77,3 +77,5 @@ def test_extractor_js_uses_the_main_element_and_the_display_photo():
     assert 'querySelector("main")' in linkedin.EXTRACTOR_JS
     assert "profile-displayphoto" in linkedin.EXTRACTOR_JS
     assert "no-main" in linkedin.EXTRACTOR_JS
+    # a `var location` would shadow window.location and blank the profile path
+    assert "var location" not in linkedin.EXTRACTOR_JS
