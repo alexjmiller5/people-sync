@@ -473,3 +473,28 @@ def test_other_extract_errors_write_nothing(mocker):
 
     assert result["skipped"] == 1
     upsert.assert_not_called()
+
+
+def test_scrape_merges_a_module_enrich_hook_into_the_captured_entries(mocker):
+    class EnrichingModule(FakeModule):
+        seen = []
+
+        @staticmethod
+        def enrich(browser, handle):
+            EnrichingModule.seen.append(handle)
+            return [{"url": "https://x/web_profile_info/?username=u1", "body": "{}"}]
+
+        @staticmethod
+        def parse(eval_result, captured):
+            assert captured and captured[-1]["url"].endswith("username=u1")
+            return FakeModule.parse(eval_result, captured)
+
+    _patch_common(mocker, [_record()])
+    mocker.patch("people_sync.scrape.run.import_module", return_value=EnrichingModule)
+    mocker.patch("people_sync.photos.put_object")
+    mocker.patch("people_sync.scrape.run.photos.fetch_url_photo", return_value=None)
+    mocker.patch("people_sync.scrape.run.upsert_profile")
+
+    result = run.scrape("testplatform")
+
+    assert result["done"] == 1 and EnrichingModule.seen == ["u1"]

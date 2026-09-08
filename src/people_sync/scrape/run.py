@@ -175,6 +175,10 @@ def scrape(
                         "page never became ready", platform=platform, index=index, reason="timeout"
                     )
 
+                enrich = getattr(module, "enrich", None)
+                if enrich is not None:
+                    captured = list(captured) + list(enrich(browser, handle) or [])
+
                 page_text = browser.eval(PAGE_TEXT_JS) or ""
                 marker = challenge_marker(page_text)
                 if marker:
