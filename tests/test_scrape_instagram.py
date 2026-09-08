@@ -153,3 +153,63 @@ def test_extractor_js_reports_a_missing_profile_as_unavailable():
     from people_sync.scrape import instagram as mod
 
     assert 'error:"unavailable"' in mod.EXTRACTOR_JS
+
+
+def test_graphql_feed_response_supplies_the_hd_picture_and_counts():
+    body = {
+        "data": {
+            "xdt_api__v1__feed__user_timeline_graphql_connection": {
+                "edges": [
+                    {
+                        "node": {
+                            "user": {
+                                "username": "testuser_a",
+                                "pk": "1",
+                                "is_private": True,
+                                "is_verified": False,
+                                "follower_count": 700,
+                                "following_count": 900,
+                                "hd_profile_pic_url_info": {
+                                    "url": "https://example.invalid/hd.jpg"
+                                },
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    captured = [{"url": "https://www.instagram.com/graphql/query", "body": json.dumps(body)}]
+
+    p = instagram.parse(FIXTURE, captured=captured)
+
+    assert p.avatar_url == "https://example.invalid/hd.jpg"
+    assert p.follower_count == 700 and p.following_count == 900 and p.is_private is True
+    assert p.raw["graphql_user"]["pk"] == "1"
+
+
+def test_graphql_response_for_another_user_is_ignored():
+    body = {"data": {"user": {"username": "someone_else", "is_private": True, "follower_count": 1}}}
+    captured = [{"url": "https://www.instagram.com/graphql/query", "body": json.dumps(body)}]
+    p = instagram.parse(FIXTURE, captured=captured)
+    assert (
+        p.follower_count == 686
+        and p.avatar_url == "https://example.invalid/avatar.jpg"
+        and "graphql_user" not in p.raw
+    )
+
+
+def test_bio_stops_at_the_highlights_strip_and_links_drop_the_junk():
+    assert 'indexOf("Highlights")' in instagram.EXTRACTOR_JS
+    fixture = {
+        **FIXTURE,
+        "links": [
+            "https://www.instagram.com/testuser_a/#",
+            "https://www.instagram.com/testschool/",
+            "https://l.instagram.com/?u=https%3A%2F%2Fexample.invalid%2Fme%3Futm_source%3Dig&e=x",
+            "https://www.instagram.com/testuser_a/followers/mutualOnly",
+            "https://www.instagram.com/stories/highlights/1/",
+        ],
+    }
+    p = instagram.parse(fixture, captured=[])
+    assert p.links == ["https://www.instagram.com/testschool/", "https://example.invalid/me"]
