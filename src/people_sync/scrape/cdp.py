@@ -278,32 +278,27 @@ def _physical_key(char: str) -> tuple[str, int, bool] | None:
 
 
 def _key_events(char: str) -> list[dict] | None:
-    """The keyDown/char/keyUp triple Chrome expects for one printable
-    character - `text` is what lands in the field, `key`/`code` are what a
-    site's keydown handlers read. None when the character has no US key."""
+    """The keyDown/keyUp pair Chrome expects for one printable character -
+    `text` on the keyDown is what lands in the field (a separate `char`
+    event on top of it inserts the character a second time), `key`/`code`
+    are what a site's keydown handlers read. None when the character has no
+    US key."""
     physical = _physical_key(char)
     if physical is None:
         return None
     code, vk, shifted = physical
     modifiers = SHIFT_MODIFIER if shifted else 0
     unmodified = char.lower() if shifted and char.isalpha() else char
-    common = {"key": char, "code": code, "modifiers": modifiers}
+    common = {
+        "key": char,
+        "code": code,
+        "modifiers": modifiers,
+        "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk,
+    }
     return [
-        {
-            "type": "keyDown",
-            "text": char,
-            "unmodifiedText": unmodified,
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-            **common,
-        },
-        {"type": "char", "text": char, "unmodifiedText": unmodified, **common},
-        {
-            "type": "keyUp",
-            "windowsVirtualKeyCode": vk,
-            "nativeVirtualKeyCode": vk,
-            **common,
-        },
+        {"type": "keyDown", "text": char, "unmodifiedText": unmodified, **common},
+        {"type": "keyUp", **common},
     ]
 
 
@@ -539,8 +534,8 @@ class Browser:
     # -- trusted input ------------------------------------------------------
 
     def type_text(self, text: str, jitter_ms: tuple[int, int] = TYPE_JITTER_MS) -> None:
-        """Type into whatever has focus, one trusted keyDown/char/keyUp triple
-        per character, with a human pause between characters. Click the field
+        """Type into whatever has focus, one trusted keyDown/keyUp pair per
+        character, with a human pause between characters. Click the field
         first - this does not focus anything itself."""
         for char in text:
             events = _key_events(char)
