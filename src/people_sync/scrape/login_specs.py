@@ -87,10 +87,13 @@ SPECS: dict[str, LoginSpec] = {
         password_selector='input[name="login_password"], input#password, input[type="password"]',
         submit_selector='button#btnLogin, button[type="submit"]',
         logged_in_js=(
-            '!!document.querySelector(\'a[href*="/account/profile"], '
-            '[data-testid="profile-menu"]\')'
+            '!!document.querySelector(\'a[href="/account/logout"], a[href="/settings/profile"], '
+            '[data-testid="friend-feed-container"]\')'
         ),
-        sms_code_selector='input[name="code"], input[autocomplete="one-time-code"]',
+        # After the password Venmo offers to text a code ("Send code", with
+        # "Remember this device" pre-checked); the field appears after that.
+        code_path=("text=Send code",),
+        sms_code_selector='input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"]',
         email_code_selector='input[name="code"]',
         remember_selector='input[type="checkbox"][name="rememberDevice"]',
     ),

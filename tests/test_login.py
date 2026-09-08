@@ -57,6 +57,7 @@ class FakeSite:
         self.on_submit = None
         self.on_navigate = None
         self.on_click = None
+        self.on_typed = None  # (site, field) after each character lands
         for method in (
             "Runtime.evaluate",
             "Input.dispatchKeyEvent",
@@ -121,6 +122,8 @@ class FakeSite:
                 self.typed[field] = ""
                 self.selected = None
             self.typed[field] = self.typed.get(field, "") + params["text"]
+            if self.on_typed:
+                self.on_typed(self, field)
         elif "selectAll" in params.get("commands", []):
             if field not in self.no_select_all and field not in self.no_clear:
                 self.selected = field
@@ -941,3 +944,59 @@ def test_code_path_turns_a_push_prompt_into_a_code_prompt(
         "<enter>",
     ]
     assert site.typed["input#code"] == "654321"
+
+
+def test_code_commands_receive_the_request_time_in_the_environment(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """A reader must ignore codes that arrived before this login asked for
+    one: the moment the credentials went in is handed over as
+    PEOPLE_SYNC_CODE_AFTER."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.SMS_CODE_COMMAND_ENV, 'printf "%s" "$PEOPLE_SYNC_CODE_AFTER"')
+    spec = SPEC.__class__(**{**SPEC.__dict__, "sms_code_selector": "input#code"})
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+
+    def ask_for_code(s):
+        s.present |= {"input#code"}
+        s.on_submit = lambda s2: setattr(s2, "logged_in", True)
+
+    site.on_submit = ask_for_code
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", site.typed["input#code"])
+
+
+def test_code_form_that_submits_itself_still_counts_as_logged_in(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """Venmo submits on the last digit and navigates away: the button we
+    would click is gone (CdpError) but the session is there."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    spec = SPEC.__class__(**{**SPEC.__dict__, "totp_selector": "input#code"})
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+
+    def ask_for_code(s):
+        s.present = {"input#code"}  # the credential form is gone
+        s.on_submit = None
+
+    site.on_submit = ask_for_code
+
+    def auto_submit(s, field):
+        if s.typed.get(field) == "654321":
+            s.present = set()  # navigated away: nothing left to click
+            s.logged_in = True
+
+    site.on_typed = auto_submit
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
