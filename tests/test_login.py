@@ -120,6 +120,10 @@ class FakeSite:
         elif "selectAll" in params.get("commands", []):
             if field not in self.no_select_all and field not in self.no_clear:
                 self.selected = field
+        elif params.get("key") == "Enter" and params["type"] == "keyDown":
+            self.clicks.append("<enter>")
+            if self.on_submit:
+                self.on_submit(self)
         elif params.get("key") == "Backspace" and params["type"] == "keyDown":
             if field in self.no_clear:
                 pass
@@ -550,7 +554,7 @@ def test_every_spec_is_complete_and_self_consistent():
         spec = login_specs.SPECS[platform]
         assert spec.platform == platform
         assert spec.url.startswith("https://")
-        assert spec.username_selector and spec.submit_selector and spec.logged_in_js
+        assert spec.username_selector and spec.logged_in_js
         # every spec can answer at least one kind of 2FA prompt
         assert any([spec.totp_selector, spec.email_code_selector, spec.sms_code_selector])
 
@@ -838,3 +842,23 @@ def test_prefilled_field_is_cleared_key_by_key_when_select_all_is_a_no_op(
 
     assert result["status"] == "logged-in"
     assert site.typed["input#user"] == "testsite"
+
+
+def test_spec_without_a_submit_selector_submits_with_enter(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """A form whose submit button has no stable selector is submitted with a
+    trusted Enter in the field just typed into."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.present.discard("button#submit")
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+    spec = SPEC.__class__(**{**SPEC.__dict__, "submit_selector": None})
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.clicks == ["input#user", "input#pass", "<enter>"]

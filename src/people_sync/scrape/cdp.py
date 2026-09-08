@@ -586,6 +586,23 @@ class Browser:
                     },
                 )
 
+    def press_enter(self) -> None:
+        """One trusted Enter on the focused field - submits its form the way a
+        person does, for pages whose submit button has no stable selector."""
+        for event_type in ("keyDown", "keyUp"):
+            self._input(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": event_type,
+                    "key": "Enter",
+                    "code": "Enter",
+                    "text": "\r",
+                    "unmodifiedText": "\r",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13,
+                },
+            )
+
     def _input(self, method: str, params: dict) -> None:
         asyncio.run_coroutine_threadsafe(
             self._send(method, params, session_id=self._session_id), self._loop

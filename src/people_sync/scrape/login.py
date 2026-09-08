@@ -100,7 +100,9 @@ class LoginSpec:
     platform: str
     url: str
     username_selector: str
-    submit_selector: str
+    # None = press Enter in the field just typed into (a form whose submit
+    # button carries no stable selector - hashed class names, no type).
+    submit_selector: str | None
     logged_in_js: str
     password_selector: str | None = None
     # Set for two-page forms (Google): click this after the username, then
@@ -220,6 +222,13 @@ def _code_field(browser: Browser, spec: LoginSpec) -> bool:
     )
 
 
+def _submit(browser: Browser, selector: str | None) -> None:
+    if selector:
+        browser.click(selector)
+    else:
+        browser.press_enter()
+
+
 def _fill_credentials(browser: Browser, spec: LoginSpec, credential: dict) -> None:
     _type_into(browser, spec.username_selector, credential["username"], "username")
     _pause()
@@ -236,7 +245,7 @@ def _fill_credentials(browser: Browser, spec: LoginSpec, credential: dict) -> No
         _type_into(browser, spec.password_selector, credential.get("password") or "", "password")
         _pause()
 
-    browser.click(spec.submit_selector)
+    _submit(browser, spec.submit_selector)
 
 
 def _next_step(browser: Browser, spec: LoginSpec) -> str:
@@ -317,7 +326,7 @@ def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
         browser.click(spec.remember_selector)
         _pause()
 
-    browser.click(spec.code_submit_selector or spec.submit_selector)
+    _submit(browser, spec.code_submit_selector or spec.submit_selector)
     if not browser.wait_for(spec.logged_in_js, STEP_TIMEOUT_S):
         raise LoginHalt(f"{kind} code was not accepted")
 
