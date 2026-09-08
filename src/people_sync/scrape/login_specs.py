@@ -20,9 +20,11 @@ SPECS: dict[str, LoginSpec] = {
     "instagram": LoginSpec(
         platform="instagram",
         url="https://www.instagram.com/accounts/login/",
-        username_selector='input[name="username"]',
-        password_selector='input[name="password"]',
-        submit_selector='button[type="submit"]',
+        # Meta's current form: name="email" / name="pass", a div[role=button]
+        # submit; the older button[type=submit] form is kept as a fallback.
+        username_selector='input[name="email"], input[name="username"]',
+        password_selector='input[name="pass"], input[name="password"]',
+        submit_selector='[role="button"][aria-label="Log In"], button[type="submit"]',
         logged_in_js=(
             '!!document.querySelector(\'svg[aria-label="Home"], a[href="/direct/inbox/"]\')'
         ),
@@ -38,7 +40,7 @@ SPECS: dict[str, LoginSpec] = {
         url="https://www.facebook.com/login/",
         username_selector='input[name="email"]',
         password_selector='input[name="pass"]',
-        submit_selector='button[name="login"]',
+        submit_selector='[role="button"][aria-label="Log In"], button[name="login"]',
         logged_in_js=(
             '!!document.querySelector(\'[aria-label="Your profile"], '
             'div[role="navigation"] a[aria-label="Home"]\')'
@@ -52,9 +54,11 @@ SPECS: dict[str, LoginSpec] = {
     "linkedin": LoginSpec(
         platform="linkedin",
         url="https://www.linkedin.com/login",
-        username_selector="input#username",
-        password_selector="input#password",
-        submit_selector='button[type="submit"]',
+        # LinkedIn's form ships hashed class names and a type="button" Sign in
+        # with no other attribute, so Enter in the password field submits.
+        username_selector='input#username, input[type="email"]',
+        password_selector='input#password, input[type="password"]',
+        submit_selector=None,
         logged_in_js="!!document.querySelector('#global-nav, .global-nav')",
         totp_selector='input[name="pin"]',
         email_code_selector="input#input__email_verification_pin",
@@ -64,10 +68,13 @@ SPECS: dict[str, LoginSpec] = {
     ),
     "venmo": LoginSpec(
         platform="venmo",
+        # venmo.com/account/sign-in redirects to id.venmo.com: a two-page
+        # form (email, Next, then password).
         url="https://venmo.com/account/sign-in",
-        username_selector='input[name="email"]',
-        password_selector='input[name="password"]',
-        submit_selector='button[type="submit"]',
+        username_selector='input[name="login_email"], input#email',
+        username_submit_selector="button#btnNext",
+        password_selector='input[name="login_password"], input#password, input[type="password"]',
+        submit_selector='button#btnLogin, button[type="submit"]',
         logged_in_js=(
             '!!document.querySelector(\'a[href*="/account/profile"], '
             '[data-testid="profile-menu"]\')'
@@ -79,9 +86,11 @@ SPECS: dict[str, LoginSpec] = {
     "spotify": LoginSpec(
         platform="spotify",
         url="https://accounts.spotify.com/en/login",
-        username_selector="input#login-username",
-        password_selector="input#login-password",
-        submit_selector="button#login-button",
+        # Spotify's current flow: username, Continue, then a one-time code
+        # mailed to the account (no password page by default).
+        username_selector='input#username, input[name="username"]',
+        password_selector=None,
+        submit_selector='button[type="submit"], button#login-button',
         logged_in_js=(
             '!!document.querySelector(\'[data-testid="user-widget-link"], '
             '[data-testid="user-widget-name"]\')'
@@ -95,7 +104,7 @@ SPECS: dict[str, LoginSpec] = {
         url="https://partiful.com/login",
         username_selector='input[type="tel"]',
         password_selector=None,
-        submit_selector='button[type="submit"]',
+        submit_selector=None,  # no submit button: Enter in the phone field
         logged_in_js='!!document.querySelector(\'a[href^="/u/"], a[href="/me"]\')',
         sms_code_selector='input[autocomplete="one-time-code"], input[name="code"]',
     ),
