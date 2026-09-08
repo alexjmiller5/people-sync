@@ -67,7 +67,10 @@ SPECS: dict[str, LoginSpec] = {
         username_selector='input#username, input[type="email"]',
         password_selector='input#password, input[type="password"]',
         submit_selector=None,
-        logged_in_js="!!document.querySelector('#global-nav, .global-nav')",
+        logged_in_js=(
+            "!!document.querySelector('#global-nav, .global-nav, "
+            'a[href*="/mynetwork"], a[href*="/messaging/"]\')'
+        ),
         totp_selector='input[name="pin"]',
         email_code_selector="input#input__email_verification_pin",
         sms_code_selector="input#input__phone_verification_pin",
