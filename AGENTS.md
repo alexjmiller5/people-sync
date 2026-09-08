@@ -24,80 +24,29 @@ src/people_sync/
                    (login.py) with its selector table (login_specs.py)
 tests/             pytest, synthetic fixtures only
 scripts/           reconcile.py (triage link/merge/create), one-off migrations,
-                   the Google write-back cleanup, people-sync-agent (the
-                   packaged launchd runner, see "Installing on a Mac")
+                   the Google write-back cleanup
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
-flake.nix          packages.default (the CLI) + darwinModules.default
-                   (the launchd agent module)
-nix/darwin.nix     services.people-sync-scrape - see "Installing on a Mac"
+flake.nix          packages.default (the CLI)
 ```
 
 ## Installing on a Mac
 
-`flake.nix` exposes `packages.<system>.default` (the `people-sync` CLI,
-built with plain `buildPythonApplication` - all three runtime deps ship as
-nixpkgs `python313Packages`, so no uv2nix machinery is needed) and
-`darwinModules.default`, a `services.people-sync-scrape` nix-darwin module
-for running the profile scraper (R4+ of the profile-scraping plan) as a
-declared launchd user agent.
+`flake.nix` exposes `packages.<system>.default`: the `people-sync` CLI,
+built with plain `buildPythonApplication` (all three runtime deps ship as
+nixpkgs `python313Packages`, so no uv2nix machinery is needed). A host
+flake adds it to its packages; the operator's shell supplies the
+environment the browser-driving commands read (see "Browser and login
+configuration" in the README): `PEOPLE_SYNC_ENDPOINT` for the Chrome to
+attach to, and the credential / code commands for `login`.
 
-The module is a thin options-to-environment translator: it launches each
-platform's dedicated, headed Chrome (its own `--user-data-dir` and
-`--remote-debugging-port`, no signed `.app` bundle - this job never touches
-TCC-protected data, unlike the FDA-gated jobs this shape is usually mirrored
-from), signs it in (`people-sync login <platform>`, idempotent - see
-"Logins"), and runs `people-sync scrape <platform>` against it on a
-schedule. All actual behavior lives in `bin/people-sync-agent`, which ships
-as part of the package.
+There is deliberately no daemon, launchd agent, or schedule in this repo:
+scraping is ad hoc, driven by an agent with a person in the loop (the
+`people-review` skill), because every run needs judgment - which account is
+whose, and what to do when a site changes its markup. Do not add a
+scheduler.
 
-Consume it from another flake (e.g. a nix-config host):
-
-```nix
-{
-  inputs.people-sync.url = "github:<owner>/people-sync";
-
-  outputs = { people-sync, ... }: {
-    darwinConfigurations.somehost = darwinSystem {
-      modules = [
-        people-sync.darwinModules.default
-        {
-          services.people-sync-scrape = {
-            enable = true;
-            user = "someuser";
-            # A Chrome already listening for remote debugging: one shared
-            # profile for every platform. Unset it and each platform gets
-            # its own profile + port (profileDir / basePort / chromePath).
-            endpoint = "127.0.0.1:9222";
-            # Commands the scraper runs to obtain a login credential JSON /
-            # a 2FA code - the module never knows what they are.
-            credentialCommand = "some-credential-command <platform>";
-            emailCodeCommand = "some-email-code-command";
-            smsCodeCommand = "some-sms-code-command";
-          };
-        }
-      ];
-    };
-  };
-}
-```
-
-`platforms`, `dailyCaps`, `stateDir`, `profileDir`, `basePort`, `chromePath`,
-and `schedule` all have generic defaults; override what your setup needs.
-Prefer `endpoint`: a browser that holds every login looks like a person's
-browser, and a session established once (by any job, or by a human at the
-screen) serves every later run; per-platform profiles are for when
-isolation between sites is actually wanted. The runner
-(`scripts/people-sync-agent`) exits non-zero without touching anything when
-the shared endpoint is not listening.
-`dailyCaps` is exported as `PEOPLE_SYNC_DAILY_CAPS`, a JSON object of
-per-platform caps that `people_sync.scrape.pace` merges over its built-in
-defaults at `Pacer` construction; anything malformed raises there, before a
-page loads, rather than running uncapped.
-
-`nix build .#default` and `nix flake check` (an eval-only smoke test of the
-darwin module, since there's no nix-darwin flake input to build a full
-`darwinConfiguration` against) both need to stay clean.
+`nix build .#default` and `nix flake check` both need to stay clean.
 
 ## Logins
 
