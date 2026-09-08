@@ -950,13 +950,19 @@ def test_click_dispatches_trusted_press_and_release_at_element_center(tmp_path, 
     try:
         browser.click("input#username")
         mouse = [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"]
-        assert [m["params"]["type"] for m in mouse] == ["mousePressed", "mouseReleased"]
+        assert [m["params"]["type"] for m in mouse] == [
+            "mouseMoved",
+            "mousePressed",
+            "mouseReleased",
+        ]
         for m in mouse:
-            assert m["params"]["button"] == "left"
-            assert m["params"]["clickCount"] == 1
             assert abs(m["params"]["x"] - 60.0) <= 5
             assert abs(m["params"]["y"] - 40.0) <= 5
-        assert mouse[0]["params"]["x"] == mouse[1]["params"]["x"]
+        assert mouse[1]["params"]["button"] == "left"
+        assert mouse[1]["params"]["clickCount"] == 1
+        assert mouse[1]["params"]["buttons"] == 1
+        assert mouse[2]["params"]["buttons"] == 0  # the button is up again
+        assert len({(m["params"]["x"], m["params"]["y"]) for m in mouse}) == 1
     finally:
         browser.close()
 
@@ -1029,5 +1035,84 @@ def test_screenshot_writes_decoded_png_bytes(tmp_path, fake_chrome):
         out = tmp_path / "shots" / "shot.png"
         browser.screenshot(out)
         assert out.read_bytes() == b"PNGBYTES"
+    finally:
+        browser.close()
+
+
+# -- visibility, key codes, field clearing (R3 fix round 1) ------------------
+
+
+def test_rect_js_and_visible_js_both_require_real_dimensions():
+    """A display:none element returns a 0x0 rect, so a null-check alone lets
+    a hidden field pass. Both predicates must test size and visibility."""
+    for expression in (cdp.visible_js("input#x"), cdp.RECT_JS.format(selector='"input#x"')):
+        assert "checkVisibility" in expression
+        assert "width>0" in expression.replace(" ", "")
+        assert "height>0" in expression.replace(" ", "")
+
+
+def test_click_refuses_an_element_with_no_visible_box(tmp_path, fake_chrome):
+    fake_chrome.on("Runtime.evaluate", _rect_evaluate(None))
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        with pytest.raises(cdp.CdpError, match="input#hidden"):
+            browser.click("input#hidden")
+        assert not any(m.get("method") == "Input.dispatchMouseEvent" for m in fake_chrome.messages)
+    finally:
+        browser.close()
+
+
+def test_type_text_sends_the_physical_key_code(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.type_text("a1. ")
+        codes = [e["params"].get("code") for e in _key_events(fake_chrome)]
+        assert codes == ["KeyA"] * 3 + ["Digit1"] * 3 + ["Period"] * 3 + ["Space"] * 3
+    finally:
+        browser.close()
+
+
+def test_type_text_marks_shifted_characters_with_the_shift_modifier(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.type_text("aA!")
+        events = _key_events(fake_chrome)
+        lower, upper, bang = events[0:3], events[3:6], events[6:9]
+        assert [e["params"].get("modifiers", 0) for e in lower] == [0, 0, 0]
+        assert [e["params"]["modifiers"] for e in upper] == [8, 8, 8]
+        assert upper[0]["params"]["code"] == "KeyA"  # the physical key is unshifted
+        assert upper[0]["params"]["key"] == "A"
+        assert bang[0]["params"]["code"] == "Digit1"
+        assert bang[0]["params"]["modifiers"] == 8
+    finally:
+        browser.close()
+
+
+def test_type_text_falls_back_to_insert_text_for_unmapped_characters(tmp_path, fake_chrome, mocker):
+    """No physical key produces "é" on a US layout, and a made-up virtual key
+    code is worse than none - that one character is inserted instead."""
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.type_text("aé")
+        assert [e["params"]["key"] for e in _key_events(fake_chrome)] == ["a", "a", "a"]
+        inserts = [m for m in fake_chrome.messages if m.get("method") == "Input.insertText"]
+        assert [m["params"]["text"] for m in inserts] == ["é"]
+    finally:
+        browser.close()
+
+
+def test_clear_field_selects_all_and_deletes(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.clear_field()
+        events = _key_events(fake_chrome)
+        select_all = [e for e in events if e["params"].get("key") == "a"]
+        assert select_all and all(e["params"]["modifiers"] == 4 for e in select_all)  # Meta
+        assert any(e["params"].get("key") == "Backspace" for e in events)
+        assert not any(e["params"]["type"] == "char" for e in events)
     finally:
         browser.close()
