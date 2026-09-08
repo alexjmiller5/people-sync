@@ -79,3 +79,9 @@ def test_extractor_js_uses_the_main_element_and_the_display_photo():
     assert "no-main" in linkedin.EXTRACTOR_JS
     # a `var location` would shadow window.location and blank the profile path
     assert "var location" not in linkedin.EXTRACTOR_JS
+
+
+def test_extractor_js_reports_a_missing_profile_as_unavailable():
+    from people_sync.scrape import linkedin as mod
+
+    assert 'error:"unavailable"' in mod.EXTRACTOR_JS

@@ -48,6 +48,27 @@ scheduler.
 
 `nix build .#default` and `nix flake check` both need to stay clean.
 
+## Extractors
+
+One module per platform under `scrape/` with the same surface, driven by
+`scrape/run.py`: `URL` (`{handle}` template), `CAPTURE` (response URL
+patterns to keep while the page loads), optional `READY_JS` (a predicate
+the loop waits for before extracting - client-rendered profiles paint after
+the load event), `EXTRACTOR_JS` (an IIFE returning JSON, or
+`{error: "<sentinel>"}` when the page is not a profile), and
+`parse(eval_result, captured) -> Profile`. Every `*_JS` string is
+syntax-checked in node by `tests/test_dom_js.py`, and every extractor is
+unit-tested against a synthetic fixture in the shape its JS returns.
+Failed records stay pending and are simply retried next pass.
+
+Sources whose export lacks profile links get a `list` command (`facebook`:
+the friends page gives name-only records a handle by unique exact name;
+`partiful`: the mutuals page routes each row to `/u/<uid>` only on click,
+so the list is walked click-by-click and profiles are written as it goes;
+`strava`: followers + following of the signed-in athlete). Partiful
+records match a person only through the Instagram handle on their profile
+(`match.py`), never by name.
+
 ## Logins
 
 `people-sync login <platform>` signs that platform's dedicated Chrome

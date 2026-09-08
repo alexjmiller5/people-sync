@@ -16,7 +16,9 @@ URL = "https://www.instagram.com/{handle}/"
 CAPTURE = [r"web_profile_info"]
 
 EXTRACTOR_JS = (
-    '(function(){var h=document.querySelector("header");if(!h)return '
+    "(function(){if(/Sorry, this page isn't available/i.test(document.body.innerText))"
+    'return JSON.stringify({error:"unavailable"});'
+    'var h=document.querySelector("header");if(!h)return '
     'JSON.stringify({error:"no-header",title:document.title});'
     'var t=h.innerText.split("\\n").map(s=>s.trim()).filter(Boolean);'
     'var img=h.querySelector("img");'

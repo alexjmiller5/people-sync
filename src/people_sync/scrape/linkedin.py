@@ -23,7 +23,9 @@ READY_JS = (
 CAPTURE = [r"voyager/api/graphql"]
 
 EXTRACTOR_JS = (
-    '(function(){var m=document.querySelector("main");if(!m)return '
+    "(function(){if(/\\/404\\/?$/.test(location.pathname)||/This page doesn\u2019t exist|This page doesn't exist/.test(document.body.innerText))"
+    'return JSON.stringify({error:"unavailable"});'
+    'var m=document.querySelector("main");if(!m)return '
     'JSON.stringify({error:"no-main",title:document.title});'
     'var t=m.innerText.split("\\n").map(s=>s.trim()).filter(Boolean);'
     'if(!t.length)return JSON.stringify({error:"no-main",title:document.title});'

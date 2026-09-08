@@ -64,7 +64,15 @@ def cmd_new_person(args: argparse.Namespace) -> None:
     print(person_id)
 
 
+def _require_r2_token() -> None:
+    """Pictures go to R2 on every scrape; an unset token would fail per
+    record (a malformed Authorization header) after the page was loaded."""
+    if not os.environ.get("CF_API_TOKEN"):
+        sys.exit("CF_API_TOKEN is not set - profile pictures cannot be stored")
+
+
 def cmd_scrape(args: argparse.Namespace) -> None:
+    _require_r2_token()
     result = scrape_run.scrape(
         args.platform,
         max_n=args.max,
@@ -97,6 +105,8 @@ def cmd_list(args: argparse.Namespace) -> None:
     clicks through every mutual and writes ledger + profile rows."""
     from people_sync.scrape.cdp import Browser
 
+    if args.platform != "facebook":
+        _require_r2_token()
     browser = Browser.connect(
         endpoint=args.endpoint, data_dir=args.data_dir, approve_command=args.approve_command
     )
@@ -149,6 +159,16 @@ def cmd_list(args: argparse.Namespace) -> None:
             print(json.dumps({"done": done, "failed": failed}))
     finally:
         browser.close()
+
+
+def cmd_promote(args: argparse.Namespace) -> None:
+    from people_sync import promote
+
+    print(
+        json.dumps(
+            promote.run(apply_writes=args.apply, platforms=args.platform or promote.PLATFORMS)
+        )
+    )
 
 
 def cmd_photos_store(args: argparse.Namespace) -> None:
@@ -224,6 +244,16 @@ def build_parser() -> argparse.ArgumentParser:
     list_p.add_argument("--max", type=int, default=None, help="partiful: rows to process")
     _add_browser_options(list_p)
     list_p.set_defaults(func=cmd_list)
+
+    promote_p = sub.add_parser(
+        "promote",
+        help="write scraped facts (city, job, birthday, photo) onto matched people, with provenance",
+    )
+    promote_p.add_argument(
+        "--apply", action="store_true", help="write (default: print the plan only)"
+    )
+    promote_p.add_argument("--platform", action="append", help="limit to a platform (repeatable)")
+    promote_p.set_defaults(func=cmd_promote)
 
     photos_p = sub.add_parser("photos", help="profile-photo storage")
     photos_sub = photos_p.add_subparsers(dest="photos_command", required=True)
