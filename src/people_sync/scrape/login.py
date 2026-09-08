@@ -100,8 +100,8 @@ class LoginSpec:
     platform: str
     url: str
     username_selector: str
-    # None = press Enter in the field just typed into (a form whose submit
-    # button carries no stable selector - hashed class names, no type).
+    # None (or ENTER) = press Enter in the field just typed into: a form whose
+    # submit button carries no stable selector (hashed class names, no type).
     submit_selector: str | None
     logged_in_js: str
     password_selector: str | None = None
@@ -111,6 +111,7 @@ class LoginSpec:
     totp_selector: str | None = None
     email_code_selector: str | None = None
     sms_code_selector: str | None = None
+    # None = reuse submit_selector; ENTER = press Enter in the code field.
     code_submit_selector: str | None = None
     remember_selector: str | None = None
 
@@ -222,6 +223,9 @@ def _code_field(browser: Browser, spec: LoginSpec) -> bool:
     )
 
 
+ENTER = ""  # as a submit selector: press Enter instead of clicking anything
+
+
 def _submit(browser: Browser, selector: str | None) -> None:
     if selector:
         browser.click(selector)
@@ -326,7 +330,10 @@ def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
         browser.click(spec.remember_selector)
         _pause()
 
-    _submit(browser, spec.code_submit_selector or spec.submit_selector)
+    _submit(
+        browser,
+        spec.submit_selector if spec.code_submit_selector is None else spec.code_submit_selector,
+    )
     if not browser.wait_for(spec.logged_in_js, STEP_TIMEOUT_S):
         raise LoginHalt(f"{kind} code was not accepted")
 

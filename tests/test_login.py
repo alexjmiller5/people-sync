@@ -866,3 +866,30 @@ def test_spec_without_a_submit_selector_submits_with_enter(
 
     assert result["status"] == "logged-in"
     assert site.clicks == ["input#user", "input#pass", "<enter>"]
+
+
+def test_code_submit_enter_presses_enter_in_the_code_field(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """code_submit_selector=ENTER submits the 2FA code with Enter even though
+    the credential form itself has a clickable submit button."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    spec = SPEC.__class__(
+        **{**SPEC.__dict__, "totp_selector": "input#code", "code_submit_selector": login.ENTER}
+    )
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+
+    def ask_for_code(s):
+        s.present |= {"input#code"}
+        s.on_submit = lambda s2: setattr(s2, "logged_in", True)
+
+    site.on_submit = ask_for_code
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.clicks[-2:] == ["input#code", "<enter>"]
+    assert site.typed["input#code"] == "654321"
