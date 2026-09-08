@@ -1074,7 +1074,7 @@ def test_type_text_sends_the_physical_key_code(tmp_path, fake_chrome, mocker):
     try:
         browser.type_text("a1. ")
         codes = [e["params"].get("code") for e in _key_events(fake_chrome)]
-        assert codes == ["KeyA"] * 3 + ["Digit1"] * 3 + ["Period"] * 3 + ["Space"] * 3
+        assert codes == ["KeyA"] * 2 + ["Digit1"] * 2 + ["Period"] * 2 + ["Space"] * 2
     finally:
         browser.close()
 
@@ -1085,9 +1085,9 @@ def test_type_text_marks_shifted_characters_with_the_shift_modifier(tmp_path, fa
     try:
         browser.type_text("aA!")
         events = _key_events(fake_chrome)
-        lower, upper, bang = events[0:3], events[3:6], events[6:9]
-        assert [e["params"].get("modifiers", 0) for e in lower] == [0, 0, 0]
-        assert [e["params"]["modifiers"] for e in upper] == [8, 8, 8]
+        lower, upper, bang = events[0:2], events[2:4], events[4:6]
+        assert [e["params"].get("modifiers", 0) for e in lower] == [0, 0]
+        assert [e["params"]["modifiers"] for e in upper] == [8, 8]
         assert upper[0]["params"]["code"] == "KeyA"  # the physical key is unshifted
         assert upper[0]["params"]["key"] == "A"
         assert bang[0]["params"]["code"] == "Digit1"
@@ -1103,7 +1103,7 @@ def test_type_text_falls_back_to_insert_text_for_unmapped_characters(tmp_path, f
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.type_text("aé")
-        assert [e["params"]["key"] for e in _key_events(fake_chrome)] == ["a", "a", "a"]
+        assert [e["params"]["key"] for e in _key_events(fake_chrome)] == ["a", "a"]
         inserts = [m for m in fake_chrome.messages if m.get("method") == "Input.insertText"]
         assert [m["params"]["text"] for m in inserts] == ["é"]
     finally:
