@@ -81,7 +81,11 @@ class FakeSite:
         return json.loads(match.group(1)) if match else None
 
     def _visible(self, selector):
-        return selector in self.present and selector not in self.hidden
+        # a comma list matches like CSS: any visible member
+        return any(
+            part in self.present and part not in self.hidden
+            for part in (selector or "").split(", ")
+        )
 
     async def _evaluate(self, ws, msg):
         expression = msg["params"]["expression"]
@@ -1000,3 +1004,22 @@ def test_code_form_that_submits_itself_still_counts_as_logged_in(
     result = run(fake_chrome, tmp_path)
 
     assert result["status"] == "logged-in"
+
+
+def test_password_only_page_skips_the_username(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """A site that remembers the account and shows only the password field
+    (Venmo) is signed into without a username step."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.present = {"input#pass", "button#submit"}
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert "input#user" not in site.typed
+    assert site.typed["input#pass"] == "pw-synthetic"
