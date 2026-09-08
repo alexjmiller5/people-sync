@@ -136,3 +136,9 @@ def test_extractor_js_reports_a_missing_profile_as_unavailable():
     from people_sync.scrape import facebook as mod
 
     assert 'error:"unavailable"' in mod.EXTRACTOR_JS
+
+
+def test_extractor_reads_the_name_from_the_line_above_the_friend_counts():
+    """The 2026-09 layout has no h1 for the name; it is the text line right
+    above "457 friends • 179 mutual"."""
+    assert "friends" in facebook.EXTRACTOR_JS and "t[ci-1]" in facebook.EXTRACTOR_JS
