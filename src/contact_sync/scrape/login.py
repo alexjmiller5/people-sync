@@ -39,7 +39,8 @@ from pathlib import Path
 
 import structlog
 
-from contact_sync.scrape.cdp import Browser
+from contact_sync.scrape import pace
+from contact_sync.scrape.cdp import Browser, visible_js
 
 log = structlog.get_logger(__name__)
 
@@ -53,6 +54,7 @@ STATE_DIR_ENV = "CONTACT_SYNC_STATE_DIR"
 DEFAULT_STATE_DIR = "data"
 
 NAV_WAIT_MS = 15000
+LOGGED_IN_TIMEOUT_S = 5.0  # client-rendered nav paints late
 FIELD_PAUSE_S = (0.3, 0.9)  # a human moving between fields
 FORM_TIMEOUT_S = 15.0  # login form to appear
 STEP_TIMEOUT_S = 30.0  # submit to produce the next step
@@ -64,20 +66,19 @@ MAX_PASSWORD_ATTEMPTS = 2  # one retry, never a third
 # Page phrases that mean a human is being asked for something this flow must
 # never fake or work around. Checked only when no known field is on the page,
 # so an ordinary "we texted you a code" step is handled, not halted.
-HALT_MARKERS = (
-    "captcha",
-    "verify you are human",
-    "verify you're human",
-    "solve the puzzle",
+#
+# The base list is pace.CHALLENGE_MARKERS (one home for both callers);
+# pace.LOGIN_MARKERS is deliberately NOT included - "log in"/"login" describe
+# the page this flow exists to drive.
+HALT_MARKERS = pace.CHALLENGE_MARKERS + (
     "confirm on your phone",
     "approve this login",
     "check your notifications",
     "unusual login",
     "suspicious login",
-    "unusual activity",
-    "your account has been locked",
+    "solve the puzzle",
     "too many attempts",
-    "try again later",
+    "your account has been locked",
 )
 
 
@@ -112,29 +113,64 @@ class LoginSpec:
     remember_selector: str | None = None
 
 
-def _present_js(selector: str) -> str:
-    return f"!!document.querySelector({json.dumps(selector)})"
+def _element_js(selector: str, test: str) -> str:
+    return (
+        f"(function(){{var e=document.querySelector({json.dumps(selector)});"
+        f"return !!e&&{test};}})()"
+    )
+
+
+def _focus_js(selector: str) -> str:
+    return _element_js(selector, "(e===document.activeElement||e.contains(document.activeElement))")
+
+
+def _empty_js(selector: str) -> str:
+    return _element_js(selector, 'e.value===""')
+
+
+def _checked_js(selector: str) -> str:
+    return _element_js(selector, "e.checked===true")
 
 
 def _present(browser: Browser, selector: str | None) -> bool:
-    return bool(selector) and bool(browser.eval(_present_js(selector)))
+    """Present AND visible - a display:none duplicate is not a field a human
+    could be typing into (see cdp.visible_js)."""
+    return bool(selector) and bool(browser.eval(visible_js(selector)))
+
+
+def _type_into(browser: Browser, selector: str, text: str, label: str) -> None:
+    """Click a field, prove it took focus, empty it, then type. Skipping any
+    of those sends the value somewhere else: to whatever had focus, or onto
+    the end of a value the browser or the site prefilled."""
+    browser.click(selector)
+    if not browser.eval(_focus_js(selector)):
+        raise LoginHalt(f"{label} field did not take focus")
+    browser.clear_field()
+    if not browser.eval(_empty_js(selector)):
+        raise LoginHalt(f"{label} field did not clear")
+    browser.type_text(text)
 
 
 def _pause() -> None:
     _sleep(random.uniform(*FIELD_PAUSE_S))
 
 
-def _run_command(command: str, platform: str) -> str:
-    """Run a caller-supplied command with the platform as `$1`. Output is a
-    secret: it is returned, never logged."""
-    result = subprocess.run(
-        ["sh", "-c", command, "contact-sync-login", platform],
-        capture_output=True,
-        text=True,
-        timeout=COMMAND_TIMEOUT_S,
-    )
+def _run_command(command: str, platform: str, env_name: str) -> str:
+    """Run a caller-supplied command with the platform as `$1`. Both the
+    output and the command line are secrets: only `env_name` is ever named in
+    an error, and `from None` keeps TimeoutExpired (whose str embeds the full
+    argv) out of the chained traceback."""
+    try:
+        result = subprocess.run(
+            ["sh", "-c", command, "contact-sync-login", platform],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise LoginHalt(f"{env_name} timed out after {COMMAND_TIMEOUT_S:.0f}s") from None
     if result.returncode != 0:
-        return ""
+        raise LoginHalt(f"{env_name} failed") from None
     return result.stdout.strip()
 
 
@@ -142,14 +178,16 @@ def _credential(platform: str) -> dict:
     command = os.environ.get(CREDENTIAL_COMMAND_ENV)
     if not command:
         raise LoginError(f"{CREDENTIAL_COMMAND_ENV} is not set - nothing can supply the login")
-    output = _run_command(command, platform)
+    output = _run_command(command, platform, CREDENTIAL_COMMAND_ENV)
     try:
         credential = json.loads(output)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
+        # `from None`: JSONDecodeError.doc is the raw stdout, i.e. the
+        # credential itself - it must not ride along on the traceback.
         raise LoginError(
             f"{CREDENTIAL_COMMAND_ENV} did not print JSON "
             '({"username": ..., "password": ..., "totp": ...})'
-        ) from e
+        ) from None
     if not credential.get("username"):
         raise LoginError(f"{CREDENTIAL_COMMAND_ENV} JSON has no username")
     return credential
@@ -174,21 +212,19 @@ def _code_field(browser: Browser, spec: LoginSpec) -> bool:
 
 
 def _fill_credentials(browser: Browser, spec: LoginSpec, credential: dict) -> None:
-    browser.click(spec.username_selector)
-    browser.type_text(credential["username"])
+    _type_into(browser, spec.username_selector, credential["username"], "username")
     _pause()
 
     if spec.username_submit_selector:
         browser.click(spec.username_submit_selector)
         if spec.password_selector and not browser.wait_for(
-            _present_js(spec.password_selector), FORM_TIMEOUT_S
+            visible_js(spec.password_selector), FORM_TIMEOUT_S
         ):
             raise LoginHalt("password field never appeared")
         _pause()
 
     if spec.password_selector:
-        browser.click(spec.password_selector)
-        browser.type_text(credential.get("password") or "")
+        _type_into(browser, spec.password_selector, credential.get("password") or "", "password")
         _pause()
 
     browser.click(spec.submit_selector)
@@ -249,7 +285,7 @@ def _obtain_code(kind: str, platform: str, credential: dict) -> str:
     command = os.environ[env]
     deadline = _now() + CODE_POLL_TIMEOUT_S
     while True:
-        code = _run_command(command, platform)
+        code = _run_command(command, platform, env)
         if code:
             return code
         if _now() >= deadline:
@@ -263,11 +299,12 @@ def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
     log.info("2fa step", platform=spec.platform, kind=kind)
     code = _obtain_code(kind, spec.platform, credential)
 
-    browser.click(selector)
-    browser.type_text(code)
+    _type_into(browser, selector, code, "code")
     _pause()
 
-    if _present(browser, spec.remember_selector):
+    if _present(browser, spec.remember_selector) and not browser.eval(
+        _checked_js(spec.remember_selector)
+    ):
         browser.click(spec.remember_selector)
         _pause()
 
@@ -278,7 +315,7 @@ def _do_2fa(browser: Browser, spec: LoginSpec, credential: dict) -> None:
 
 def _sign_in(browser: Browser, spec: LoginSpec) -> str:
     browser.navigate(spec.url, NAV_WAIT_MS)
-    if browser.eval(spec.logged_in_js):
+    if browser.wait_for(spec.logged_in_js, LOGGED_IN_TIMEOUT_S):
         return "already-logged-in"
 
     # Read only once we know we need it, so a no-op run never touches the
@@ -289,10 +326,10 @@ def _sign_in(browser: Browser, spec: LoginSpec) -> str:
             if attempt > 1:
                 log.info("retrying login", platform=spec.platform, attempt=attempt)
                 browser.navigate(spec.url, NAV_WAIT_MS)
-                if browser.eval(spec.logged_in_js):
+                if browser.wait_for(spec.logged_in_js, LOGGED_IN_TIMEOUT_S):
                     return "logged-in"
             _guard(browser)
-            if not browser.wait_for(_present_js(spec.username_selector), FORM_TIMEOUT_S):
+            if not browser.wait_for(visible_js(spec.username_selector), FORM_TIMEOUT_S):
                 raise LoginHalt("no login form on the page")
 
             _fill_credentials(browser, spec, credential)
@@ -318,6 +355,12 @@ def _screenshot(browser: Browser, platform: str, state_dir: str | None) -> str |
     return str(path)
 
 
+def _halted(browser: Browser, platform: str, state_dir: str | None, reason: str) -> dict:
+    shot = _screenshot(browser, platform, state_dir)
+    log.error("login halted", platform=platform, reason=reason, screenshot=shot)
+    return {"platform": platform, "status": "halted", "reason": reason}
+
+
 def login(
     platform: str,
     endpoint: str | None = None,
@@ -339,10 +382,15 @@ def login(
         status = _sign_in(browser, spec)
         log.info("login done", platform=platform, status=status)
         return {"platform": platform, "status": status, "reason": None}
+    except LoginError:
+        raise  # misconfiguration, not a page state - let the CLI report it
     except LoginHalt as halt:
-        shot = _screenshot(browser, platform, state_dir)
-        log.error("login halted", platform=platform, reason=halt.reason, screenshot=shot)
-        return {"platform": platform, "status": "halted", "reason": halt.reason}
+        return _halted(browser, platform, state_dir, halt.reason)
+    except Exception as e:
+        # A CdpError from a vanished element, a dropped websocket, anything:
+        # it still takes the halt path. Only the exception TYPE is reported -
+        # a message can carry a command line or page content.
+        return _halted(browser, platform, state_dir, type(e).__name__)
     finally:
         browser.close()
 

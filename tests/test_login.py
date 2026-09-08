@@ -41,7 +41,12 @@ class FakeSite:
     def __init__(self, chrome, logged_in_js="IS_LOGGED_IN"):
         self.logged_in_js = logged_in_js
         self.present = {"input#user", "input#pass", "button#submit"}
-        self.logged_in = False
+        self.hidden: set[str] = set()  # in the DOM, display:none
+        self.checked: set[str] = set()
+        self.no_focus: set[str] = set()  # clicking these does not focus them
+        self.no_clear: set[str] = set()  # select-all + delete does nothing
+        self._target: str | None = None
+        self.logged_in = False  # bool, or a callable for a late-rendering nav
         self.text = "Log in to Testsite"
         self.typed: dict[str, str] = {}
         self.clicks: list[str] = []
@@ -49,6 +54,7 @@ class FakeSite:
         self.navigations: list[str] = []
         self.on_submit = None
         self.on_navigate = None
+        self.on_click = None
         for method in (
             "Runtime.evaluate",
             "Input.dispatchKeyEvent",
@@ -71,19 +77,25 @@ class FakeSite:
         match = re.search(r"querySelector\((\".*?\")\)", expression)
         return json.loads(match.group(1)) if match else None
 
+    def _visible(self, selector):
+        return selector in self.present and selector not in self.hidden
+
     async def _evaluate(self, ws, msg):
         expression = msg["params"]["expression"]
         selector = self._selector(expression)
         if expression == self.logged_in_js:
-            value = self.logged_in
-        elif "getBoundingClientRect" in expression:
-            if selector in self.present:
-                self.focus = selector
-                value = {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0}
-            else:
-                value = None
-        elif expression.startswith("!!document.querySelector("):
-            value = selector in self.present
+            value = self.logged_in() if callable(self.logged_in) else self.logged_in
+        elif "scrollIntoView" in expression:  # the click target's rect
+            self._target = selector if self._visible(selector) else None
+            value = {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0} if self._target else None
+        elif "checkVisibility" in expression:
+            value = self._visible(selector)
+        elif "activeElement" in expression:
+            value = self.focus == selector
+        elif ".checked" in expression:
+            value = selector in self.checked
+        elif ".value" in expression:
+            value = self.typed.get(selector, "") == ""
         elif "document.title" in expression:
             value = self.text
         else:
@@ -94,12 +106,18 @@ class FakeSite:
         params = msg["params"]
         if params["type"] == "char" and self.focus:
             self.typed[self.focus] = self.typed.get(self.focus, "") + params["text"]
+        elif params.get("key") == "Backspace" and self.focus and self.focus not in self.no_clear:
+            self.typed[self.focus] = ""
         await self._reply(ws, msg, {})
 
     async def _dispatchmouseevent(self, ws, msg):
-        if msg["params"]["type"] == "mousePressed" and self.focus:
-            self.clicks.append(self.focus)
-            if self.focus in ("button#submit", "button#code-submit") and self.on_submit:
+        if msg["params"]["type"] == "mousePressed" and self._target:
+            target = self._target
+            self.clicks.append(target)
+            self.focus = None if target in self.no_focus else target
+            if self.on_click:
+                self.on_click(self, target)
+            if target in ("button#submit", "button#code-submit") and self.on_submit:
                 self.on_submit(self)
         await self._reply(ws, msg, {})
 
@@ -234,17 +252,11 @@ def test_two_page_flow_clicks_the_username_submit_first(
     site = FakeSite(fake_chrome)
     site.present = {"input#user", "button#next"}
 
-    def reveal_password(s):
-        s.present |= {"input#pass", "button#submit"}
+    def reveal_password(s, target):
+        if target == "button#next":
+            s.present |= {"input#pass", "button#submit"}
 
-    original = site._dispatchmouseevent
-
-    async def mouse(ws, msg):
-        if msg["params"]["type"] == "mousePressed" and site.focus == "button#next":
-            reveal_password(site)
-        await original(ws, msg)
-
-    fake_chrome.on("Input.dispatchMouseEvent", mouse)
+    site.on_click = reveal_password
     site.on_submit = lambda s: setattr(s, "logged_in", True)
 
     result = run(fake_chrome, tmp_path)
@@ -550,3 +562,239 @@ def test_passwordless_spec_skips_the_password_step(
     assert result["status"] == "logged-in"
     assert "input#pass" not in site.typed
     assert site.typed["input#smscode"] == "999888"
+
+
+# -- fix round 1 -------------------------------------------------------------
+
+
+def two_page_spec(monkeypatch, **overrides):
+    spec = SPEC.__class__(
+        **{**SPEC.__dict__, "username_submit_selector": "button#next", **overrides}
+    )
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+    return spec
+
+
+def test_hidden_password_input_is_never_treated_as_present(
+    fake_chrome,  # noqa: F811
+    tmp_path,
+    monkeypatch,
+):
+    """Google's identifier page ships a display:none password input. A bare
+    querySelector check matched it, the click landed at (0,0) and the
+    password went into the visible email field - and got submitted."""
+    two_page_spec(monkeypatch)
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site = FakeSite(fake_chrome)
+    site.present = {"input#user", "button#next", "input#pass"}
+    site.hidden = {"input#pass"}
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert result["reason"] == "password field never appeared"
+    assert "pw-synthetic" not in "".join(site.typed.values())
+    assert site.typed == {"input#user": "testsite"}
+
+
+def test_field_that_does_not_take_focus_halts_before_typing(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.no_focus = {"input#user"}
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert "focus" in result["reason"]
+    assert site.typed == {}
+    assert shots(tmp_path)
+
+
+def test_prefilled_field_is_cleared_before_typing(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """LinkedIn prefills the email. Typing into it produced a concatenated
+    value that could only ever fail - and burned the one retry."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.typed["input#user"] = "stale-value"
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.typed["input#user"] == "testsite"
+
+
+def test_field_that_will_not_clear_halts(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.typed["input#user"] = "stale-value"
+    site.no_clear = {"input#user"}
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert "clear" in result["reason"]
+
+
+def test_signed_in_detector_is_waited_for_not_sampled_once(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """Client-rendered nav paints late; one eval called a signed-in profile
+    signed out, typed into it, and halted with a screenshot of the feed."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    calls = {"n": 0}
+
+    def late_nav():
+        calls["n"] += 1
+        return calls["n"] > 2
+
+    site.logged_in = late_nav
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "already-logged-in"
+    assert site.typed == {}
+    assert not shots(tmp_path)
+
+
+def test_unexpected_cdp_error_halts_with_a_screenshot(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """An element that vanishes mid-flow raises CdpError; that must take the
+    halt path (screenshot + PII-free line + non-zero), not a traceback."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.present = {"input#user", "input#pass"}  # submit button is gone
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert result["reason"] == "CdpError"
+    assert shots(tmp_path)
+
+
+def test_code_command_timeout_halts_naming_only_the_env_var(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """TimeoutExpired's str embeds the full argv - i.e. the credential
+    command line - which must never reach a log or a reason string."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.EMAIL_CODE_COMMAND_ENV, "sleep 30")
+    monkeypatch.setattr(login, "COMMAND_TIMEOUT_S", 0.2)
+    site.on_submit = lambda s: setattr(s, "present", {"input#emailcode", "button#submit"})
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert login.EMAIL_CODE_COMMAND_ENV in result["reason"]
+    assert "sleep" not in result["reason"]
+
+
+def test_failing_code_command_halts_instead_of_polling_for_90s(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    _fast,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    monkeypatch.setenv(login.EMAIL_CODE_COMMAND_ENV, "exit 3")
+    site.on_submit = lambda s: setattr(s, "present", {"input#emailcode", "button#submit"})
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert login.EMAIL_CODE_COMMAND_ENV in result["reason"]
+    assert not [s for s in _fast.calls if 5.0 <= s <= 10.0]  # never entered the poll
+
+
+def test_remember_checkbox_already_ticked_is_left_alone(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#totp", "input#remember", "button#submit"}
+            s.checked = {"input#remember"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    run(fake_chrome, tmp_path)
+
+    assert "input#remember" not in site.clicks
+
+
+def test_code_that_is_not_accepted_halts(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    site.on_submit = lambda s: setattr(s, "present", {"input#totp", "button#submit"})
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "halted"
+    assert "not accepted" in result["reason"]
+    assert shots(tmp_path)
+
+
+def test_no_secret_reaches_the_logs(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv(
+        login.CREDENTIAL_COMMAND_ENV,
+        """printf '{"username":"handle-zzz","password":"secret-yyy","totp":null}' """,
+    )
+    monkeypatch.setenv(login.EMAIL_CODE_COMMAND_ENV, "echo 313373")
+    submits = []
+
+    def on_submit(s):
+        submits.append(1)
+        if len(submits) == 1:
+            s.present = {"input#emailcode", "button#submit"}
+        else:
+            s.logged_in = True
+
+    site.on_submit = on_submit
+
+    result = run(fake_chrome, tmp_path)
+    captured = capsys.readouterr()
+
+    assert result["status"] == "logged-in"
+    for secret in ("handle-zzz", "secret-yyy", "313373"):
+        assert secret not in captured.out
+        assert secret not in captured.err

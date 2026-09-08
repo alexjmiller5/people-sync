@@ -92,11 +92,27 @@ darwin module, since there's no nix-darwin flake input to build a full
 ## Logins
 
 `contact-sync login <platform>` signs that platform's dedicated Chrome
-profile in, over CDP, at human pace: trusted per-key events with 80-200 ms
-jitter, 300-900 ms pauses between fields, trusted mouse clicks at an
-element's center. It is idempotent - an already signed-in profile is
-detected and left alone before anything is typed, which is the ordering to
-preserve when editing `_sign_in`.
+profile in, over CDP, at human pace: trusted per-key events (real `code`,
+Shift modifier, `Input.insertText` only for a character no US key produces)
+with 80-200 ms jitter, 300-900 ms pauses between fields, a mouse move then a
+trusted click at an element's center. It is idempotent - an already signed-in
+profile is detected and left alone before anything is typed, which is the
+ordering to preserve when editing `_sign_in`.
+
+**Never type into a field without proving it is the right one.** `_type_into`
+is the only path that types, and it clicks, asserts
+`document.activeElement`, clears (select-all + delete) and verifies the value
+is empty before the first keystroke. Every element predicate
+(`cdp.visible_js`, `RECT_JS`) demands a real box and `checkVisibility` -
+Google's identifier page ships a display:none password input that a bare
+`querySelector` check matched, so the click landed at (0,0) and the password
+was typed into the visible email field and submitted. A prefilled field
+(LinkedIn) that is typed into rather than cleared makes attempt 2 send a
+concatenated value and burns the one retry.
+
+The signed-in detector is always `wait_for`, never a single `eval`:
+client-rendered nav paints late, and one early sample reads a signed-in
+profile as signed out.
 
 Credentials never live in this repo or its config. Three commands supply
 them; each gets the platform as `$1` and prints to stdout:
@@ -125,8 +141,20 @@ Halt rules, all of which have tests:
 - A password the site did not accept is retried exactly once
   (`MAX_PASSWORD_ATTEMPTS = 2`). There is never a third attempt - a lockout
   costs far more than a skipped run.
+- ANY exception takes the halt path, not a traceback: only the exception
+  type name is reported, because a message can carry a command line
+  (`subprocess.TimeoutExpired` embeds the full argv) or page content. A code
+  command that exits non-zero halts naming its env var rather than polling
+  for 90 s.
 - Logs carry platform, step, and reason only. Never a username, never a
-  code, never page text.
+  code, never page text - there is a test asserting no secret reaches the
+  captured log output.
+
+Challenge phrases live in `pace.py`: `CHALLENGE_MARKERS` is shared, and
+`LOGIN_MARKERS` ("log in", "login") is the scraper-only half that the login
+flow deliberately excludes. Phrases only, never bare nouns - a bare
+"captcha" matches the reCAPTCHA badge that sits on ordinary login pages and
+halted every run before it started.
 
 Selectors are the one thing expected to drift: they all live in
 `login_specs.py`, one entry per platform, and a stale one halts (loudly)

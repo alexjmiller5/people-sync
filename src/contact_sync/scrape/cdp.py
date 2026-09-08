@@ -57,12 +57,34 @@ TYPE_JITTER_MS = (80, 200)
 CLICK_JITTER_PX = 3
 WAIT_POLL_S = 0.5
 
+# A hidden element is NOT a match. `querySelector` truthiness alone lets a
+# display:none duplicate (Google's identifier page ships a hidden password
+# input) satisfy a presence check, and its 0x0 rect passes a null-check -
+# so a click lands at ~(0,0) and the next keystrokes go wherever focus
+# actually is. Every element predicate below therefore demands a real box.
+_VISIBLE = (
+    "var r=e.getBoundingClientRect();"
+    "if(!(r.width>0&&r.height>0))return {miss};"
+    "if(!(e.checkVisibility?e.checkVisibility():e.offsetParent!==null))return {miss};"
+)
+
 RECT_JS = (
     "(function(){{var e=document.querySelector({selector});if(!e)return null;"
-    'e.scrollIntoView({{block:"center",inline:"center"}});'
-    "var r=e.getBoundingClientRect();"
+    + _VISIBLE.format(miss="null")
+    + 'e.scrollIntoView({{block:"center",inline:"center"}});'
+    "r=e.getBoundingClientRect();"
     "return {{x:r.x,y:r.y,width:r.width,height:r.height}};}})()"
 )
+
+
+def visible_js(selector: str) -> str:
+    """True only when `selector` matches an element a human could click."""
+    return (
+        f"(function(){{var e=document.querySelector({json.dumps(selector)});if(!e)return false;"
+        + _VISIBLE.format(miss="false")
+        + "return true;})()"
+    )
+
 
 # A single Network.getResponseBody must never hang navigate() forever - a
 # request whose body Chrome never returns (evicted, aborted, redirected) is
@@ -144,26 +166,97 @@ def _resolve_ws_url(
     return f"ws://127.0.0.1:{port}{ws_path}"
 
 
-def _key_events(char: str) -> list[dict]:
+# US-layout physical keys. A character no key on that layout produces (any
+# accented or non-Latin character) gets Input.insertText for that character
+# alone - a made-up `code`/virtual key is worse than none, since that is
+# exactly what a site's keyboard fingerprinting reads.
+SHIFT_MODIFIER = 8
+META_MODIFIER = 4
+
+_SHIFTED = {
+    "~": "`",
+    "!": "1",
+    "@": "2",
+    "#": "3",
+    "$": "4",
+    "%": "5",
+    "^": "6",
+    "&": "7",
+    "*": "8",
+    "(": "9",
+    ")": "0",
+    "_": "-",
+    "+": "=",
+    "{": "[",
+    "}": "]",
+    "|": "\\",
+    ":": ";",
+    '"': "'",
+    "<": ",",
+    ">": ".",
+    "?": "/",
+}
+_PUNCTUATION_CODES = {
+    "`": "Backquote",
+    "-": "Minus",
+    "=": "Equal",
+    "[": "BracketLeft",
+    "]": "BracketRight",
+    "\\": "Backslash",
+    ";": "Semicolon",
+    "'": "Quote",
+    ",": "Comma",
+    ".": "Period",
+    "/": "Slash",
+    " ": "Space",
+}
+
+
+def _physical_key(char: str) -> tuple[str, int, bool] | None:
+    """(code, virtual key code, shifted) for a character, or None when no US
+    key produces it."""
+    if char.isupper() and char.isascii() and char.isalpha():
+        base, shifted = char.lower(), True
+    elif char in _SHIFTED:
+        base, shifted = _SHIFTED[char], True
+    else:
+        base, shifted = char, False
+
+    if base.isascii() and base.isalpha():
+        return f"Key{base.upper()}", ord(base.upper()), shifted
+    if base.isascii() and base.isdigit():
+        return f"Digit{base}", ord(base), shifted
+    if base in _PUNCTUATION_CODES:
+        return _PUNCTUATION_CODES[base], 32 if base == " " else 0, shifted
+    return None
+
+
+def _key_events(char: str) -> list[dict] | None:
     """The keyDown/char/keyUp triple Chrome expects for one printable
-    character - `text` is what actually lands in the field, `key` is what a
-    site's keydown handlers read."""
-    code = ord(char.upper()) if char.isalnum() else 0
+    character - `text` is what lands in the field, `key`/`code` are what a
+    site's keydown handlers read. None when the character has no US key."""
+    physical = _physical_key(char)
+    if physical is None:
+        return None
+    code, vk, shifted = physical
+    modifiers = SHIFT_MODIFIER if shifted else 0
+    unmodified = char.lower() if shifted and char.isalpha() else char
+    common = {"key": char, "code": code, "modifiers": modifiers}
     return [
         {
             "type": "keyDown",
             "text": char,
-            "unmodifiedText": char,
-            "key": char,
-            "windowsVirtualKeyCode": code,
-            "nativeVirtualKeyCode": code,
+            "unmodifiedText": unmodified,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+            **common,
         },
-        {"type": "char", "text": char, "unmodifiedText": char, "key": char},
+        {"type": "char", "text": char, "unmodifiedText": unmodified, **common},
         {
             "type": "keyUp",
-            "key": char,
-            "windowsVirtualKeyCode": code,
-            "nativeVirtualKeyCode": code,
+            "windowsVirtualKeyCode": vk,
+            "nativeVirtualKeyCode": vk,
+            **common,
         },
     ]
 
@@ -389,22 +482,54 @@ class Browser:
         per character, with a human pause between characters. Click the field
         first - this does not focus anything itself."""
         for char in text:
-            for params in _key_events(char):
-                fut = asyncio.run_coroutine_threadsafe(
-                    self._send("Input.dispatchKeyEvent", params, session_id=self._session_id),
-                    self._loop,
-                )
-                fut.result(timeout=10)
+            events = _key_events(char)
+            if events is None:
+                self.insert_text(char)
+            else:
+                for params in events:
+                    self._input("Input.dispatchKeyEvent", params)
             _sleep(random.uniform(jitter_ms[0], jitter_ms[1]) / 1000)
 
+    def clear_field(self) -> None:
+        """Select-all + delete on the focused field. A field a browser (or the
+        site) prefilled would otherwise be typed INTO, making attempt two send
+        a concatenated value."""
+        for event_type in ("keyDown", "keyUp"):
+            params = {
+                "type": event_type,
+                "key": "a",
+                "code": "KeyA",
+                "modifiers": META_MODIFIER,
+                "windowsVirtualKeyCode": 65,
+                "nativeVirtualKeyCode": 65,
+            }
+            if event_type == "keyDown":
+                # macOS routes editing shortcuts through `commands`, not the
+                # modifier alone.
+                params["commands"] = ["selectAll"]
+            self._input("Input.dispatchKeyEvent", params)
+        for event_type in ("keyDown", "keyUp"):
+            self._input(
+                "Input.dispatchKeyEvent",
+                {
+                    "type": event_type,
+                    "key": "Backspace",
+                    "code": "Backspace",
+                    "windowsVirtualKeyCode": 8,
+                    "nativeVirtualKeyCode": 8,
+                },
+            )
+
+    def _input(self, method: str, params: dict) -> None:
+        asyncio.run_coroutine_threadsafe(
+            self._send(method, params, session_id=self._session_id), self._loop
+        ).result(timeout=10)
+
     def insert_text(self, text: str) -> None:
-        """Paste `text` into the focused field in one shot. NOT human-like -
-        no key events reach the page, which a site's input handlers can spot.
-        Kept for bulk, non-login fields; the login flow never uses it."""
-        fut = asyncio.run_coroutine_threadsafe(
-            self._send("Input.insertText", {"text": text}, session_id=self._session_id), self._loop
-        )
-        fut.result(timeout=10)
+        """Put `text` into the focused field in one shot. NOT human-like - no
+        key events reach the page, which a site's input handlers can spot.
+        `type_text` uses it only for a character no US key produces."""
+        self._input("Input.insertText", {"text": text})
 
     def click(self, selector: str) -> None:
         """Scroll the element into view and click its center (jittered by a
@@ -414,23 +539,23 @@ class Browser:
             raise CdpError(f"click target not on the page: {selector}")
         x = rect["x"] + rect["width"] / 2 + random.uniform(-CLICK_JITTER_PX, CLICK_JITTER_PX)
         y = rect["y"] + rect["height"] / 2 + random.uniform(-CLICK_JITTER_PX, CLICK_JITTER_PX)
-        for event_type in ("mousePressed", "mouseReleased"):
-            fut = asyncio.run_coroutine_threadsafe(
-                self._send(
-                    "Input.dispatchMouseEvent",
-                    {
-                        "type": event_type,
-                        "x": x,
-                        "y": y,
-                        "button": "left",
-                        "buttons": 1,
-                        "clickCount": 1,
-                    },
-                    session_id=self._session_id,
-                ),
-                self._loop,
+        # A press with no preceding move is a shape no human input produces.
+        self._input(
+            "Input.dispatchMouseEvent",
+            {"type": "mouseMoved", "x": x, "y": y, "button": "none", "buttons": 0},
+        )
+        for event_type, buttons in (("mousePressed", 1), ("mouseReleased", 0)):
+            self._input(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": event_type,
+                    "x": x,
+                    "y": y,
+                    "button": "left",
+                    "buttons": buttons,
+                    "clickCount": 1,
+                },
             )
-            fut.result(timeout=10)
 
     def wait_for(self, js_predicate: str, timeout_s: float = 10.0) -> bool:
         """Poll `js_predicate` until it evaluates truthy. Returns False on
