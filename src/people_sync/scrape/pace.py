@@ -51,6 +51,11 @@ LOGIN_MARKERS = (
 )
 
 CHALLENGE_MARKERS = (
+    # a captcha gate (the reCAPTCHA badge on ordinary pages says neither)
+    "make sure that you're a human",
+    "make sure that you\u2019re a human",
+    "i'm not a robot",
+    "i\u2019m not a robot",
     "checkpoint required",
     "checkpoint/",
     "action blocked",
