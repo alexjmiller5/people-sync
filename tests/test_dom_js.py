@@ -109,3 +109,25 @@ def test_text_selector_with_a_tag_filter_skips_same_text_elements_of_other_tags(
         1,
         0,
     ]
+
+
+@pytest.mark.parametrize(
+    "js",
+    [
+        pytest.param(getattr(mod, name), id=f"{mod.__name__.split('.')[-1]}.{name}")
+        for mod in (
+            __import__("people_sync.scrape.instagram", fromlist=["x"]),
+            __import__("people_sync.scrape.linkedin", fromlist=["x"]),
+            __import__("people_sync.scrape.facebook", fromlist=["x"]),
+        )
+        for name in ("EXTRACTOR_JS", "LIST_ENTRIES_JS")
+        if hasattr(mod, name)
+    ],
+)
+def test_every_extractor_script_parses_as_javascript(js):
+    """A stray escape in one of these strings is a SyntaxError the first time
+    the page is reached - catch it here."""
+    r = subprocess.run(
+        [NODE, "-e", "new Function(process.argv[1])", js], capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stderr.strip().splitlines()[-1]
