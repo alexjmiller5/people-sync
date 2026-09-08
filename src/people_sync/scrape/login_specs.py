@@ -120,7 +120,14 @@ SPECS: dict[str, LoginSpec] = {
         password_selector=None,
         submit_selector=None,  # no submit button: Enter in the phone field
         logged_in_js='!!document.querySelector(\'a[href^="/u/"], a[href="/me"]\')',
-        sms_code_selector='input[autocomplete="one-time-code"], input[name="code"]',
+        # The code page: an unnamed "000000" field, a consent checkbox that
+        # gates the Log in button (ticked via the remember step), Log in.
+        sms_code_selector=(
+            'input[autocomplete="one-time-code"], input[name="code"], '
+            'input[placeholder="000000"], input[inputmode="numeric"]'
+        ),
+        remember_selector='input[type="checkbox"]',
+        code_submit_selector="text=Log in",
     ),
     # For sites offering only "Continue with Google": the same profile, the
     # same human typing, on Google's own two-page form.

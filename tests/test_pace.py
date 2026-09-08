@@ -292,3 +292,21 @@ def test_daily_caps_malformed_environment_fails_at_construction(monkeypatch, tmp
     monkeypatch.setenv(pace.DAILY_CAPS_ENV, raw)
     with pytest.raises(ValueError, match=pace.DAILY_CAPS_ENV):
         pace.Pacer("linkedin", state_path=str(tmp_path / "s.json"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We need to make sure that you're a human",
+        "We need to make sure that you\u2019re a human",
+        "I'm not a robot",
+    ],
+)
+def test_captcha_gates_are_challenges(text):
+    assert pace.is_challenge(text)
+
+
+def test_recaptcha_badge_is_not_a_challenge():
+    assert not pace.is_challenge(
+        "This site is protected by reCAPTCHA and the Google Privacy Policy apply."
+    )

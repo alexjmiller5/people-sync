@@ -248,17 +248,30 @@ def _submit(browser: Browser, selector: str | None) -> None:
         browser.press_enter()
 
 
-def _fill_credentials(browser: Browser, spec: LoginSpec, credential: dict) -> None:
-    _type_into(browser, spec.username_selector, credential["username"], "username")
-    _pause()
+def _form_js(spec: LoginSpec) -> str:
+    """The login form is on the page: its username field, or (a site that
+    remembers who you are and asks only for the password) its password field."""
+    selector = spec.username_selector
+    if spec.password_selector:
+        selector = f"{selector}, {spec.password_selector}"
+    return visible_js(selector)
 
-    if spec.username_submit_selector:
-        browser.click(spec.username_submit_selector)
-        if spec.password_selector and not browser.wait_for(
-            visible_js(spec.password_selector), FORM_TIMEOUT_S
-        ):
-            raise LoginHalt("password field never appeared")
+
+def _fill_credentials(browser: Browser, spec: LoginSpec, credential: dict) -> None:
+    if _present(browser, spec.username_selector):
+        _type_into(browser, spec.username_selector, credential["username"], "username")
         _pause()
+        if spec.username_submit_selector:
+            browser.click(spec.username_submit_selector)
+            if spec.password_selector and not browser.wait_for(
+                visible_js(spec.password_selector), FORM_TIMEOUT_S
+            ):
+                raise LoginHalt("password field never appeared")
+            _pause()
+    elif spec.password_selector and _present(browser, spec.password_selector):
+        log.info("site remembers the username", platform=spec.platform)
+    else:
+        raise LoginHalt("no login form on the page")
 
     if spec.password_selector:
         _type_into(browser, spec.password_selector, credential.get("password") or "", "password")
@@ -390,7 +403,7 @@ def _sign_in(browser: Browser, spec: LoginSpec) -> str:
                 if browser.wait_for(spec.logged_in_js, LOGGED_IN_TIMEOUT_S):
                     return "logged-in"
             _guard(browser)
-            if not browser.wait_for(visible_js(spec.username_selector), FORM_TIMEOUT_S):
+            if not browser.wait_for(_form_js(spec), FORM_TIMEOUT_S):
                 raise LoginHalt("no login form on the page")
 
             requested_at = _now_iso()
