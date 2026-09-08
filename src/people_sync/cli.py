@@ -1,19 +1,19 @@
-"""CLI entrypoint: uv run python -m contact_sync <cmd>."""
+"""CLI entrypoint: uv run python -m people_sync <cmd>."""
 
 import argparse
 import json
 import os
 import sys
 
-from contact_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
-from contact_sync.scrape import login as scrape_login
-from contact_sync.scrape import run as scrape_run
-from contact_sync.scrape.pace import DEFAULT_STATE_PATH
+from people_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from people_sync.scrape import login as scrape_login
+from people_sync.scrape import run as scrape_run
+from people_sync.scrape.pace import DEFAULT_STATE_PATH
 
 QUEUE_QUERY = """
     SELECT c.id, c.source, c.handle, c.name,
            c.suggested_person_id, p.name AS suggested_name
-    FROM contact_records c
+    FROM people_sync_records c
     LEFT JOIN people p ON p.id = c.suggested_person_id
     WHERE c.status = 'pending'
     ORDER BY c.suggested_person_id IS NULL, c.id
@@ -93,7 +93,7 @@ def cmd_photos_store(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="contact_sync")
+    parser = argparse.ArgumentParser(prog="people_sync")
     sub = parser.add_subparsers(dest="command", required=True)
 
     ingest = sub.add_parser("ingest", help="parse an export or fetch a source into the ledger")

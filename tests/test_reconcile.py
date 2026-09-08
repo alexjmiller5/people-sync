@@ -1,4 +1,5 @@
 import json
+import re
 
 import httpx
 import pytest
@@ -68,14 +69,17 @@ def _person(**over):
 
 
 def _router(people=(), records=(), **children):
-    """Route lifedata.sql() reads by table; UPDATEs return nothing, like the real backend."""
-    tables = {"people": people, "contact_records": records, **children}
+    """Route lifedata.sql() reads by table; UPDATEs return nothing, like the real
+    backend. Table names are matched on a word boundary: `FROM people` is a
+    prefix of `FROM people_sync_records`, so a plain substring test routes the
+    ledger read to the people table."""
+    tables = {"people": people, "people_sync_records": records, **children}
 
     def _fn(query):
         if query.startswith("UPDATE"):
             return []
         for table, rows in tables.items():
-            if f"FROM {table}" in query:
+            if re.search(rf"\bFROM {table}\b", query):
                 return list(rows)
         return []
 
@@ -87,7 +91,7 @@ def env(mocker, monkeypatch):
     """Everything external mocked: no life-data, no gog, no Notion, no clock drift."""
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
     mocker.patch("reconcile.user_groups", return_value=GROUPS)
-    mocker.patch("contact_sync.lifedata.now_iso", return_value=NOW)
+    mocker.patch("people_sync.lifedata.now_iso", return_value=NOW)
     return mocker
 
 
@@ -123,9 +127,9 @@ def test_union_circles_preserves_existing_order_and_dedupes():
 def test_link_fills_empty_fields_and_preserves_non_empty(env):
     person = _person(first_name=None, last_name="Quillon", birthday=None)
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    insert = env.patch("contact_sync.lifedata.insert")
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -141,16 +145,16 @@ def test_link_fills_empty_fields_and_preserves_non_empty(env):
     assert account["source_id"] == "people/c1"
     assert account["display_name"] == "Nova Quill"
     assert account["active"] == 1
-    ledger = next(w for w in _writes(sql) if w.startswith("UPDATE contact_records"))
+    ledger = next(w for w in _writes(sql) if w.startswith("UPDATE people_sync_records"))
     assert "status = 'matched'" in ledger and "person_id = 'p1'" in ledger
 
 
 def test_link_birthday_conflict_never_overwrites(env, capsys):
     person = _person(birthday="1991-08-09")
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    env.patch("contact_sync.lifedata.insert")
+    env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -163,9 +167,9 @@ def test_link_birthday_conflict_never_overwrites(env, capsys):
 def test_link_circle_union_keeps_existing_first(env):
     person = _person(circles=json.dumps(["NYC", "Family"]))
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    env.patch("contact_sync.lifedata.insert")
+    env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -176,9 +180,9 @@ def test_link_circle_union_keeps_existing_first(env):
 def test_link_rename_preserves_old_name_in_nickname(env):
     person = _person(name="N. Quill", nickname=None)
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    env.patch("contact_sync.lifedata.insert")
+    env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--rename", "--apply"])
 
@@ -191,9 +195,9 @@ def test_link_rename_preserves_old_name_in_nickname(env):
 def test_link_rename_falls_back_to_notes_when_nickname_taken(env):
     person = _person(name="N. Quill", nickname="Novi", notes="knows chess")
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    env.patch("contact_sync.lifedata.insert")
+    env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--rename", "--apply"])
 
@@ -205,9 +209,9 @@ def test_link_rename_falls_back_to_notes_when_nickname_taken(env):
 def test_link_without_rename_leaves_name_alone(env):
     person = _person(name="N. Quill")
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[person], records=[_record()])
     )
-    env.patch("contact_sync.lifedata.insert")
+    env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -225,10 +229,10 @@ def test_link_skips_duplicate_account(env):
         }
     ]
     env.patch(
-        "contact_sync.lifedata.sql",
+        "people_sync.lifedata.sql",
         side_effect=_router(people=[_person()], records=[_record()], person_accounts=accounts),
     )
-    insert = env.patch("contact_sync.lifedata.insert")
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -242,10 +246,10 @@ def test_link_refuses_to_insert_beside_a_legacy_account_without_source_id(env, c
         {"id": "google_contacts:p1", "person_id": "p1", "source_id": None},
     ]
     env.patch(
-        "contact_sync.lifedata.sql",
+        "people_sync.lifedata.sql",
         side_effect=_router(people=[_person()], records=[_record()], person_accounts=accounts),
     )
-    insert = env.patch("contact_sync.lifedata.insert")
+    insert = env.patch("people_sync.lifedata.insert")
     warn = env.patch("reconcile.log.warning")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
@@ -264,9 +268,9 @@ def test_link_refuses_to_insert_beside_a_legacy_account_without_source_id(env, c
 def test_link_on_matched_record_is_a_noop(env, capsys):
     record = _record(status="matched", person_id="p1")
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[_person()], records=[record])
+        "people_sync.lifedata.sql", side_effect=_router(people=[_person()], records=[record])
     )
-    insert = env.patch("contact_sync.lifedata.insert")
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -277,9 +281,9 @@ def test_link_on_matched_record_is_a_noop(env, capsys):
 
 def test_link_dry_run_emits_no_writes(env):
     sql = env.patch(
-        "contact_sync.lifedata.sql", side_effect=_router(people=[_person()], records=[_record()])
+        "people_sync.lifedata.sql", side_effect=_router(people=[_person()], records=[_record()])
     )
-    insert = env.patch("contact_sync.lifedata.insert")
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1"])
 
@@ -292,7 +296,7 @@ def test_link_dry_run_emits_no_writes(env):
 
 def _merge_env(env, survivor, loser, **children):
     return env.patch(
-        "contact_sync.lifedata.sql",
+        "people_sync.lifedata.sql",
         # reversed on purpose: survivor/loser are resolved by id, not row order
         side_effect=_router(people=[loser, survivor], **children),
     )
@@ -341,8 +345,8 @@ def test_merge_repoints_every_table_and_soft_deletes_the_loser(env):
         assert any(
             w == f"UPDATE {table} SET person_id = 's1' WHERE id = '{row_id}'" for w in writes
         ), table
-    assert any("UPDATE contact_records SET person_id = 's1'" in w for w in writes)
-    assert any("UPDATE contact_records SET suggested_person_id = 's1'" in w for w in writes)
+    assert any("UPDATE people_sync_records SET person_id = 's1'" in w for w in writes)
+    assert any("UPDATE people_sync_records SET suggested_person_id = 's1'" in w for w in writes)
     assert any(
         w.startswith("UPDATE people SET deleted_at = ") and "'l1'" in w and NOW in w for w in writes
     )
@@ -554,9 +558,9 @@ def test_merge_refuses_a_person_merged_into_itself(env):
 
 def test_create_populates_every_field_with_the_dash_stripped_page_id(env):
     page_id = "12345678-90ab-cdef-1234-567890abcdef"
-    stub = env.patch("contact_sync.notion_people.create_stub", return_value=page_id)
-    sql = env.patch("contact_sync.lifedata.sql", side_effect=_router(records=[_record()]))
-    insert = env.patch("contact_sync.lifedata.insert")
+    stub = env.patch("people_sync.notion_people.create_stub", return_value=page_id)
+    sql = env.patch("people_sync.lifedata.sql", side_effect=_router(records=[_record()]))
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["create", "google_contacts:people/c1", "--apply"])
 
@@ -571,14 +575,14 @@ def test_create_populates_every_field_with_the_dash_stripped_page_id(env):
     account = insert.call_args_list[1].args[1][0]
     assert account["id"] == "google_contacts:1234567890abcdef1234567890abcdef:people/c1"
     assert account["person_id"] == person["id"]
-    ledger = next(w for w in _writes(sql) if w.startswith("UPDATE contact_records"))
+    ledger = next(w for w in _writes(sql) if w.startswith("UPDATE people_sync_records"))
     assert "status = 'matched'" in ledger and person["id"] in ledger
 
 
 def test_create_reports_an_orphaned_notion_page(env, capsys):
-    env.patch("contact_sync.notion_people.create_stub", return_value="abc-def")
-    env.patch("contact_sync.lifedata.sql", side_effect=_router(records=[_record()]))
-    env.patch("contact_sync.lifedata.insert", side_effect=RuntimeError("life is down"))
+    env.patch("people_sync.notion_people.create_stub", return_value="abc-def")
+    env.patch("people_sync.lifedata.sql", side_effect=_router(records=[_record()]))
+    env.patch("people_sync.lifedata.insert", side_effect=RuntimeError("life is down"))
 
     with pytest.raises(RuntimeError):
         reconcile.main(["create", "google_contacts:people/c1", "--apply"])
@@ -587,8 +591,8 @@ def test_create_reports_an_orphaned_notion_page(env, capsys):
 
 
 def test_create_refuses_a_record_that_is_not_pending(env):
-    env.patch("contact_sync.lifedata.sql", side_effect=_router(records=[_record(status="ignored")]))
-    stub = env.patch("contact_sync.notion_people.create_stub")
+    env.patch("people_sync.lifedata.sql", side_effect=_router(records=[_record(status="ignored")]))
+    stub = env.patch("people_sync.notion_people.create_stub")
 
     with pytest.raises(SystemExit):
         reconcile.main(["create", "google_contacts:people/c1", "--apply"])
@@ -597,9 +601,9 @@ def test_create_refuses_a_record_that_is_not_pending(env):
 
 
 def test_create_dry_run_writes_nothing(env):
-    stub = env.patch("contact_sync.notion_people.create_stub")
-    sql = env.patch("contact_sync.lifedata.sql", side_effect=_router(records=[_record()]))
-    insert = env.patch("contact_sync.lifedata.insert")
+    stub = env.patch("people_sync.notion_people.create_stub")
+    sql = env.patch("people_sync.lifedata.sql", side_effect=_router(records=[_record()]))
+    insert = env.patch("people_sync.lifedata.insert")
 
     reconcile.main(["create", "google_contacts:people/c1"])
 

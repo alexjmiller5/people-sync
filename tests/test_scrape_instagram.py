@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from contact_sync.scrape import instagram
-from contact_sync.scrape.profile import ExtractError
+from people_sync.scrape import instagram
+from people_sync.scrape.profile import ExtractError
 
 # Verbatim synthetic fixture from recon-instagram.md.
 FIXTURE = {

@@ -1,4 +1,4 @@
-# People DB & Contact Sync - Design Spec
+# People DB & People Sync - Design Spec
 
 Date: 2026-09-02. Status: approved design, pre-implementation.
 
@@ -183,9 +183,9 @@ completed step.
    (per-circle person counts vs. old per-tag/company/era counts must
    reconcile to zero loss); spot-check named rows with Alex.
 
-## The code (this repo, renamed `contact-sync`)
+## The code (this repo, renamed `people-sync`)
 
-The repo is reworked in place: rename to `contact-sync` (repo + local dir;
+The repo is reworked in place: rename to `people-sync` (repo + local dir;
 update projects skill, repo description/topics per repo-metadata skill).
 
 **All existing parser and test code is presumed wrong and is deleted, not
@@ -222,7 +222,7 @@ entered during triage (Spotify profile URLs/ids manually; its avatar is then
 API-fetchable). Avatars for browser-only platforms are scraped via
 chrome-control during review runs per the person\_photos capture policy.
 
-## The workflow (`contacts-review` skill, in agent-config)
+## The workflow (`people-review` skill, in agent-config)
 
 Alex starts it by asking; roughly monthly. The skill documents:
 
@@ -274,9 +274,9 @@ task (due 2026-09-16) decides the eventual source of truth for birthdays.
 
 ## Notion task consolidation (at ship time, with Alex)
 
-The Contact Sync project's 17 open tasks map to this design roughly as:
+The People Sync project's 17 open tasks map to this design roughly as:
 absorbed by the schema/workflow (source enrichment tasks, Google links,
-new-contact triage, contacts-review skill, monthly cadence, Apple cleanup
+new-contact triage, people-review skill, monthly cadence, Apple cleanup
 workflow, label fixing, location seeding), superseded (birthday
 notification wiring → birthday-reminders migration), likely cancel
 (realtime mute-status sync - contradicts the monthly-cadence decision), and
@@ -292,7 +292,7 @@ with Alex when the implementation ships, not before.
 * Migration is rehearsed against a copy of `life.db` (dry-run producing
   the before/after reconciliation counts) before touching the live estate.
 * Mutation-test the tests: break a parser field mapping, confirm failure.
-* E2E = the first real contacts-review run with Alex, on fresh exports.
+* E2E = the first real people-review run with Alex, on fresh exports.
 
 ## Docs & estate updates at ship
 
@@ -346,7 +346,7 @@ disambiguates same-first-name duplicates.
 
 ### Storage
 
-`contact_profiles` (latest scrape wins, keyed by ledger record id):
+`people_sync_profiles` (latest scrape wins, keyed by ledger record id):
 `record_id`, `platform`, `profile_url`, `platform_id`, `display_name`,
 `bio`, `location`, `hometown`, `education` (JSON), `work` (JSON),
 `birthday`, `links` (JSON array of urls/handles found), `is_private`,

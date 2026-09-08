@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from contact_sync.scrape import cdp, login, login_specs
+from people_sync.scrape import cdp, login, login_specs
 from tests.test_cdp import fake_chrome  # noqa: F401  (pytest fixture)
 
 SPEC = login.LoginSpec(

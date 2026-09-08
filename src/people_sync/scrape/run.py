@@ -3,7 +3,7 @@
 Selects stale/never-scraped ledger records for a platform, then per record:
 paces, navigates, checks for a challenge page, runs the platform's extractor,
 archives the raw page + captured XHRs to R2, fetches and dedupes the avatar,
-and upserts `contact_profiles`. A platform plugs in by exposing `URL`,
+and upserts `people_sync_profiles`. A platform plugs in by exposing `URL`,
 `CAPTURE`, `EXTRACTOR_JS`, and `parse(eval_result, captured) -> Profile` -
 see `instagram.py`.
 """
@@ -19,10 +19,10 @@ from importlib import import_module
 import structlog
 from websockets.exceptions import ConnectionClosed
 
-from contact_sync import lifedata, photos
-from contact_sync.scrape.cdp import Browser, CdpError
-from contact_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, is_challenge
-from contact_sync.scrape.profile import ExtractError, upsert_profile
+from people_sync import lifedata, photos
+from people_sync.scrape.cdp import Browser, CdpError
+from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, is_challenge
+from people_sync.scrape.profile import ExtractError, upsert_profile
 
 # A CDP protocol error or a dropped websocket means the browser session
 # itself is gone - halt rather than spin through the remaining records.
@@ -44,8 +44,8 @@ def _records_sql(platform: str, cutoff: str) -> str:
     return (
         "SELECT c.id, c.handle, c.name, "
         "p.avatar_r2_key AS avatar_r2_key, p.avatar_sha256 AS avatar_sha256 "
-        "FROM contact_records c "
-        "LEFT JOIN contact_profiles p ON p.record_id = c.id "
+        "FROM people_sync_records c "
+        "LEFT JOIN people_sync_profiles p ON p.record_id = c.id "
         f"WHERE c.source = {lifedata.sq(platform)} "
         "AND c.deleted_at IS NULL "
         "AND c.status IN ('pending', 'matched') "
@@ -124,7 +124,7 @@ def scrape(
     endpoint: str | None = None,
     data_dir: str | None = None,
 ) -> dict:
-    module = import_module(f"contact_sync.scrape.{platform}")
+    module = import_module(f"people_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
     records = _select_records(platform)
     if max_n is not None:

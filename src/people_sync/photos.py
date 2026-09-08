@@ -19,7 +19,7 @@ import os
 import httpx
 import structlog
 
-from contact_sync import lifedata, sources
+from people_sync import lifedata, sources
 
 log = structlog.get_logger(__name__)
 

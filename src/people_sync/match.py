@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import structlog
 
-from contact_sync import lifedata
+from people_sync import lifedata
 
 log = structlog.get_logger(__name__)
 
@@ -61,7 +61,7 @@ def run_match() -> dict:
         "SELECT id, name, first_name, last_name, nickname FROM people WHERE deleted_at IS NULL"
     )
     pending = lifedata.sql(
-        "SELECT id, source, source_id, handle, name, raw FROM contact_records "
+        "SELECT id, source, source_id, handle, name, raw FROM people_sync_records "
         "WHERE status = 'pending'"
     )
 
@@ -105,14 +105,14 @@ def run_match() -> dict:
         word_count = len(normalize(person.get("name") or "").split())
         if word_count < 2:
             lifedata.sql(
-                f"UPDATE contact_records SET suggested_person_id = {lifedata.sq(person_id)} "
+                f"UPDATE people_sync_records SET suggested_person_id = {lifedata.sq(person_id)} "
                 f"WHERE id = {lifedata.sq(record['id'])}"
             )
             suggested += 1
             continue
 
         lifedata.sql(
-            "UPDATE contact_records SET status = 'matched', "
+            "UPDATE people_sync_records SET status = 'matched', "
             f"person_id = {lifedata.sq(person_id)} WHERE id = {lifedata.sq(record['id'])}"
         )
         auto += 1

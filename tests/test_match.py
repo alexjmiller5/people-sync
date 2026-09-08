@@ -1,15 +1,19 @@
 import json
+import re
 
-from contact_sync.match import letters, normalize, run_match
+from people_sync.match import letters, normalize, run_match
 
 
 def _sql_router(people, pending):
-    """Route lifedata.sql() calls by table, same as a real backend would."""
+    """Route lifedata.sql() calls by table, same as a real backend would.
+    Matched on a word boundary: `FROM people` is a prefix of
+    `FROM people_sync_records`, so a plain substring test routes the ledger
+    read to the people table."""
 
     def _fn(query):
-        if "FROM people" in query:
+        if re.search(r"\bFROM people\b", query):
             return people
-        if "FROM contact_records" in query:
+        if re.search(r"\bFROM people_sync_records\b", query):
             return pending
         return []  # UPDATE statements have no rows to return
 
@@ -36,8 +40,8 @@ def test_single_word_never_automatches(mocker):
             "raw": json.dumps({"URL": "https://linkedin.com/in/m1"}),
         }
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
 
     out = run_match()
 
@@ -78,8 +82,8 @@ def test_ambiguous_two_people_stays_pending(mocker):
             "raw": json.dumps({"name": "Test Person"}),
         }
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
 
     out = run_match()
 
@@ -111,8 +115,8 @@ def test_exact_unique_automatch_writes_account(mocker):
             "raw": json.dumps({"URL": "https://linkedin.com/in/t1"}),
         }
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
 
     out = run_match()
 
@@ -167,8 +171,8 @@ def test_record_side_ambiguity_stays_pending(mocker):
             "raw": json.dumps({"URL": "https://linkedin.com/in/t2"}),
         },
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
 
     out = run_match()
 
@@ -208,8 +212,8 @@ def test_cross_source_records_both_automatch(mocker):
             "raw": json.dumps({"name": "Test Person"}),
         },
     ]
-    sql = mocker.patch("contact_sync.lifedata.sql", side_effect=_sql_router(people, pending))
-    ins = mocker.patch("contact_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
 
     out = run_match()
 

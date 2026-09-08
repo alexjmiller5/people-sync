@@ -1,11 +1,11 @@
-"""contact_records resolution ledger - idempotent upserts."""
+"""people_sync_records resolution ledger - idempotent upserts."""
 
 import json
 from dataclasses import dataclass
 
 import structlog
 
-from contact_sync import lifedata
+from people_sync import lifedata
 
 log = structlog.get_logger(__name__)
 
@@ -48,7 +48,7 @@ def upsert(records: list[Record]) -> dict:
     records = deduped
     ids = ",".join(lifedata.sq(r.row_id) for r in records)
     existing = {
-        row["id"] for row in lifedata.sql(f"SELECT id FROM contact_records WHERE id IN ({ids})")
+        row["id"] for row in lifedata.sql(f"SELECT id FROM people_sync_records WHERE id IN ({ids})")
     }
     now = lifedata.now_iso()
     new_rows = []
@@ -56,7 +56,7 @@ def upsert(records: list[Record]) -> dict:
     for r in records:
         if r.row_id in existing:
             lifedata.sql(
-                "UPDATE contact_records SET "
+                "UPDATE people_sync_records SET "
                 f"handle = {lifedata.sq(r.handle)}, name = {lifedata.sq(r.name)}, "
                 f"raw = {lifedata.sq(json.dumps(r.raw))}, "
                 f"follows_me = {_int_sql(r.follows_me)}, i_follow = {_int_sql(r.i_follow)}, "
@@ -83,5 +83,5 @@ def upsert(records: list[Record]) -> dict:
                 }
             )
     if new_rows:
-        lifedata.insert("contact_records", new_rows)
+        lifedata.insert("people_sync_records", new_rows)
     return {"new": len(new_rows), "updated": updated}

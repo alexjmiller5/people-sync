@@ -26,14 +26,14 @@ import sys
 import httpx
 import structlog
 
-from contact_sync import lifedata, notion_people
+from people_sync import lifedata, notion_people
 from google_cleanup import user_groups
 
 log = structlog.get_logger(__name__)
 
 SOURCE = "google_contacts"
 
-# Label/org strings become circles verbatim, with one exception Alex decided on:
+# Label/org strings become circles verbatim, with one deliberate exception:
 # the Greek sigma does not survive round-trips through every client.
 CIRCLE_ALIASES = {"ΣAE": "SAE"}
 
@@ -161,7 +161,7 @@ def parse_record(record: dict, groups: dict[str, str]) -> dict:
         for resource_name in [
             (membership.get("contactGroupMembership") or {}).get("contactGroupResourceName")
         ]
-        # system groups (myContacts) are Google's, not Alex's - user_groups() omits them
+        # system groups (myContacts) are Google's, not the user's - user_groups() omits them
         if resource_name in groups
     ]
     circles += [circle(org["name"]) for org in raw.get("org") or [] if org.get("name")]
@@ -191,7 +191,7 @@ def account_row(person_id: str, record: dict, display_name: str | None) -> dict:
 
 
 def _google_record(record_id: str) -> dict:
-    record = _one(f"SELECT * FROM contact_records WHERE id = {lifedata.sq(record_id)}")
+    record = _one(f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)}")
     if not record:
         sys.exit(f"no contact record {record_id}")
     if record["source"] != SOURCE:
@@ -201,7 +201,7 @@ def _google_record(record_id: str) -> dict:
 
 def _mark_matched(ops: Ops, record_id: str, person_id: str) -> None:
     ops.sql(
-        f"UPDATE contact_records SET status = 'matched', person_id = {lifedata.sq(person_id)} "
+        f"UPDATE people_sync_records SET status = 'matched', person_id = {lifedata.sq(person_id)} "
         f"WHERE id = {lifedata.sq(record_id)}"
     )
 
@@ -400,7 +400,7 @@ def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
         _merge_child_rows(table, keys, survivor_id, loser_id, ops)
     for col in ("person_id", "suggested_person_id"):
         ops.sql(
-            f"UPDATE contact_records SET {col} = {lifedata.sq(survivor_id)} "
+            f"UPDATE people_sync_records SET {col} = {lifedata.sq(survivor_id)} "
             f"WHERE {col} = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
         )
     _merge_relations(survivor_id, loser_id, ops)
