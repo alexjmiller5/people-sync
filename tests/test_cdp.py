@@ -891,22 +891,18 @@ def _key_events(fake_chrome) -> list[dict]:
     return [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchKeyEvent"]
 
 
-def test_type_text_emits_keydown_char_keyup_per_character(tmp_path, fake_chrome, mocker):
+def test_type_text_emits_one_keydown_keyup_pair_per_character(tmp_path, fake_chrome, mocker):
+    """keyDown carries the text; a separate `char` event on top of it would
+    insert every character twice (seen live: "aalleexx")."""
     mocker.patch.object(cdp, "_sleep")
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.type_text("ab")
         events = _key_events(fake_chrome)
-        assert [e["params"]["type"] for e in events] == [
-            "keyDown",
-            "char",
-            "keyUp",
-            "keyDown",
-            "char",
-            "keyUp",
-        ]
-        assert [e["params"]["key"] for e in events] == ["a", "a", "a", "b", "b", "b"]
-        assert events[1]["params"]["text"] == "a"
+        assert [e["params"]["type"] for e in events] == ["keyDown", "keyUp", "keyDown", "keyUp"]
+        assert [e["params"]["key"] for e in events] == ["a", "a", "b", "b"]
+        assert events[0]["params"]["text"] == "a"
+        assert "text" not in events[1]["params"]
         assert all(e["sessionId"] == "S1" for e in events)
     finally:
         browser.close()
