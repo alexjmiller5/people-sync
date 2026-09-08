@@ -16,7 +16,8 @@ class FakeChrome:
     extra behavior for specific methods via `on(method, handler)`.
     """
 
-    def __init__(self):
+    def __init__(self, handshake_delay: float = 0.0):
+        self.handshake_delay = handshake_delay  # stalls the websocket upgrade
         self.handlers: dict = {}
         self.messages: list[dict] = []
         self.connections: list = []
@@ -30,8 +31,17 @@ class FakeChrome:
         self.handlers[method] = handler
 
     async def _start(self) -> int:
-        self._server = await serve(self._handle, "127.0.0.1", 0)
+        self._server = await serve(
+            self._handle, "127.0.0.1", 0, process_request=self._process_request
+        )
         return self._server.sockets[0].getsockname()[1]
+
+    async def _process_request(self, connection, request):
+        """Stall before the upgrade is accepted, the way a Chrome waiting on
+        its "Allow remote debugging?" sheet does."""
+        if self.handshake_delay:
+            await asyncio.sleep(self.handshake_delay)
+        return None
 
     async def _handle(self, ws) -> None:
         self.connections.append(ws)
@@ -1045,7 +1055,7 @@ def test_screenshot_writes_decoded_png_bytes(tmp_path, fake_chrome):
 def test_rect_js_and_visible_js_both_require_real_dimensions():
     """A display:none element returns a 0x0 rect, so a null-check alone lets
     a hidden field pass. Both predicates must test size and visibility."""
-    for expression in (cdp.visible_js("input#x"), cdp.RECT_JS.format(selector='"input#x"')):
+    for expression in (cdp.visible_js("input#x"), cdp.rect_js("input#x")):
         assert "checkVisibility" in expression
         assert "width>0" in expression.replace(" ", "")
         assert "height>0" in expression.replace(" ", "")
@@ -1116,3 +1126,144 @@ def test_clear_field_selects_all_and_deletes(tmp_path, fake_chrome, mocker):
         assert not any(e["params"]["type"] == "char" for e in events)
     finally:
         browser.close()
+
+
+def test_press_backspace_sends_one_trusted_pair_per_press(tmp_path, fake_chrome, mocker):
+    mocker.patch.object(cdp, "_sleep")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        browser.press_backspace(3)
+        events = [e for e in _key_events(fake_chrome) if e["params"].get("key") == "Backspace"]
+        assert [e["params"]["type"] for e in events] == ["keyDown", "keyUp"] * 3
+        assert not any(e["params"]["type"] == "char" for e in events)
+    finally:
+        browser.close()
+
+
+# -- handshake timeout + remote-debugging approval command (R1b) -------------
+
+
+def test_connect_passes_handshake_timeout_to_the_websocket_open(tmp_path, fake_chrome, mocker):
+    """The documented `handshake_timeout` must reach the websocket handshake
+    itself. Without it the library's own 10 s open timeout aborts the upgrade
+    while the approval sheet is still waiting to be clicked."""
+    real_connect = cdp.ws_connect
+    seen = {}
+
+    def spy(url, **kwargs):
+        seen.update(kwargs)
+        return real_connect(url, **kwargs)
+
+    mocker.patch.object(cdp, "ws_connect", spy)
+    browser = cdp.Browser.connect(
+        devtools_port_path=fake_chrome.devtools_port_file(tmp_path), handshake_timeout=25.0
+    )
+    try:
+        assert seen["open_timeout"] == 25.0
+    finally:
+        browser.close()
+
+
+def test_connect_times_out_when_the_upgrade_is_never_accepted(tmp_path):
+    slow = FakeChrome(handshake_delay=1.0)
+    try:
+        with pytest.raises(cdp.CdpError, match="Allow"):
+            cdp.Browser.connect(
+                devtools_port_path=slow.devtools_port_file(tmp_path), handshake_timeout=0.3
+            )
+    finally:
+        slow.stop()
+
+
+def test_connect_survives_an_upgrade_slower_than_the_library_default(tmp_path):
+    """A delay under `handshake_timeout` must connect, not abort."""
+    slow = FakeChrome(handshake_delay=0.5)
+    try:
+        browser = cdp.Browser.connect(
+            devtools_port_path=slow.devtools_port_file(tmp_path), handshake_timeout=20.0
+        )
+        browser.close()
+    finally:
+        slow.stop()
+
+
+def _popen_spy(mocker):
+    return mocker.patch.object(cdp.subprocess, "Popen")
+
+
+def test_approve_command_is_spawned_detached_on_the_approval_path(
+    tmp_path, fake_chrome, mocker, monkeypatch
+):
+    monkeypatch.delenv(cdp.CDP_APPROVE_COMMAND_ENV, raising=False)
+    popen = _popen_spy(mocker)
+    browser = cdp.Browser.connect(
+        devtools_port_path=fake_chrome.devtools_port_file(tmp_path),
+        approve_command="approve-helper 25",
+    )
+    try:
+        assert popen.call_count == 1
+        assert popen.call_args.args[0] == ["approve-helper", "25"]
+        assert popen.call_args.kwargs["start_new_session"] is True
+        devnull = cdp.subprocess.DEVNULL
+        for stream in ("stdin", "stdout", "stderr"):
+            assert popen.call_args.kwargs[stream] == devnull
+    finally:
+        browser.close()
+
+
+def test_approve_command_falls_back_to_the_environment(tmp_path, fake_chrome, mocker, monkeypatch):
+    monkeypatch.setenv(cdp.CDP_APPROVE_COMMAND_ENV, "approve-helper")
+    popen = _popen_spy(mocker)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        assert popen.call_args.args[0] == ["approve-helper"]
+    finally:
+        browser.close()
+
+
+def test_approve_command_is_never_spawned_for_an_explicit_endpoint(
+    fake_chrome, fake_json_server, mocker, monkeypatch
+):
+    """An explicit host:port is a dedicated profile: no approval sheet ever
+    appears, so clicking at one would click something else."""
+    monkeypatch.setenv(cdp.CDP_APPROVE_COMMAND_ENV, "approve-helper")
+    popen = _popen_spy(mocker)
+    server = fake_json_server(
+        body={"webSocketDebuggerUrl": f"ws://127.0.0.1:{fake_chrome.port}/devtools/browser/fake"}
+    )
+    browser = cdp.Browser.connect(endpoint=server.endpoint, approve_command="approve-helper")
+    try:
+        assert popen.call_count == 0
+    finally:
+        browser.close()
+
+
+def test_no_approve_command_spawns_nothing(tmp_path, fake_chrome, mocker, monkeypatch):
+    monkeypatch.delenv(cdp.CDP_APPROVE_COMMAND_ENV, raising=False)
+    popen = _popen_spy(mocker)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        assert popen.call_count == 0
+    finally:
+        browser.close()
+
+
+def test_approve_command_that_cannot_start_names_only_the_option(
+    tmp_path, fake_chrome, mocker, monkeypatch
+):
+    """The command line can embed a path from the host it runs on, so a
+    failure names the kwarg and the env var and nothing else."""
+    monkeypatch.delenv(cdp.CDP_APPROVE_COMMAND_ENV, raising=False)
+    mocker.patch.object(cdp.subprocess, "Popen", side_effect=OSError("no such file: /secret/path"))
+
+    with pytest.raises(cdp.CdpError) as excinfo:
+        cdp.Browser.connect(
+            devtools_port_path=fake_chrome.devtools_port_file(tmp_path),
+            approve_command="/secret/path/approve-helper",
+        )
+
+    message = str(excinfo.value)
+    assert "approve_command" in message
+    assert cdp.CDP_APPROVE_COMMAND_ENV in message
+    assert "/secret/path" not in message
+    assert excinfo.value.__cause__ is None

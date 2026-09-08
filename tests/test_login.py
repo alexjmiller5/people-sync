@@ -44,7 +44,9 @@ class FakeSite:
         self.hidden: set[str] = set()  # in the DOM, display:none
         self.checked: set[str] = set()
         self.no_focus: set[str] = set()  # clicking these does not focus them
-        self.no_clear: set[str] = set()  # select-all + delete does nothing
+        self.no_clear: set[str] = set()  # nothing clears it: select-all or Backspace
+        self.no_select_all: set[str] = set()  # select-all is a no-op (non-macOS shortcut)
+        self.selected: str | None = None  # field whose whole value is selected
         self._target: str | None = None
         self.logged_in = False  # bool, or a callable for a late-rendering nav
         self.text = "Log in to Testsite"
@@ -74,7 +76,7 @@ class FakeSite:
 
     @staticmethod
     def _selector(expression):
-        match = re.search(r"querySelector\((\".*?\")\)", expression)
+        match = re.search(r"querySelectorAll?\((\".*?\")\)", expression)
         return json.loads(match.group(1)) if match else None
 
     def _visible(self, selector):
@@ -83,19 +85,22 @@ class FakeSite:
     async def _evaluate(self, ws, msg):
         expression = msg["params"]["expression"]
         selector = self._selector(expression)
+        visible = self._visible(selector)
         if expression == self.logged_in_js:
             value = self.logged_in() if callable(self.logged_in) else self.logged_in
         elif "scrollIntoView" in expression:  # the click target's rect
-            self._target = selector if self._visible(selector) else None
+            self._target = selector if visible else None
             value = {"x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0} if self._target else None
-        elif "checkVisibility" in expression:
-            value = self._visible(selector)
         elif "activeElement" in expression:
-            value = self.focus == selector
+            value = visible and self.focus == selector
         elif ".checked" in expression:
-            value = selector in self.checked
+            value = visible and selector in self.checked
+        elif "value.length" in expression:
+            value = len(self.typed.get(selector, "")) if visible else 0
         elif ".value" in expression:
-            value = self.typed.get(selector, "") == ""
+            value = visible and self.typed.get(selector, "") == ""
+        elif "checkVisibility" in expression:
+            value = visible
         elif "document.title" in expression:
             value = self.text
         else:
@@ -104,10 +109,25 @@ class FakeSite:
 
     async def _dispatchkeyevent(self, ws, msg):
         params = msg["params"]
-        if params["type"] == "char" and self.focus:
-            self.typed[self.focus] = self.typed.get(self.focus, "") + params["text"]
-        elif params.get("key") == "Backspace" and self.focus and self.focus not in self.no_clear:
-            self.typed[self.focus] = ""
+        field = self.focus
+        if field is None:
+            pass
+        elif params["type"] == "char":
+            if self.selected == field:  # typing replaces a selection
+                self.typed[field] = ""
+                self.selected = None
+            self.typed[field] = self.typed.get(field, "") + params["text"]
+        elif "selectAll" in params.get("commands", []):
+            if field not in self.no_select_all and field not in self.no_clear:
+                self.selected = field
+        elif params.get("key") == "Backspace" and params["type"] == "keyDown":
+            if field in self.no_clear:
+                pass
+            elif self.selected == field:
+                self.typed[field] = ""
+                self.selected = None
+            else:
+                self.typed[field] = self.typed.get(field, "")[:-1]
         await self._reply(ws, msg, {})
 
     async def _dispatchmouseevent(self, ws, msg):
@@ -798,3 +818,23 @@ def test_no_secret_reaches_the_logs(
     for secret in ("handle-zzz", "secret-yyy", "313373"):
         assert secret not in captured.out
         assert secret not in captured.err
+
+
+def test_prefilled_field_is_cleared_key_by_key_when_select_all_is_a_no_op(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """Select-all is a macOS-only editing command. Where it does nothing the
+    flow must still empty the prefilled field (one Backspace per character)
+    instead of typing the credential onto the end of it."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND)
+    site.typed["input#user"] = "stale-value"
+    site.no_select_all = {"input#user"}
+    site.on_submit = lambda s: setattr(s, "logged_in", True)
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.typed["input#user"] == "testsite"
