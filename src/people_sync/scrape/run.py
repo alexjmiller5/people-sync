@@ -33,6 +33,9 @@ log = structlog.get_logger(__name__)
 STALE_DAYS = 180
 NAV_WAIT_MS = 12000
 PAGE_TEXT_JS = "document.title + '\\n' + document.body.innerText.slice(0,3000)"
+# Client-rendered profiles paint after the load event; a module's READY_JS
+# names what "rendered" looks like and the loop waits for it (bounded).
+READY_TIMEOUT_S = 15.0
 
 
 def _stale_cutoff() -> str:
@@ -151,6 +154,12 @@ def scrape(
                 url = module.URL.format(handle=handle)
                 nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE)
                 captured = nav_result.get("captured", [])
+
+                ready_js = getattr(module, "READY_JS", None)
+                if ready_js and not browser.wait_for(ready_js, READY_TIMEOUT_S):
+                    log.warning(
+                        "page never became ready", platform=platform, index=index, reason="timeout"
+                    )
 
                 page_text = browser.eval(PAGE_TEXT_JS) or ""
                 if is_challenge(page_text):

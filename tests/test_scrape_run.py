@@ -396,3 +396,32 @@ def test_records_sql_filters_deleted_ignored_and_stale_window():
     ids = [row[0] for row in conn.execute(query).fetchall()]
 
     assert ids == ["testplatform:stale", "testplatform:new"]
+
+
+def test_scrape_waits_for_a_module_ready_predicate_before_extracting(mocker):
+    class ReadyModule(FakeModule):
+        READY_JS = "READY()"
+
+    class RecordingBrowser(FakeBrowser):
+        def __init__(self):
+            super().__init__()
+            self.calls: list[str] = []
+
+        def wait_for(self, js, timeout):
+            self.calls.append(f"wait:{js}:{timeout}")
+            return True
+
+        def eval(self, js):
+            self.calls.append(f"eval:{js}")
+            return super().eval(js)
+
+    browser = RecordingBrowser()
+    _patch_common(mocker, [_record()], browser=browser)
+    mocker.patch("people_sync.scrape.run.import_module", return_value=ReadyModule)
+    mocker.patch("people_sync.scrape.run.photos.fetch_url_photo", return_value=None)
+    mocker.patch("people_sync.scrape.run.upsert_profile")
+
+    run.scrape("testplatform")
+
+    wait = browser.calls.index(f"wait:READY():{run.READY_TIMEOUT_S}")
+    assert wait < browser.calls.index("eval:EXTRACT()")

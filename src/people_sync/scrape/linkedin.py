@@ -16,6 +16,10 @@ from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://www.linkedin.com/in/{handle}/"
 
+READY_JS = (
+    "!!document.querySelector('main') && document.querySelector('main').innerText.length > 200"
+)
+
 CAPTURE = [r"voyager/api/graphql"]
 
 EXTRACTOR_JS = (

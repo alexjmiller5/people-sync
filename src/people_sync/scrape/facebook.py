@@ -19,6 +19,11 @@ from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://www.facebook.com/{handle}"
 LIST_URL = "https://www.facebook.com/me/friends"
+READY_JS = (
+    "/Personal details|mutual friends?|Add friend|Friends$|isn't available|No posts available/"
+    ".test(document.body.innerText)"
+)
+
 CAPTURE: list[str] = []
 
 # Profile handles are either a vanity slug or profile.php?id=<n>; both are
