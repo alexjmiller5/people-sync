@@ -28,6 +28,8 @@ DAILY_CAPS = {
     "linkedin": 80,
 }
 DEFAULT_DAILY_CAP = 300
+# Operator override: a JSON object {platform: cap} merged over DAILY_CAPS.
+DAILY_CAPS_ENV = "PEOPLE_SYNC_DAILY_CAPS"
 
 DEFAULT_STATE_PATH = "data/scrape-state.json"
 
@@ -77,14 +79,34 @@ def is_challenge(text: str) -> bool:
     return any(marker in lowered for marker in LOGIN_MARKERS + CHALLENGE_MARKERS)
 
 
+def daily_caps() -> dict[str, int]:
+    """Built-in caps with the operator's DAILY_CAPS_ENV object merged over
+    them. Anything malformed raises here - before a single page loads - rather
+    than silently running uncapped."""
+    raw = os.environ.get(DAILY_CAPS_ENV)
+    if not raw:
+        return dict(DAILY_CAPS)
+    try:
+        override = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"{DAILY_CAPS_ENV} is not valid JSON") from None
+    valid = isinstance(override, dict) and all(
+        isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in override.values()
+    )
+    if not valid:
+        raise ValueError(f"{DAILY_CAPS_ENV} must be a JSON object of non-negative integer caps")
+    return {**DAILY_CAPS, **override}
+
+
 class Pacer:
     def __init__(self, platform: str, state_path: str = DEFAULT_STATE_PATH):
         self.platform = platform
         self.state_path = state_path
+        self._cap = daily_caps().get(platform, DEFAULT_DAILY_CAP)
 
     @property
     def cap(self) -> int:
-        return DAILY_CAPS.get(self.platform, DEFAULT_DAILY_CAP)
+        return self._cap
 
     def _today(self) -> str:
         return _utcnow().strftime("%Y-%m-%d")

@@ -72,9 +72,16 @@ def test_scrape_passes_endpoint_and_data_dir_to_browser_connect(mocker):
     connect = mocker.patch("people_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
     mocker.patch("people_sync.scrape.run.Pacer")
 
-    run.scrape("testplatform", endpoint="mini.local:9333", data_dir="/tmp/profile")
+    run.scrape(
+        "testplatform",
+        endpoint="mini.local:9333",
+        data_dir="/tmp/profile",
+        approve_command="approve-helper 25",
+    )
 
-    connect.assert_called_once_with(endpoint="mini.local:9333", data_dir="/tmp/profile")
+    connect.assert_called_once_with(
+        endpoint="mini.local:9333", data_dir="/tmp/profile", approve_command="approve-helper 25"
+    )
 
 
 def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
@@ -85,7 +92,7 @@ def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
 
     run.scrape("testplatform")
 
-    connect.assert_called_once_with(endpoint=None, data_dir=None)
+    connect.assert_called_once_with(endpoint=None, data_dir=None, approve_command=None)
 
 
 def test_cap_reached_stops_before_navigating(mocker):

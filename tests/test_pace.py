@@ -263,3 +263,32 @@ def test_login_markers_are_kept_separate_from_challenge_markers():
     assert "log in" in pace.LOGIN_MARKERS
     assert not any("log in" == marker for marker in pace.CHALLENGE_MARKERS)
     assert pace.is_challenge("Please log in to continue") is True
+
+
+def test_daily_caps_default_when_the_environment_is_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv(pace.DAILY_CAPS_ENV, raising=False)
+    assert (
+        pace.Pacer("linkedin", state_path=str(tmp_path / "s.json")).cap
+        == pace.DAILY_CAPS["linkedin"]
+    )
+    assert pace.Pacer("venmo", state_path=str(tmp_path / "s.json")).cap == pace.DEFAULT_DAILY_CAP
+
+
+def test_daily_caps_environment_overrides_one_platform_and_keeps_the_rest(monkeypatch, tmp_path):
+    monkeypatch.setenv(pace.DAILY_CAPS_ENV, '{"linkedin": 5, "venmo": 7}')
+    assert pace.Pacer("linkedin", state_path=str(tmp_path / "s.json")).cap == 5
+    assert pace.Pacer("venmo", state_path=str(tmp_path / "s.json")).cap == 7
+    assert (
+        pace.Pacer("facebook", state_path=str(tmp_path / "s.json")).cap
+        == pace.DAILY_CAPS["facebook"]
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["not json", "[1, 2]", '{"linkedin": "5"}', '{"linkedin": -1}', '{"linkedin": true}'],
+)
+def test_daily_caps_malformed_environment_fails_at_construction(monkeypatch, tmp_path, raw):
+    monkeypatch.setenv(pace.DAILY_CAPS_ENV, raw)
+    with pytest.raises(ValueError, match=pace.DAILY_CAPS_ENV):
+        pace.Pacer("linkedin", state_path=str(tmp_path / "s.json"))

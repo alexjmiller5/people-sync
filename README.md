@@ -119,6 +119,26 @@ op run --env-file=.env.tpl -- uv run python -m people_sync <command>
 
 `CF_R2_BUCKET` optionally overrides the destination bucket for photos.
 
+## Browser and login configuration
+
+`scrape` and `login` drive a Chrome over CDP. Where it is and how it is
+signed in come from options or environment variables; nothing here is ever
+stored by the app.
+
+| Option / variable | Meaning |
+|---|---|
+| `--endpoint` / `PEOPLE_SYNC_CDP_ENDPOINT` | `host:port` of a Chrome started with its own `--remote-debugging-port` (a dedicated profile) |
+| `--data-dir` / `PEOPLE_SYNC_CHROME_DATA_DIR` | Chrome data dir whose `DevToolsActivePort` names the port; default is Chrome's own data dir |
+| `--approve-command` / `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | Command that approves the browser's remote-debugging prompt on hosts that show one; started detached before connecting, never with `--endpoint` |
+| `PEOPLE_SYNC_DAILY_CAPS` | JSON object `{"<platform>": <int>}` merged over the built-in per-platform daily caps; malformed values fail at startup |
+| `PEOPLE_SYNC_CREDENTIAL_COMMAND` | Run as `sh -c "<command>" people-sync-login <platform>`; prints `{"username": ..., "password": ..., "totp": ...}` (`totp` = current code or null) |
+| `PEOPLE_SYNC_EMAIL_CODE_COMMAND` | Same invocation; prints the newest one-time code from email, or nothing if none has arrived yet (polled every 5-10 s for up to 90 s) |
+| `PEOPLE_SYNC_SMS_CODE_COMMAND` | Same, for a code delivered by SMS to the machine running the job |
+
+Every command has 60 s; a non-zero exit or a timeout halts the login with a
+screenshot and a reason that names only the variable. Command output is used
+and dropped, never logged.
+
 ## Scripts
 
 One-offs in `scripts/`, run directly with `uv run python scripts/<name>.py`:

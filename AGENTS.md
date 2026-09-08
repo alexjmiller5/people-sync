@@ -80,10 +80,10 @@ Consume it from another flake (e.g. a nix-config host):
 
 `platforms`, `dailyCaps`, `stateDir`, `profileDir`, `basePort`, `chromePath`,
 and `schedule` all have generic defaults; override what your setup needs.
-`dailyCaps` is wired through as `PEOPLE_SYNC_DAILY_CAPS` (JSON) but
-`people_sync.scrape.pace` doesn't read it yet - it still uses its own
-built-in per-platform caps, so the option is a forward-compatible hook, not
-yet load-bearing.
+`dailyCaps` is exported as `PEOPLE_SYNC_DAILY_CAPS`, a JSON object of
+per-platform caps that `people_sync.scrape.pace` merges over its built-in
+defaults at `Pacer` construction; anything malformed raises there, before a
+page loads, rather than running uncapped.
 
 `nix build .#default` and `nix flake check` (an eval-only smoke test of the
 darwin module, since there's no nix-darwin flake input to build a full
@@ -100,26 +100,41 @@ profile is detected and left alone before anything is typed, which is the
 ordering to preserve when editing `_sign_in`.
 
 **Never type into a field without proving it is the right one.** `_type_into`
-is the only path that types, and it clicks, asserts
-`document.activeElement`, clears (select-all + delete) and verifies the value
-is empty before the first keystroke. Every element predicate
-(`cdp.visible_js`, `RECT_JS`) demands a real box and `checkVisibility` -
-Google's identifier page ships a display:none password input that a bare
-`querySelector` check matched, so the click landed at (0,0) and the password
-was typed into the visible email field and submitted. A prefilled field
-(LinkedIn) that is typed into rather than cleared makes attempt 2 send a
-concatenated value and burns the one retry.
+is the only path that types, and it clicks, asserts the element IS
+`document.activeElement` (never merely contains it), clears (select-all +
+delete, then one Backspace per character where select-all is not a shortcut)
+and verifies the value is empty before the first keystroke. Every element
+predicate is built by `cdp.element_js`, which binds the FIRST VISIBLE match
+of the selector - a real box plus `checkVisibility` with the opacity and
+visibility options - and misses otherwise. Google's identifier page ships a
+display:none password input ahead of the visible one: a bare `querySelector`
+check matched it, so the click landed at (0,0) and the password was typed
+into the visible email field and submitted. A prefilled field (LinkedIn)
+that is typed into rather than cleared makes attempt 2 send a concatenated
+value and burns the one retry. The predicates are JavaScript strings, so
+`tests/test_dom_js.py` executes them in node against a stub DOM - the fake
+site elsewhere only answers them by substring; keep both in step when a
+predicate changes.
 
 The signed-in detector is always `wait_for`, never a single `eval`:
 client-rendered nav paints late, and one early sample reads a signed-in
 profile as signed out.
 
 Credentials never live in this repo or its config. Three commands supply
-them; each gets the platform as `$1` and prints to stdout:
+them, each run as `sh -c "<command>" people-sync-login <platform>` (so the
+platform is `$1`), with a 60 s timeout; a non-zero exit or timeout halts the
+login (screenshot, reason naming only the variable):
 
-- `PEOPLE_SYNC_CREDENTIAL_COMMAND` - `{"username": ..., "password": ..., "totp": ...}`
-- `PEOPLE_SYNC_EMAIL_CODE_COMMAND` - the newest one-time code from email
-- `PEOPLE_SYNC_SMS_CODE_COMMAND` - the newest one-time code from SMS
+- `PEOPLE_SYNC_CREDENTIAL_COMMAND` - prints `{"username": ..., "password": ..., "totp": ...}`; `totp` is the current code or null
+- `PEOPLE_SYNC_EMAIL_CODE_COMMAND` - prints the newest one-time code from email, or nothing if none has arrived (polled every 5-10 s for 90 s)
+- `PEOPLE_SYNC_SMS_CODE_COMMAND` - same, from SMS on the machine running the job
+
+`PEOPLE_SYNC_CDP_APPROVE_COMMAND` (or `--approve-command`) is different in
+kind: a command that approves the browser's remote-debugging prompt on hosts
+that show one. `Browser.connect` starts it detached right before the
+websocket upgrade (which is what raises the prompt) and only on the
+approval-mode path; an explicit `--endpoint` is a dedicated profile with no
+prompt, so the command is never run there.
 
 The product never knows what those commands do, and must not learn: no
 credential store, no vault, no path from any machine belongs in this code.

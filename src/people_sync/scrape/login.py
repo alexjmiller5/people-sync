@@ -40,7 +40,7 @@ from pathlib import Path
 import structlog
 
 from people_sync.scrape import pace
-from people_sync.scrape.cdp import Browser, visible_js
+from people_sync.scrape.cdp import Browser, visible_js, element_js
 
 log = structlog.get_logger(__name__)
 
@@ -114,18 +114,23 @@ class LoginSpec:
 
 
 def _element_js(selector: str, test: str) -> str:
-    return (
-        f"(function(){{var e=document.querySelector({json.dumps(selector)});"
-        f"return !!e&&{test};}})()"
-    )
+    """`test` evaluated with `e` bound to the first VISIBLE match (cdp.element_js);
+    false when there is none."""
+    return element_js(selector, f"return !!({test});", "false")
 
 
 def _focus_js(selector: str) -> str:
-    return _element_js(selector, "(e===document.activeElement||e.contains(document.activeElement))")
+    # The element itself, never a descendant: the selectors are inputs, and a
+    # container "having" focus would only mean the value went somewhere else.
+    return _element_js(selector, "e===document.activeElement")
 
 
 def _empty_js(selector: str) -> str:
     return _element_js(selector, 'e.value===""')
+
+
+def _length_js(selector: str) -> str:
+    return element_js(selector, "return e.value.length;", "0")
 
 
 def _checked_js(selector: str) -> str:
@@ -147,7 +152,11 @@ def _type_into(browser: Browser, selector: str, text: str, label: str) -> None:
         raise LoginHalt(f"{label} field did not take focus")
     browser.clear_field()
     if not browser.eval(_empty_js(selector)):
-        raise LoginHalt(f"{label} field did not clear")
+        # Select-all is a macOS editing command; where it did nothing, one
+        # Backspace per character does the same job.
+        browser.press_backspace(int(browser.eval(_length_js(selector)) or 0))
+        if not browser.eval(_empty_js(selector)):
+            raise LoginHalt(f"{label} field did not clear")
     browser.type_text(text)
 
 
@@ -367,6 +376,7 @@ def login(
     data_dir: str | None = None,
     state_dir: str | None = None,
     devtools_port_path: str | None = None,
+    approve_command: str | None = None,
 ) -> dict:
     """Sign this profile's Chrome into `platform`. Idempotent: an already
     signed-in profile is left alone. Returns the outcome; `status` is
@@ -376,7 +386,10 @@ def login(
         raise LoginError(f"no login spec for {platform!r}")
 
     browser = Browser.connect(
-        endpoint=endpoint, data_dir=data_dir, devtools_port_path=devtools_port_path
+        endpoint=endpoint,
+        data_dir=data_dir,
+        devtools_port_path=devtools_port_path,
+        approve_command=approve_command,
     )
     try:
         status = _sign_in(browser, spec)
