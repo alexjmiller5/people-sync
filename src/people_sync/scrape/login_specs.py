@@ -49,11 +49,15 @@ SPECS: dict[str, LoginSpec] = {
             '!!document.querySelector(\'[aria-label="Your profile"], '
             'div[role="navigation"] a[aria-label="Home"]\')'
         ),
-        totp_selector='input[name="approvals_code"]',
+        # Facebook's default second step is a push notification to another
+        # device; "Try another way" -> "Authentication app" -> Continue gives
+        # the same unnamed code field Instagram uses, and Enter submits it.
+        totp_selector='input[name="approvals_code"], input[type="text"][autocomplete="off"]',
         sms_code_selector='input[name="approvals_code"]',
         email_code_selector='input[name="approvals_code"]',
-        code_submit_selector='button#checkpointSubmitButton, button[type="submit"]',
-        remember_selector='input[value="save_device"]',
+        code_submit_selector=ENTER,
+        code_path=("text=Try another way", "text=Authentication app", "text=Continue"),
+        remember_selector='input[value="save_device"], input[name="checkbox"]',
     ),
     "linkedin": LoginSpec(
         platform="linkedin",

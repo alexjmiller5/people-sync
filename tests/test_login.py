@@ -76,7 +76,7 @@ class FakeSite:
 
     @staticmethod
     def _selector(expression):
-        match = re.search(r"querySelectorAll?\((\".*?\")\)", expression)
+        match = re.search(r"(?:querySelectorAll?\(|var sel=)(\".*?\")", expression)
         return json.loads(match.group(1)) if match else None
 
     def _visible(self, selector):
@@ -892,4 +892,52 @@ def test_code_submit_enter_presses_enter_in_the_code_field(
 
     assert result["status"] == "logged-in"
     assert site.clicks[-2:] == ["input#code", "<enter>"]
+    assert site.typed["input#code"] == "654321"
+
+
+def test_code_path_turns_a_push_prompt_into_a_code_prompt(
+    fake_chrome,  # noqa: F811
+    site,
+    tmp_path,
+    monkeypatch,
+):
+    """A site whose default second step is "approve on your other device"
+    (a challenge marker) is walked through its "try another way" clicks to
+    the authenticator prompt instead of halting."""
+    monkeypatch.setenv(login.CREDENTIAL_COMMAND_ENV, CRED_COMMAND_TOTP)
+    spec = SPEC.__class__(
+        **{
+            **SPEC.__dict__,
+            "totp_selector": "input#code",
+            "code_submit_selector": login.ENTER,
+            "code_path": ("text=Try another way", "text=Authentication app", "text=Continue"),
+        }
+    )
+    monkeypatch.setitem(login_specs.SPECS, "testsite", spec)
+
+    def push_prompt(s):
+        s.text = "Check your notifications on another device"
+        s.present = {"text=Try another way"}
+
+    def advance(s, target):
+        if target == "text=Try another way":
+            s.present |= {"text=Authentication app", "text=Continue"}
+        elif target == "text=Continue":
+            s.text = "Enter the 6-digit code"
+            s.present = {"input#code"}
+            s.on_submit = lambda s2: setattr(s2, "logged_in", True)
+
+    site.on_submit = push_prompt
+    site.on_click = advance
+
+    result = run(fake_chrome, tmp_path)
+
+    assert result["status"] == "logged-in"
+    assert site.clicks[-5:] == [
+        "text=Try another way",
+        "text=Authentication app",
+        "text=Continue",
+        "input#code",
+        "<enter>",
+    ]
     assert site.typed["input#code"] == "654321"
