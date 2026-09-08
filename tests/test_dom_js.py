@@ -119,8 +119,10 @@ def test_text_selector_with_a_tag_filter_skips_same_text_elements_of_other_tags(
             __import__("people_sync.scrape.instagram", fromlist=["x"]),
             __import__("people_sync.scrape.linkedin", fromlist=["x"]),
             __import__("people_sync.scrape.facebook", fromlist=["x"]),
+            __import__("people_sync.scrape.partiful", fromlist=["x"]),
+            __import__("people_sync.scrape.strava", fromlist=["x"]),
         )
-        for name in ("EXTRACTOR_JS", "LIST_ENTRIES_JS")
+        for name in ("EXTRACTOR_JS", "LIST_ENTRIES_JS", "ME_JS")
         if hasattr(mod, name)
     ],
 )
