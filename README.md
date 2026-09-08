@@ -21,15 +21,11 @@ uv sync
 The package is built with hatchling and installs editable into the project
 venv, so `uv run python -m people_sync ...` works from the repo root.
 
-To run the profile scraper unattended on a Mac, the flake also exposes
-`packages.<system>.default` (the `people-sync` CLI, packaged with plain
-`buildPythonApplication`) and `darwinModules.default`, a
-`services.people-sync-scrape` nix-darwin module that runs it as a declared
-launchd agent on a schedule. Point it at an already-running Chrome with
-`endpoint` (one shared profile whose logins every job and every manual
-sign-in on that Mac reuse - the recommended shape) or leave it unset and
-each platform gets its own headed Chrome profile and debug port. See
-"Installing on a Mac" in AGENTS.md for the module's options and an example.
+The flake also exposes `packages.<system>.default`, the same `people-sync`
+CLI packaged with plain `buildPythonApplication`, for installing it on a
+machine (e.g. the Mac whose Chrome holds the social logins) with nix. There
+is no daemon and no schedule: every run is an agent driving the CLI with a
+person in the loop.
 
 Runtime dependencies outside Python:
 
