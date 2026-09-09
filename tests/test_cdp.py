@@ -1263,3 +1263,14 @@ def test_approve_command_that_cannot_start_names_only_the_option(
     assert cdp.CDP_APPROVE_COMMAND_ENV in message
     assert "/secret/path" not in message
     assert excinfo.value.__cause__ is None
+
+
+def test_existing_target_is_attached_and_never_closed(tmp_path, fake_chrome, monkeypatch):
+    monkeypatch.setenv("PEOPLE_SYNC_CDP_TARGET", "selected-tab")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    browser.close()
+    methods = [m["method"] for m in fake_chrome.messages]
+    assert "Target.createTarget" not in methods
+    assert "Target.closeTarget" not in methods
+    attach = next(m for m in fake_chrome.messages if m["method"] == "Target.attachToTarget")
+    assert attach["params"]["targetId"] == "selected-tab"

@@ -334,7 +334,8 @@ class Browser:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
         self._ws = None
-        self._target_id: str | None = None
+        self._target_id: str | None = os.environ.get("PEOPLE_SYNC_CDP_TARGET") or None
+        self._owns_target = self._target_id is None
         self._session_id: str | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -402,8 +403,9 @@ class Browser:
 
     async def _handshake(self) -> None:
         self._attach_waiter = asyncio.get_running_loop().create_future()
-        created = await self._send("Target.createTarget", {"url": "about:blank"})
-        self._target_id = created["targetId"]
+        if self._owns_target:
+            created = await self._send("Target.createTarget", {"url": "about:blank"})
+            self._target_id = created["targetId"]
         await self._send("Target.attachToTarget", {"targetId": self._target_id, "flatten": True})
         self._session_id = await self._attach_waiter
         await self._send("Page.enable", session_id=self._session_id)
@@ -755,7 +757,7 @@ class Browser:
     async def _close_async(self) -> None:
         try:
             await self._cancel_capture_tasks()
-            if self._target_id:
+            if self._target_id and self._owns_target:
                 await self._send("Target.closeTarget", {"targetId": self._target_id})
         finally:
             await self._ws.close()
