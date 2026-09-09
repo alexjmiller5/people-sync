@@ -165,3 +165,8 @@ just test    # pytest
 just check   # ruff check + format check
 just fmt     # ruff format + fix
 ```
+
+Set `PEOPLE_SYNC_CDP_TARGET` to an existing CDP page target to use a specific
+tab across login, list and scrape calls. The caller owns that tab: the CLI
+detaches on exit without closing it, preserving tab-scoped sessions. An
+invalid target fails; it never selects another tab.
