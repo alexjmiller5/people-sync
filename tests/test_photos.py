@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import pytest
 
 import httpx
 
@@ -119,6 +120,14 @@ def test_fetch_url_photo_returns_none_on_non_200(mocker):
         return_value=_Resp(status_code=404, headers={"content-type": "image/jpeg"}),
     )
     assert photos.fetch_url_photo("https://example.com/a.jpg") is None
+
+
+def test_scrape_photo_rate_limit_raises_instead_of_retrying(mocker):
+    response = httpx.Response(429, request=httpx.Request("GET", "https://example.invalid/a.jpg"))
+    get = mocker.patch.object(httpx, "get", return_value=response)
+    with pytest.raises(httpx.HTTPStatusError):
+        photos.fetch_url_photo("https://example.invalid/a.jpg", halt_on_block=True)
+    assert get.call_count == 1
 
 
 def test_fetch_url_photo_returns_none_on_non_image_content_type(mocker):

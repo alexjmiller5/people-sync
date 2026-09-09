@@ -78,12 +78,14 @@ def store_photo(person_id: str, platform: str, image: bytes, ext: str) -> str | 
     return key
 
 
-def fetch_url_photo(url: str) -> bytes | None:
+def fetch_url_photo(url: str, *, halt_on_block: bool = False) -> bytes | None:
     try:
         resp = httpx.get(url, timeout=30, follow_redirects=True)
     except httpx.HTTPError:
         log.warning("photo fetch failed", source="url", index=-1, reason="request failed")
         return None
+    if halt_on_block and resp.status_code in (401, 403, 429):
+        resp.raise_for_status()
     if resp.status_code != 200:
         log.warning("photo fetch failed", source="url", index=-1, reason="non-200 status")
         return None
