@@ -111,6 +111,60 @@ def test_text_selector_with_a_tag_filter_skips_same_text_elements_of_other_tags(
     ]
 
 
+def test_facebook_list_preserves_numeric_ids_and_vanity_handles():
+    from people_sync.scrape.facebook import LIST_ENTRIES_JS
+
+    setup = """
+    document.els = [
+      'https://www.facebook.com/profile.php?id=123456',
+      'https://www.facebook.com/profile.php?id=789012&sk=friends',
+      'https://www.facebook.com/test.person',
+      'https://www.facebook.com/friends'
+    ].map(href => el({href, closest(selector) {
+      return selector === '[role=tablist]' ? null : {innerText: 'Example Person'};
+    }}));
+    document.els.push(el({href:'https://www.facebook.com/own.profile', closest() {
+      return {innerText:'More'};
+    }}));
+    document.els.push(el({href:'https://www.facebook.com/own.profile', closest(selector) {
+      return selector === '[role=tablist]' ? null : {innerText:'Own Profile'};
+    }}));
+    document.querySelector = () => document;
+    globalThis.location = {pathname:'/own.profile/friends', search:''};
+    """
+    entries = json.loads(run(setup, LIST_ENTRIES_JS))
+    assert [e["handle"] for e in entries] == [
+        "profile.php?id=123456",
+        "profile.php?id=789012",
+        "test.person",
+    ]
+
+
+def test_venmo_reads_the_target_profile_and_excludes_private_page_state():
+    from people_sync.scrape.venmo import EXTRACTOR_JS
+
+    setup = """
+    document.els = [el({textContent: JSON.stringify({props:{pageProps:{
+      pageType:'personal', csrfToken:'SECRET',
+      currentUser:{id:'own-id', displayName:'Wrong Person'},
+      otherUser:{id:'123', username:'example', displayName:'Example Person',
+        profilePictureUrl:'https://example.invalid/avatar.jpg', friendCount:12,
+        friendStatus:'friend', isActive:true, email:'PRIVATE'},
+      initialMobxState:{payments:['PRIVATE']}
+    }}})})];
+    """
+    result = run(setup, EXTRACTOR_JS)
+    assert result == {
+        "id": "123",
+        "username": "example",
+        "displayName": "Example Person",
+        "profilePictureUrl": "https://example.invalid/avatar.jpg",
+        "friendCount": 12,
+        "friendStatus": "friend",
+        "isActive": True,
+    }
+
+
 @pytest.mark.parametrize(
     "js",
     [
@@ -121,6 +175,8 @@ def test_text_selector_with_a_tag_filter_skips_same_text_elements_of_other_tags(
             __import__("people_sync.scrape.facebook", fromlist=["x"]),
             __import__("people_sync.scrape.partiful", fromlist=["x"]),
             __import__("people_sync.scrape.strava", fromlist=["x"]),
+            __import__("people_sync.scrape.spotify", fromlist=["x"]),
+            __import__("people_sync.scrape.venmo", fromlist=["x"]),
         )
         for name in ("EXTRACTOR_JS", "LIST_ENTRIES_JS", "ME_JS")
         if hasattr(mod, name)

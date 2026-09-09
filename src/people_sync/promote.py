@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from people_sync import lifedata
 
 FROM_KIND = "people_sync_profiles"
-PLATFORMS = ("facebook", "linkedin", "strava", "instagram", "partiful")
+PLATFORMS = ("facebook", "linkedin", "strava", "instagram", "partiful", "spotify", "venmo")
 
 
 @dataclass

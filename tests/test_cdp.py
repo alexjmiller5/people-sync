@@ -116,6 +116,26 @@ def test_connect_timeout_message_says_click_allow(tmp_path, fake_chrome):
         )
 
 
+def test_timeout_finishes_transport_cancellation_before_stopping_loop(
+    tmp_path, fake_chrome, monkeypatch
+):
+    cleaned = threading.Event()
+
+    async def stalled_connect(*args, **kwargs):
+        try:
+            await asyncio.sleep(30)
+        finally:
+            await asyncio.sleep(0.01)
+            cleaned.set()
+
+    monkeypatch.setattr(cdp, "ws_connect", stalled_connect)
+    with pytest.raises(cdp.CdpError, match="Allow"):
+        cdp.Browser.connect(
+            devtools_port_path=fake_chrome.devtools_port_file(tmp_path), handshake_timeout=0.1
+        )
+    assert cleaned.is_set()
+
+
 def test_messages_correlate_by_id_not_arrival_order(tmp_path, fake_chrome):
     pending = []
 
@@ -686,6 +706,11 @@ def test_scroll_sends_trusted_mouse_wheel_event(tmp_path, fake_chrome):
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.scroll(600)
+        methods = [m.get("method") for m in fake_chrome.messages]
+        assert methods.index("Page.bringToFront") < methods.index("Input.dispatchMouseEvent")
+        assert methods.index("Emulation.setFocusEmulationEnabled") < methods.index(
+            "Input.dispatchMouseEvent"
+        )
         wheel_events = [
             m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"
         ]
@@ -955,6 +980,11 @@ def test_click_dispatches_trusted_press_and_release_at_element_center(tmp_path, 
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.click("input#username")
+        methods = [m["method"] for m in fake_chrome.messages]
+        assert methods.index("Page.bringToFront") < methods.index("Runtime.evaluate")
+        assert methods.index("Emulation.setFocusEmulationEnabled") < methods.index(
+            "Runtime.evaluate"
+        )
         mouse = [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"]
         assert [m["params"]["type"] for m in mouse] == [
             "mouseMoved",
@@ -1263,3 +1293,14 @@ def test_approve_command_that_cannot_start_names_only_the_option(
     assert cdp.CDP_APPROVE_COMMAND_ENV in message
     assert "/secret/path" not in message
     assert excinfo.value.__cause__ is None
+
+
+def test_existing_target_is_attached_and_never_closed(tmp_path, fake_chrome, monkeypatch):
+    monkeypatch.setenv("PEOPLE_SYNC_CDP_TARGET", "selected-tab")
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    browser.close()
+    methods = [m["method"] for m in fake_chrome.messages]
+    assert "Target.createTarget" not in methods
+    assert "Target.closeTarget" not in methods
+    attach = next(m for m in fake_chrome.messages if m["method"] == "Target.attachToTarget")
+    assert attach["params"]["targetId"] == "selected-tab"
