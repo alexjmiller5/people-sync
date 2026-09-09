@@ -649,6 +649,8 @@ class Browser:
     def click(self, selector: str) -> None:
         """Scroll the element into view and click its center (jittered by a
         few pixels) with trusted mouse events."""
+        self._input("Page.bringToFront", {})
+        self._input("Emulation.setFocusEmulationEnabled", {"enabled": True})
         rect = self.eval(rect_js(selector))
         if not rect:
             raise CdpError(f"click target not on the page: {selector}")

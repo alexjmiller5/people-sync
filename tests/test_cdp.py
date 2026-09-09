@@ -975,6 +975,11 @@ def test_click_dispatches_trusted_press_and_release_at_element_center(tmp_path, 
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.click("input#username")
+        methods = [m["method"] for m in fake_chrome.messages]
+        assert methods.index("Page.bringToFront") < methods.index("Runtime.evaluate")
+        assert methods.index("Emulation.setFocusEmulationEnabled") < methods.index(
+            "Runtime.evaluate"
+        )
         mouse = [m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"]
         assert [m["params"]["type"] for m in mouse] == [
             "mouseMoved",
