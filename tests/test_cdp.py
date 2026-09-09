@@ -116,6 +116,26 @@ def test_connect_timeout_message_says_click_allow(tmp_path, fake_chrome):
         )
 
 
+def test_timeout_finishes_transport_cancellation_before_stopping_loop(
+    tmp_path, fake_chrome, monkeypatch
+):
+    cleaned = threading.Event()
+
+    async def stalled_connect(*args, **kwargs):
+        try:
+            await asyncio.sleep(30)
+        finally:
+            await asyncio.sleep(0.01)
+            cleaned.set()
+
+    monkeypatch.setattr(cdp, "ws_connect", stalled_connect)
+    with pytest.raises(cdp.CdpError, match="Allow"):
+        cdp.Browser.connect(
+            devtools_port_path=fake_chrome.devtools_port_file(tmp_path), handshake_timeout=0.1
+        )
+    assert cleaned.is_set()
+
+
 def test_messages_correlate_by_id_not_arrival_order(tmp_path, fake_chrome):
     pending = []
 

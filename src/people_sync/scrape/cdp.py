@@ -376,19 +376,26 @@ class Browser:
         )
         try:
             fut.result(timeout=handshake_timeout)
-        except (FutureTimeoutError, TimeoutError) as e:
-            # Either the wait here or websockets' own open_timeout fires first.
-            fut.cancel()
-            if browser._ws is not None:
-                closer = asyncio.run_coroutine_threadsafe(browser._ws.close(), loop)
-                try:
-                    closer.result(timeout=5)
-                except Exception:
-                    pass
-            loop.call_soon_threadsafe(loop.stop)
-            raise CdpError(
-                f"CDP handshake did not complete within {handshake_timeout:.0f}s - {ALLOW_HINT}"
-            ) from e
+        except Exception as e:
+
+            async def cleanup():
+                tasks = asyncio.all_tasks() - {asyncio.current_task()}
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if browser._ws is not None:
+                    await browser._ws.close()
+
+            try:
+                asyncio.run_coroutine_threadsafe(cleanup(), loop).result(timeout=5)
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=5)
+            if isinstance(e, (FutureTimeoutError, TimeoutError)):
+                raise CdpError(
+                    f"CDP handshake did not complete within {handshake_timeout:.0f}s - {ALLOW_HINT}"
+                ) from e
+            raise
         browser._thread = thread
         log.info("cdp connected", target_id=browser._target_id)
         return browser
