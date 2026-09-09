@@ -706,6 +706,11 @@ def test_scroll_sends_trusted_mouse_wheel_event(tmp_path, fake_chrome):
     browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
     try:
         browser.scroll(600)
+        methods = [m.get("method") for m in fake_chrome.messages]
+        assert methods.index("Page.bringToFront") < methods.index("Input.dispatchMouseEvent")
+        assert methods.index("Emulation.setFocusEmulationEnabled") < methods.index(
+            "Input.dispatchMouseEvent"
+        )
         wheel_events = [
             m for m in fake_chrome.messages if m.get("method") == "Input.dispatchMouseEvent"
         ]

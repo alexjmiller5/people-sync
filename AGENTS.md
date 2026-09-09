@@ -50,6 +50,12 @@ scheduler.
 
 ## Extractors
 
+Venmo reads only selected fields of `pageProps.otherUser` on personal profiles.
+Never archive the whole Next.js state or capture its network responses: those
+also contain credentials and payment data. `currentUser` describes the signed-in
+operator, not the person being visited. The social-data export supplies the
+connection inventory; the web profile's friend count is not that inventory.
+
 One module per platform under `scrape/` with the same surface, driven by
 `scrape/run.py`: `URL` (`{handle}` template), `CAPTURE` (response URL
 patterns to keep while the page loads), optional `READY_JS` (a predicate

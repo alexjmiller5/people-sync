@@ -2,10 +2,37 @@ import base64
 import hashlib
 import json
 import sqlite3
+import shutil
+import subprocess
+
+import pytest
 
 from people_sync.scrape import run
 from people_sync.scrape.cdp import CdpError
 from people_sync.scrape.profile import ExtractError, Profile
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="execute browser fetch guard")
+@pytest.mark.parametrize(
+    "ok,mime,expected",
+    [
+        (False, "text/html", None),
+        (True, "text/html", None),
+        (True, "image/jpeg", b"image"),
+    ],
+)
+def test_avatar_page_fetch_rejects_errors_and_non_images(ok, mime, expected):
+    class Browser:
+        def eval(self, js):
+            response = json.dumps({"ok": ok, "mime": mime})
+            script = (
+                f"const r={response};globalThis.fetch=async()=>({{...r,"
+                "headers:{get:()=>r.mime},arrayBuffer:async()=>new TextEncoder().encode('image')});"
+                f"Promise.resolve({js}).then(v=>console.log(JSON.stringify(v)));"
+            )
+            return json.loads(subprocess.check_output(["node", "-e", script], text=True))
+
+    assert run._fetch_avatar_via_page(Browser(), "https://example.invalid/avatar") == expected
 
 
 class FakeModule:
