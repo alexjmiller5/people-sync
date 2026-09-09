@@ -334,7 +334,8 @@ class Browser:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
         self._ws = None
-        self._target_id: str | None = None
+        self._target_id: str | None = os.environ.get("PEOPLE_SYNC_CDP_TARGET") or None
+        self._owns_target = self._target_id is None
         self._session_id: str | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -375,19 +376,26 @@ class Browser:
         )
         try:
             fut.result(timeout=handshake_timeout)
-        except (FutureTimeoutError, TimeoutError) as e:
-            # Either the wait here or websockets' own open_timeout fires first.
-            fut.cancel()
-            if browser._ws is not None:
-                closer = asyncio.run_coroutine_threadsafe(browser._ws.close(), loop)
-                try:
-                    closer.result(timeout=5)
-                except Exception:
-                    pass
-            loop.call_soon_threadsafe(loop.stop)
-            raise CdpError(
-                f"CDP handshake did not complete within {handshake_timeout:.0f}s - {ALLOW_HINT}"
-            ) from e
+        except Exception as e:
+
+            async def cleanup():
+                tasks = asyncio.all_tasks() - {asyncio.current_task()}
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if browser._ws is not None:
+                    await browser._ws.close()
+
+            try:
+                asyncio.run_coroutine_threadsafe(cleanup(), loop).result(timeout=5)
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(timeout=5)
+            if isinstance(e, (FutureTimeoutError, TimeoutError)):
+                raise CdpError(
+                    f"CDP handshake did not complete within {handshake_timeout:.0f}s - {ALLOW_HINT}"
+                ) from e
+            raise
         browser._thread = thread
         log.info("cdp connected", target_id=browser._target_id)
         return browser
@@ -402,8 +410,9 @@ class Browser:
 
     async def _handshake(self) -> None:
         self._attach_waiter = asyncio.get_running_loop().create_future()
-        created = await self._send("Target.createTarget", {"url": "about:blank"})
-        self._target_id = created["targetId"]
+        if self._owns_target:
+            created = await self._send("Target.createTarget", {"url": "about:blank"})
+            self._target_id = created["targetId"]
         await self._send("Target.attachToTarget", {"targetId": self._target_id, "flatten": True})
         self._session_id = await self._attach_waiter
         await self._send("Page.enable", session_id=self._session_id)
@@ -553,6 +562,10 @@ class Browser:
         fut.result(timeout=10)
 
     async def _scroll_async(self, px: int) -> None:
+        await self._send("Page.bringToFront", {}, session_id=self._session_id)
+        await self._send(
+            "Emulation.setFocusEmulationEnabled", {"enabled": True}, session_id=self._session_id
+        )
         await self._send(
             "Input.dispatchMouseEvent",
             {"type": "mouseWheel", "x": 400, "y": 400, "deltaX": 0, "deltaY": px},
@@ -640,6 +653,8 @@ class Browser:
     def click(self, selector: str) -> None:
         """Scroll the element into view and click its center (jittered by a
         few pixels) with trusted mouse events."""
+        self._input("Page.bringToFront", {})
+        self._input("Emulation.setFocusEmulationEnabled", {"enabled": True})
         rect = self.eval(rect_js(selector))
         if not rect:
             raise CdpError(f"click target not on the page: {selector}")
@@ -755,7 +770,7 @@ class Browser:
     async def _close_async(self) -> None:
         try:
             await self._cancel_capture_tasks()
-            if self._target_id:
+            if self._target_id and self._owns_target:
                 await self._send("Target.closeTarget", {"targetId": self._target_id})
         finally:
             await self._ws.close()

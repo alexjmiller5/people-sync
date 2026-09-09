@@ -59,6 +59,7 @@ uv run python -m people_sync <command>
 | `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |
 | `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
+| `list spotify` | Followers and followed user accounts, with totals checked against the profile |
 
 Every ingest prints `{"new": N, "updated": N}`; `match` prints
 `{"auto": N, "suggested": N, "left_pending": N}`. Re-running an ingest on the
@@ -127,6 +128,18 @@ storage credentials. Existing `r2_key` values remain stable references.
 
 ## Browser and login configuration
 
+`people-sync list spotify` reads the signed-in user's followers and following
+pages. It checks the displayed totals, ingests user accounts with both direction
+flags, and excludes artist pages. `people-sync scrape spotify` then saves each
+pending user's profile header and profile picture, when present.
+
+`people-sync scrape venmo` reads existing ledger handles from signed-in
+personal profile pages. It captures identity, friendship status and the profile
+picture; payment feeds, contact details and authentication state are excluded.
+The web profile exposes a friend count, not a complete friend directory. Use
+Venmo's social-data export to discover the full list and verify its structure
+before importing it.
+
 `scrape` and `login` drive a Chrome over CDP. Where it is and how it is
 signed in come from options or environment variables; nothing here is ever
 stored by the app.
@@ -168,3 +181,8 @@ just test    # pytest
 just check   # ruff check + format check
 just fmt     # ruff format + fix
 ```
+
+Set `PEOPLE_SYNC_CDP_TARGET` to an existing CDP page target to use a specific
+tab across login, list and scrape calls. The caller owns that tab: the CLI
+detaches on exit without closing it, preserving tab-scoped sessions. An
+invalid target fails; it never selects another tab.
