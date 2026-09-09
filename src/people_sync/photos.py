@@ -1,20 +1,15 @@
-"""Content-addressed profile-photo storage in Cloudflare R2, with sha256 dedupe.
+"""Content-addressed profile photos and retained originals through life-data.
 
-Upload mechanism: the Cloudflare v4 REST R2 object API
-(PUT/GET/DELETE /accounts/{account_id}/r2/buckets/{bucket}/objects/{key}),
-authenticated with the same CF API token used elsewhere in the estate - no
-S3-compatible key/secret pair needed. The account id is never hardcoded; it's
-derived at runtime from the token via GET /accounts.
-
-Photo history is append-only: store_photo only skips the upload+insert when
-the exact bytes (by sha256) were already stored for that person. A changed
-picture is a new row; old rows are never overwritten or deleted here.
+Only the hub URL and a scoped file token are needed. Photo history is
+append-only: identical bytes for a person are skipped, changed pictures
+get a new row. Existing object keys remain stable.
 """
 
 import base64
 import hashlib
 import json
 import os
+from urllib.parse import quote
 
 import httpx
 import structlog
@@ -23,38 +18,33 @@ from people_sync import lifedata, sources
 
 log = structlog.get_logger(__name__)
 
-_CF_API = "https://api.cloudflare.com/client/v4"
-_BUCKET = os.environ.get("CF_R2_BUCKET", "life-data-archive")
+
+def _headers() -> dict:
+    return {
+        "Authorization": f"Bearer {os.environ['LIFE_HUB_TOKEN']}",
+        "User-Agent": "people-sync/0.1",
+    }
 
 
-def _cf_headers() -> dict:
-    return {"Authorization": f"Bearer {os.environ['CF_API_TOKEN']}"}
-
-
-def _account_id() -> str:
-    resp = httpx.get(f"{_CF_API}/accounts", headers=_cf_headers(), timeout=30)
-    resp.raise_for_status()
-    return resp.json()["result"][0]["id"]
+def _url(key: str) -> str:
+    return f"{os.environ['LIFE_HUB_URL'].rstrip('/')}/v1/files/{quote(key, safe='/')}"
 
 
 def _upload(key: str, data: bytes, content_type: str | None = None) -> None:
-    url = f"{_CF_API}/accounts/{_account_id()}/r2/buckets/{_BUCKET}/objects/{key}"
-    headers = _cf_headers()
+    headers = _headers()
     if content_type:
         headers["Content-Type"] = content_type
-    resp = httpx.put(url, headers=headers, content=data, timeout=60)
+    resp = httpx.put(_url(key), headers=headers, content=data, timeout=60)
     resp.raise_for_status()
 
 
 def put_object(key: str, data: bytes, content_type: str | None = None) -> None:
-    """Generic R2 object write - for content keyed by something other than
-    a person id (e.g. scraped raw pages and record-scoped avatars)."""
+    """Store a retained original in this client's authorized namespace."""
     _upload(key, data, content_type)
 
 
 def get_object(key: str) -> bytes:
-    url = f"{_CF_API}/accounts/{_account_id()}/r2/buckets/{_BUCKET}/objects/{key}"
-    resp = httpx.get(url, headers=_cf_headers(), timeout=60)
+    resp = httpx.get(_url(key), headers=_headers(), timeout=60)
     resp.raise_for_status()
     return resp.content
 

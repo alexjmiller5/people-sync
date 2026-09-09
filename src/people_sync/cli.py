@@ -64,15 +64,15 @@ def cmd_new_person(args: argparse.Namespace) -> None:
     print(person_id)
 
 
-def _require_r2_token() -> None:
-    """Pictures go to R2 on every scrape; an unset token would fail per
-    record (a malformed Authorization header) after the page was loaded."""
-    if not os.environ.get("CF_API_TOKEN"):
-        sys.exit("CF_API_TOKEN is not set - profile pictures cannot be stored")
+def _require_file_token() -> None:
+    """Validate file service configuration before opening the source page."""
+    for name in ("LIFE_HUB_TOKEN", "LIFE_HUB_URL"):
+        if not os.environ.get(name):
+            sys.exit(f"{name} is not set - profile pictures cannot be stored")
 
 
 def cmd_scrape(args: argparse.Namespace) -> None:
-    _require_r2_token()
+    _require_file_token()
     result = scrape_run.scrape(
         args.platform,
         max_n=args.max,
@@ -106,7 +106,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     from people_sync.scrape.cdp import Browser
 
     if args.platform != "facebook":
-        _require_r2_token()
+        _require_file_token()
     browser = Browser.connect(
         endpoint=args.endpoint, data_dir=args.data_dir, approve_command=args.approve_command
     )

@@ -34,7 +34,7 @@ Runtime dependencies outside Python:
   photo fetches.
 - macOS with Contacts data for `ingest apple` (reads the local AddressBook
   SQLite copies read-only).
-- A Cloudflare API token with R2 write access for `photos store`.
+- A life-data hub URL and a scoped file token for `photos store`.
 
 ## Commands
 
@@ -109,8 +109,9 @@ These cannot be codified:
 `.env.tpl` is the canonical manifest, holding 1Password `op://` references
 only and no plaintext:
 
-- `CF_API_TOKEN` - Cloudflare API token, used for R2 photo uploads. The
-  account id is never hardcoded; it is derived from the token at runtime.
+- `LIFE_HUB_URL` and `LIFE_HUB_TOKEN` - the life-data file service URL and
+  a dedicated client token with read/write grants for `photos/people/`,
+  `photos/records/`, and `profiles/`.
 - `NOTION_API_TOKEN` - Notion integration secret, used only by `new-person`
   to create the People stub page whose id becomes the life-data row id.
 
@@ -120,7 +121,9 @@ Run anything that needs them through 1Password:
 op run --env-file=.env.tpl -- uv run python -m people_sync <command>
 ```
 
-`CF_R2_BUCKET` optionally overrides the destination bucket for photos.
+Files are uploaded and read through `/v1/files/<key>`. Life Data owns the
+retained photos and source snapshots; this client never holds provider
+storage credentials. Existing `r2_key` values remain stable references.
 
 ## Browser and login configuration
 

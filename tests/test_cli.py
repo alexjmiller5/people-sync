@@ -177,7 +177,8 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
 
 
 def test_scrape_passes_endpoint_data_dir_and_approve_command_through(mocker, capsys, monkeypatch):
-    monkeypatch.setenv("CF_API_TOKEN", "token-synthetic")
+    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "token-synthetic")
     scrape = mocker.patch(
         "people_sync.scrape.run.scrape",
         return_value={"done": 1, "skipped": 0, "halted": None},
@@ -208,7 +209,8 @@ def test_scrape_passes_endpoint_data_dir_and_approve_command_through(mocker, cap
 
 
 def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker, capsys, monkeypatch):
-    monkeypatch.setenv("CF_API_TOKEN", "token-synthetic")
+    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "token-synthetic")
     scrape = mocker.patch(
         "people_sync.scrape.run.scrape",
         return_value={"done": 0, "skipped": 0, "halted": None},
@@ -318,11 +320,11 @@ def test_approve_command_help_names_its_environment_fallback(command, capsys):
 
 
 def test_scrape_refuses_to_start_without_the_r2_token(mocker, monkeypatch):
-    monkeypatch.delenv("CF_API_TOKEN", raising=False)
+    monkeypatch.delenv("LIFE_HUB_TOKEN", raising=False)
     scrape = mocker.patch("people_sync.scrape.run.scrape")
 
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["scrape", "instagram"])
 
-    assert "CF_API_TOKEN" in str(exit_info.value.code)
+    assert "LIFE_HUB_TOKEN" in str(exit_info.value.code)
     scrape.assert_not_called()

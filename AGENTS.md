@@ -303,3 +303,14 @@ that way.
 
 `.superpowers/` is agent scratch (plans, task briefs, run reports) and is
 gitignored - it holds personal data and never gets committed.
+
+
+## Retained file storage
+
+Life Data owns person photos (`photos/people/`), record avatars
+(`photos/records/`) and retained source snapshots (`profiles/`). This is an
+approved shared-service contract: `photos.py` uses only `LIFE_HUB_URL` and
+a dedicated `LIFE_HUB_TOKEN`, with separate `files:read:<prefix>/` and
+`files:write:<prefix>/` grants for those three namespaces. Existing object
+keys and rows stay stable. No Cloudflare token or bucket config reaches
+this client. Scrapes validate both settings before opening a source page.
