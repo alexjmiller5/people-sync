@@ -32,7 +32,7 @@ class FakeChrome:
 
     async def _start(self) -> int:
         self._server = await serve(
-            self._handle, "127.0.0.1", 0, process_request=self._process_request
+            self._handle, "127.0.0.1", 0, process_request=self._process_request, close_timeout=0.1
         )
         return self._server.sockets[0].getsockname()[1]
 
