@@ -126,7 +126,11 @@ def test_facebook_list_preserves_numeric_ids_and_vanity_handles():
     document.els.push(el({href:'https://www.facebook.com/own.profile', closest() {
       return {innerText:'More'};
     }}));
+    document.els.push(el({href:'https://www.facebook.com/own.profile', closest(selector) {
+      return selector === '[role=tablist]' ? null : {innerText:'Own Profile'};
+    }}));
     document.querySelector = () => document;
+    globalThis.location = {pathname:'/own.profile/friends', search:''};
     """
     entries = json.loads(run(setup, LIST_ENTRIES_JS))
     assert [e["handle"] for e in entries] == [

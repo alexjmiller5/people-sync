@@ -38,11 +38,13 @@ _LINK_RE = (
 LIST_ENTRIES_JS = (
     "(function(){var v=function(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0};"
     "var re=/" + _LINK_RE + "/;var seen={};var out=[];"
+    'var own=location.pathname.split("/")[1];'
+    'if(own==="profile.php")own+="?id="+new URLSearchParams(location.search).get("id");'
     'var main=document.querySelector("[role=main]")||document;'
     'var links=[].slice.call(main.querySelectorAll("a[href]")).filter(v);'
     'for(var k=0;k<links.length;k++){var a=links[k];if(a.closest("[role=tablist]"))continue;'
     "var m=a.href.match(re);if(!m)continue;"
-    "var handle=m[1]||m[2];if(!handle||seen[handle])continue;"
+    "var handle=m[1]||m[2];if(!handle||handle===own||seen[handle])continue;"
     'var card=a.closest("[role=listitem]")||(a.parentElement&&a.parentElement.parentElement&&a.parentElement.parentElement.parentElement);'
     'var t=(card?card.innerText:"").split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
     "if(!t.length)continue;seen[handle]=1;"
