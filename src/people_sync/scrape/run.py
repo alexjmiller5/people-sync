@@ -79,6 +79,7 @@ def _fetch_avatar_via_page(browser: Browser, url: str) -> bytes | None:
     js = (
         "(async () => { try { "
         f"const r = await fetch({json.dumps(url)}); "
+        "if (!r.ok || !(r.headers.get('content-type') || '').toLowerCase().startsWith('image/')) return null; "
         "const buf = await r.arrayBuffer(); const bytes = new Uint8Array(buf); "
         "let bin = ''; for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]); "
         "return btoa(bin); "

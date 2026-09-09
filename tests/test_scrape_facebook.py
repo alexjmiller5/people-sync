@@ -81,10 +81,9 @@ def test_assign_handles_only_unique_exact_names():
     assert facebook.assign_handles(entries, records) == [{"id": "facebook:1", "handle": "a.one"}]
 
 
-def test_list_friends_scrolls_until_the_link_count_settles():
+def test_list_friends_keeps_rows_virtualized_away_even_when_link_count_is_constant():
     class FakeBrowser:
         def __init__(self):
-            self.counts = iter([10, 20, 30, 30, 30, 99])
             self.scrolls = 0
 
         def navigate(self, url, wait_ms):
@@ -94,15 +93,14 @@ def test_list_friends_scrolls_until_the_link_count_settles():
             self.scrolls += 1
 
         def eval(self, js):
-            if js == facebook.LIST_LINK_COUNT_JS:
-                return next(self.counts)
-            return json.dumps([{"handle": "x", "name": "X Y", "mutual_text": None}])
+            handle = "first" if self.scrolls == 0 else "second"
+            return json.dumps([{"handle": handle, "name": "Example Person", "mutual_text": None}])
 
     b = FakeBrowser()
     entries = facebook.list_friends(b, settle_s=0)
     assert b.url == facebook.LIST_URL
-    assert b.scrolls == 5
-    assert entries == [{"handle": "x", "name": "X Y", "mutual_text": None}]
+    assert b.scrolls == 4
+    assert [e["handle"] for e in entries] == ["first", "second"]
 
 
 def test_list_command_assigns_handles(mocker, capsys):

@@ -50,6 +50,12 @@ scheduler.
 
 ## Extractors
 
+Venmo reads only selected fields of `pageProps.otherUser` on personal profiles.
+Never archive the whole Next.js state or capture its network responses: those
+also contain credentials and payment data. `currentUser` describes the signed-in
+operator, not the person being visited. The social-data export supplies the
+connection inventory; the web profile's friend count is not that inventory.
+
 One module per platform under `scrape/` with the same surface, driven by
 `scrape/run.py`: `URL` (`{handle}` template), `CAPTURE` (response URL
 patterns to keep while the page loads), optional `READY_JS` (a predicate
@@ -65,7 +71,8 @@ Sources whose export lacks profile links get a `list` command (`facebook`:
 the friends page gives name-only records a handle by unique exact name;
 `partiful`: the mutuals page routes each row to `/u/<uid>` only on click,
 so the list is walked click-by-click and profiles are written as it goes;
-`strava`: followers + following of the signed-in athlete). Partiful
+`strava`: followers + following of the signed-in athlete; `spotify`: followers
+and followed users, excluding artist pages and checking the displayed totals). Partiful
 records match a person only through the Instagram handle on their profile
 (`match.py`), never by name.
 
@@ -115,6 +122,10 @@ that show one. `Browser.connect` starts it detached right before the
 websocket upgrade (which is what raises the prompt) and only on the
 approval-mode path; an explicit `--endpoint` is a dedicated profile with no
 prompt, so the command is never run there.
+
+`PEOPLE_SYNC_CDP_TARGET` attaches to a caller-owned tab, preserving its session
+across login and scrape commands. The caller groups and closes that tab; the
+CLI never creates a replacement or closes an explicitly selected target.
 
 The product never knows what those commands do, and must not learn: no
 credential store, no vault, no path from any machine belongs in this code.
