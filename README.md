@@ -59,6 +59,7 @@ uv run python -m people_sync <command>
 | `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |
 | `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
+| `list spotify` | Followers and followed user accounts, with totals checked against the profile |
 
 Every ingest prints `{"new": N, "updated": N}`; `match` prints
 `{"auto": N, "suggested": N, "left_pending": N}`. Re-running an ingest on the
@@ -123,6 +124,11 @@ op run --env-file=.env.tpl -- uv run python -m people_sync <command>
 `CF_R2_BUCKET` optionally overrides the destination bucket for photos.
 
 ## Browser and login configuration
+
+`people-sync list spotify` reads the signed-in user's followers and following
+pages. It checks the displayed totals, ingests user accounts with both direction
+flags, and excludes artist pages. `people-sync scrape spotify` then saves each
+pending user's profile header and profile picture, when present.
 
 `scrape` and `login` drive a Chrome over CDP. Where it is and how it is
 signed in come from options or environment variables; nothing here is ever
