@@ -181,13 +181,13 @@ class Pacer:
     def _today_entry(self, state: dict) -> dict:
         return state.get(self.platform, {}).get(self._today(), {"calls": 0, "gap_calls": 0})
 
-    def next_gap(self) -> float:
+    def next_gap(self, workers: int = 1) -> float:
         with self._locked():
             state = self._load()
             gap_calls = 0 if state is None else self._today_entry(state).get("gap_calls", 0)
             gap_calls += 1
             self._write_gap_calls({} if state is None else state, gap_calls)
-        gap = random.uniform(8.0, 25.0)
+        gap = random.uniform(8.0, 25.0) / workers
         if gap_calls % BREAK_EVERY == 0:
             gap += random.uniform(120.0, 300.0)
         return gap
@@ -204,7 +204,28 @@ class Pacer:
             state = self._load()
             if state is None:
                 return False
-            return self._today_entry(state).get("calls", 0) < self.cap
+            entry = self._today_entry(state)
+            return max(entry.get("calls", 0), entry.get("attempts", 0)) < self.cap
+
+    def reserve(self) -> bool:
+        """Charge an attempt BEFORE navigation, atomically across all tabs.
+
+        Older runs counted only successes; gap_calls includes failed attempts.
+        Seed from the larger count so the upgrade cannot reset today's budget.
+        """
+        with self._locked():
+            state = self._load()
+            if state is None:
+                return False
+            entry = state.setdefault(self.platform, {}).setdefault(self._today(), {})
+            attempts = max(
+                entry.get("attempts", 0), entry.get("calls", 0), entry.get("gap_calls", 0)
+            )
+            if attempts >= self.cap:
+                return False
+            entry["attempts"] = attempts + 1
+            self._save(state)
+            return True
 
     def record(self) -> None:
         with self._locked():

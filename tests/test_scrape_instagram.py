@@ -109,6 +109,32 @@ def test_parse_prefers_captured_web_profile_info_fields():
     assert p.raw["web_profile_info"]["data"]["user"]["category_name"] == "Public Figure"
 
 
+def test_readiness_requires_this_profiles_data_and_keeps_hd_fields():
+    assert not instagram.capture_ready([], "testuser_a")
+    assert not instagram.capture_ready(_captured_web_profile_info(username="other"), "testuser_a")
+    captured = _captured_web_profile_info()
+    assert instagram.capture_ready(captured, "testuser_a")
+    assert instagram.parse(FIXTURE, captured).avatar_url == "https://example.invalid/hd.jpg"
+
+
+def test_unrelated_web_profile_does_not_override_matching_graphql_profile():
+    captured = _captured_web_profile_info(username="someone_else")
+    captured.append(
+        {
+            "url": "https://www.instagram.com/graphql/query",
+            "body": json.dumps(
+                {
+                    "user": {
+                        "username": "testuser_a",
+                        "profile_pic_url_hd": "https://example.invalid/correct.jpg",
+                    }
+                }
+            ),
+        }
+    )
+    assert instagram.parse(FIXTURE, captured).avatar_url == "https://example.invalid/correct.jpg"
+
+
 def test_parse_keeps_header_fields_when_no_captured_body():
     p = instagram.parse(FIXTURE, captured=[])
 

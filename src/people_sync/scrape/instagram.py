@@ -20,6 +20,21 @@ URL = "https://www.instagram.com/{handle}/"
 # on others - both are captured and searched for the handle's user object.
 CAPTURE = [r"web_profile_info", r"graphql/query"]
 
+READY_JS = (
+    '(function(){var text=document.body?.innerText||"";'
+    'if(/Sorry, this page isn.t available/i.test(text))return "unavailable";'
+    'var h=document.querySelector("header"),img=h?.querySelector("img");'
+    "return !!(h&&img?.src&&/followers/i.test(h.innerText)&&/following/i.test(h.innerText));})()"
+)
+
+
+def capture_ready(captured: list[dict], handle: str) -> bool:
+    """A matching profile response, not an unrelated feed or suggested user."""
+    body = _web_profile_info(captured, handle)
+    user = (body or {}).get("data", {}).get("user")
+    return bool((user and user.get("username") == handle) or _graphql_user(captured, handle))
+
+
 EXTRACTOR_JS = (
     "(function(){if(/Sorry, this page isn't available/i.test(document.body.innerText))"
     'return JSON.stringify({error:"unavailable"});'
@@ -56,7 +71,7 @@ EXTRACTOR_JS = (
 )
 
 
-def _web_profile_info(captured: list[dict] | None) -> dict | None:
+def _web_profile_info(captured: list[dict] | None, username: str | None = None) -> dict | None:
     for entry in captured or []:
         if "web_profile_info" not in (entry.get("url") or ""):
             continue
@@ -64,7 +79,8 @@ def _web_profile_info(captured: list[dict] | None) -> dict | None:
             body = json.loads(entry.get("body") or "")
         except (json.JSONDecodeError, TypeError):
             continue
-        if ((body or {}).get("data") or {}).get("user"):
+        user = ((body or {}).get("data") or {}).get("user") if isinstance(body, dict) else None
+        if user and (not username or user.get("username") == username):
             return body
     return None
 
@@ -154,7 +170,7 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
     if pronouns:
         raw["pronouns"] = pronouns
 
-    body = _web_profile_info(captured)
+    body = _web_profile_info(captured, username)
     user = None
     if body is not None:
         raw["web_profile_info"] = body

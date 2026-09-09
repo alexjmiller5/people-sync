@@ -9,6 +9,9 @@ see `instagram.py`.
 """
 
 import base64
+import fcntl
+import threading
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hashlib
 import json
 import os
@@ -17,10 +20,11 @@ from datetime import datetime, timedelta, timezone
 from importlib import import_module
 
 import structlog
+import httpx
 from websockets.exceptions import ConnectionClosed
 
 from people_sync import lifedata, photos
-from people_sync.scrape.cdp import Browser, CdpError
+from people_sync.scrape.cdp import Browser, CdpError, ScrapeStopped
 from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, challenge_marker
 from people_sync.scrape.profile import ExtractError, upsert_profile, Profile
 
@@ -101,9 +105,13 @@ def _resolve_avatar(
     if not avatar_url:
         return existing_key, existing_sha
 
-    image = photos.fetch_url_photo(avatar_url)
+    if isinstance(browser, Browser):
+        browser.check_stop()
+    image = photos.fetch_url_photo(avatar_url, halt_on_block=True)
     source = "direct"
     if image is None:
+        if isinstance(browser, Browser):
+            browser.check_stop()
         image = _fetch_avatar_via_page(browser, avatar_url)
         source = "page-fetch"
     if image is None:
@@ -127,12 +135,78 @@ def _halt_screenshot(browser: Browser, platform: str, state_path: str) -> str | 
     """What the page looked like when a run halted, next to the state file;
     None when the capture itself fails (the halt still stands)."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path = os.path.join(os.path.dirname(state_path) or ".", f"scrape-{platform}-{stamp}.png")
+    path = os.path.join(
+        os.path.dirname(state_path) or ".", f"scrape-{platform}-{stamp}-{time.time_ns()}.png"
+    )
     try:
         browser.screenshot(path)
     except Exception:
         return None
     return path
+
+
+def _collect_profile(browser, module, platform, index, record):
+    handle = record["handle"]
+    url = module.URL.format(handle=handle)
+    options = {}
+    capture_ready = getattr(module, "capture_ready", None)
+    if capture_ready:
+        options = {
+            "ready_js": module.READY_JS,
+            "capture_ready": lambda entries: capture_ready(entries, handle),
+        }
+    nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE, **options)
+    if options:
+        log.info(
+            "profile data wait",
+            platform=platform,
+            index=index,
+            milliseconds=round(nav_result.get("load_ms", 0)),
+            ready=nav_result.get("data_ready", False),
+        )
+        if not nav_result.get("dom_ready"):
+            raise ExtractError("profile DOM not ready")
+    captured = nav_result.get("captured", [])
+
+    ready_js = getattr(module, "READY_JS", None)
+    if not options and ready_js and not browser.wait_for(ready_js, READY_TIMEOUT_S):
+        log.warning("page never became ready", platform=platform, index=index, reason="timeout")
+
+    enrich = getattr(module, "enrich", None)
+    if enrich is not None:
+        captured = list(captured) + list(enrich(browser, handle) or [])
+
+    page_text = browser.eval(PAGE_TEXT_JS) or ""
+    marker = challenge_marker(page_text)
+    if marker:
+        raise ScrapeStopped(f"challenge page: {marker}")
+    raw_eval = browser.eval(module.EXTRACTOR_JS)
+    eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
+    profile = module.parse(eval_result, captured)
+    profile.record_id = record["id"]
+    return profile, eval_result, captured
+
+
+def _store_profile(browser, platform, index, record, profile, eval_result, captured):
+    record_key = _record_key(record["id"])
+    raw_key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}.json"
+    photos.put_object(
+        raw_key,
+        json.dumps({"eval": eval_result, "captured": captured}).encode(),
+        content_type="application/json",
+    )
+
+    avatar_key, avatar_sha = _resolve_avatar(
+        browser,
+        platform,
+        index,
+        record_key,
+        profile.avatar_url,
+        record.get("avatar_r2_key"),
+        record.get("avatar_sha256"),
+    )
+
+    upsert_profile(profile, avatar_key, avatar_sha, raw_key)
 
 
 def scrape(
@@ -142,12 +216,52 @@ def scrape(
     endpoint: str | None = None,
     data_dir: str | None = None,
     approve_command: str | None = None,
+    targets: list[str] | None = None,
 ) -> dict:
+    os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+    # Import first: reject invalid platform names before using one in a path.
+    import_module(f"people_sync.scrape.{platform}")
+    with open(f"{state_path}.{platform}.run.lock", "a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"done": 0, "skipped": 0, "halted": "platform run already active"}
+        return _scrape(platform, max_n, state_path, endpoint, data_dir, approve_command, targets)
+
+
+def _scrape(
+    platform: str,
+    max_n: int | None = None,
+    state_path: str = DEFAULT_STATE_PATH,
+    endpoint: str | None = None,
+    data_dir: str | None = None,
+    approve_command: str | None = None,
+    targets: list[str] | None = None,
+) -> dict:
+    if targets is not None and (
+        not 1 <= len(targets) <= 4
+        or any(not t.strip() for t in targets)
+        or len(set(targets)) != len(targets)
+    ):
+        raise ValueError("targets must contain one to four distinct, nonempty target IDs")
     module = import_module(f"people_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
     records = _select_records(platform)
     if max_n is not None:
         records = records[:max_n]
+
+    if targets:
+        return _coordinated(
+            module,
+            platform,
+            records,
+            pacer,
+            targets,
+            endpoint,
+            data_dir,
+            approve_command,
+            state_path,
+        )
 
     done = 0
     skipped = 0
@@ -166,58 +280,17 @@ def scrape(
                 continue
 
             try:
-                url = module.URL.format(handle=handle)
-                nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE)
-                captured = nav_result.get("captured", [])
-
-                ready_js = getattr(module, "READY_JS", None)
-                if ready_js and not browser.wait_for(ready_js, READY_TIMEOUT_S):
-                    log.warning(
-                        "page never became ready", platform=platform, index=index, reason="timeout"
-                    )
-
-                enrich = getattr(module, "enrich", None)
-                if enrich is not None:
-                    captured = list(captured) + list(enrich(browser, handle) or [])
-
-                page_text = browser.eval(PAGE_TEXT_JS) or ""
-                marker = challenge_marker(page_text)
-                if marker:
-                    halted = f"challenge page: {marker}"
-                    shot = _halt_screenshot(browser, platform, state_path)
-                    log.warning(
-                        "scrape halted",
-                        platform=platform,
-                        index=index,
-                        reason=halted,
-                        screenshot=shot,
-                    )
-                    break
-
-                raw_eval = browser.eval(module.EXTRACTOR_JS)
-                eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
-                profile = module.parse(eval_result, captured)
-                profile.record_id = record["id"]
-
-                record_key = _record_key(record["id"])
-                raw_key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}.json"
-                photos.put_object(
-                    raw_key,
-                    json.dumps({"eval": eval_result, "captured": captured}).encode(),
-                    content_type="application/json",
+                profile, eval_result, captured = _collect_profile(
+                    browser, module, platform, index, record
                 )
-
-                avatar_key, avatar_sha = _resolve_avatar(
-                    browser,
-                    platform,
-                    index,
-                    record_key,
-                    profile.avatar_url,
-                    record.get("avatar_r2_key"),
-                    record.get("avatar_sha256"),
+                _store_profile(browser, platform, index, record, profile, eval_result, captured)
+            except ScrapeStopped as e:
+                halted = str(e) or "run paused"
+                shot = _halt_screenshot(browser, platform, state_path)
+                log.warning(
+                    "scrape halted", platform=platform, index=index, reason=halted, screenshot=shot
                 )
-
-                upsert_profile(profile, avatar_key, avatar_sha, raw_key)
+                break
             except _BROWSER_LOST:
                 halted = "browser lost"
                 log.error("scrape halted", platform=platform, index=index, reason=halted)
@@ -251,3 +324,134 @@ def scrape(
         browser.close()
 
     return {"done": done, "skipped": skipped, "halted": halted}
+
+
+def _coordinated(
+    module, platform, records, pacer, targets, endpoint, data_dir, approve_command, state_path
+):
+    """One bounded queue, caller-owned tabs, serial persistence, shared stop.
+
+    The coordinator owns pacing and the budget. Workers never choose records
+    or retry. File locking prevents another invocation duplicating this queue.
+    """
+    result = {"done": 0, "skipped": 0, "halted": None}
+    stop = threading.Event()
+    halt_lock = threading.Lock()
+    write_lock = threading.Lock()
+    browsers = []
+
+    def halt(reason):
+        with halt_lock:
+            if not stop.is_set():
+                result["halted"] = reason
+                stop.set()
+                log.warning("scrape halted", platform=platform, reason=reason)
+
+    def process(browser, index, record):
+        try:
+            if stop.is_set():
+                return None
+            profile, evaluated, captured = _collect_profile(
+                browser, module, platform, index, record
+            )
+            with write_lock:
+                if stop.is_set():
+                    return None
+                _store_profile(browser, platform, index, record, profile, evaluated, captured)
+            pacer.record()
+            log.info("profile scraped", platform=platform, index=index)
+            return "done"
+        except ScrapeStopped as e:
+            if str(e):
+                halt(str(e))
+            return None
+        except _BROWSER_LOST:
+            halt("browser lost")
+            return None
+        except httpx.HTTPStatusError as e:
+            halt(f"HTTP {e.response.status_code} during storage or photo fetch")
+            return "skipped"
+        except ExtractError as e:
+            if str(e) == UNAVAILABLE:
+                with write_lock:
+                    if not stop.is_set():
+                        upsert_profile(
+                            Profile(
+                                record_id=record["id"], platform=platform, raw={"unavailable": True}
+                            )
+                        )
+            log.warning("record failed", platform=platform, index=index, reason=str(e))
+            return "skipped"
+        except Exception as e:
+            # With parallel work, an unknown failure must not turn into a burst
+            # of repeated failed storage or source requests.
+            halt(type(e).__name__)
+            return "skipped"
+
+    try:
+        for target in targets:
+            browser = Browser.connect(
+                endpoint=endpoint,
+                data_dir=data_dir,
+                approve_command=approve_command,
+                target_id=target,
+            )
+            browsers.append(browser)
+            browser.watch_blocks(module.URL.format(handle=""), halt, stop)
+        queue = iter(enumerate(records))
+        available = list(browsers)
+        pending = {}
+        exhausted = False
+        next_start = 0
+        with ThreadPoolExecutor(max_workers=len(browsers)) as pool:
+            while pending or (not exhausted and not stop.is_set()):
+                if (
+                    not stop.is_set()
+                    and not exhausted
+                    and available
+                    and time.monotonic() >= next_start
+                ):
+                    entry = next(queue, None)
+                    if entry is None:
+                        exhausted = True
+                    else:
+                        index, record = entry
+                        if not record.get("handle"):
+                            result["skipped"] += 1
+                            continue
+                        if not pacer.reserve():
+                            # The limit stops new dispatches; already-reserved
+                            # profiles can still finish and be preserved.
+                            with halt_lock:
+                                if not stop.is_set():
+                                    result["halted"] = "daily cap reached"
+                            exhausted = True
+                        else:
+                            browser = available.pop(0)
+                            pending[pool.submit(process, browser, index, record)] = browser
+                            next_start = time.monotonic() + pacer.next_gap(workers=len(browsers))
+                            if index == len(records) - 1:
+                                exhausted = True
+                            elif not pacer.allow():
+                                with halt_lock:
+                                    if not stop.is_set():
+                                        result["halted"] = "daily cap reached"
+                                exhausted = True
+                if pending:
+                    finished, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+                    for future in finished:
+                        available.append(pending.pop(future))
+                        outcome = future.result()
+                        if outcome:
+                            result[outcome] += 1
+                elif not exhausted:
+                    stop.wait(min(0.1, max(0, next_start - time.monotonic())))
+    except (Exception, KeyboardInterrupt) as e:
+        halt(type(e).__name__)
+    finally:
+        if stop.is_set():
+            for browser in browsers:
+                _halt_screenshot(browser, platform, state_path)
+        for browser in browsers:
+            browser.close()
+    return result

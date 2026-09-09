@@ -53,8 +53,8 @@ scheduler.
 Venmo reads only selected fields of `pageProps.otherUser` on personal profiles.
 Never archive the whole Next.js state or capture its network responses: those
 also contain credentials and payment data. `currentUser` describes the signed-in
-operator, not the person being visited. The social-data export supplies the
-connection inventory; the web profile's friend count is not that inventory.
+operator, not the person being visited. The social-data export can omit friends
+entirely; neither payment activity nor a displayed friend count is an inventory.
 
 One module per platform under `scrape/` with the same surface, driven by
 `scrape/run.py`: `URL` (`{handle}` template), `CAPTURE` (response URL
@@ -66,6 +66,20 @@ the load event), `EXTRACTOR_JS` (an IIFE returning JSON, or
 syntax-checked in node by `tests/test_dom_js.py`, and every extractor is
 unit-tested against a synthetic fixture in the shape its JS returns.
 Failed records stay pending and are simply retried next pass.
+
+Instagram adds `capture_ready(captured, handle)` alongside `READY_JS`:
+navigation returns once both its rendered header and matching profile response
+are ready. Unrelated users in captured responses must never satisfy readiness
+or supply another profile's fields. Missing profile JSON gets a bounded wait
+and the existing complete-header fallback, not an empty cached profile.
+
+Repeat `scrape --target` up to four times for a coordinated queue. One process
+selects records once, staggers starts, reserves attempts atomically in `Pacer`,
+and serializes writes through the existing CLI path. All tabs share the daily
+budget and full periodic breaks. A per-platform run lock prevents competing
+invocations. A source block or warning sets one shared stop event, stops tab
+loading, and leaves unfinished records pending. Do not use independent scraper
+processes as a substitute for this queue. No scheduled resume or automatic retry.
 
 Sources whose export lacks profile links get a `list` command (`facebook`:
 the friends page gives name-only records a handle by unique exact name;
