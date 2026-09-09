@@ -130,6 +130,13 @@ pages. It checks the displayed totals, ingests user accounts with both direction
 flags, and excludes artist pages. `people-sync scrape spotify` then saves each
 pending user's profile header and profile picture, when present.
 
+`people-sync scrape venmo` reads existing ledger handles from signed-in
+personal profile pages. It captures identity, friendship status and the profile
+picture; payment feeds, contact details and authentication state are excluded.
+The web profile exposes a friend count, not a complete friend directory. Use
+Venmo's social-data export to discover the full list and verify its structure
+before importing it.
+
 `scrape` and `login` drive a Chrome over CDP. Where it is and how it is
 signed in come from options or environment variables; nothing here is ever
 stored by the app.

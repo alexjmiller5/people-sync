@@ -562,6 +562,10 @@ class Browser:
         fut.result(timeout=10)
 
     async def _scroll_async(self, px: int) -> None:
+        await self._send("Page.bringToFront", {}, session_id=self._session_id)
+        await self._send(
+            "Emulation.setFocusEmulationEnabled", {"enabled": True}, session_id=self._session_id
+        )
         await self._send(
             "Input.dispatchMouseEvent",
             {"type": "mouseWheel", "x": 400, "y": 400, "deltaX": 0, "deltaY": px},

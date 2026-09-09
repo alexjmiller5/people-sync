@@ -29,17 +29,20 @@ CAPTURE: list[str] = []
 # Profile handles are either a vanity slug or profile.php?id=<n>; both are
 # kept verbatim as the handle so URL.format() reproduces the page.
 _LINK_RE = (
+    r"facebook\.com\/(profile\.php\?id=\d+)|"
     r"facebook\.com\/(?!friends|me$|reel|marketplace|groups|watch|gaming|events|"
-    r"bookmarks|messages|notifications|settings|stories|profile\.php\?id=\d+&)"
-    r"([A-Za-z0-9.]+)\/?(\?|$)|facebook\.com\/(profile\.php\?id=\d+)"
+    r"bookmarks|messages|notifications|settings|stories|profile\.php)"
+    r"([A-Za-z0-9.]+)\/?(?:\?|$)"
 )
 
 LIST_ENTRIES_JS = (
     "(function(){var v=function(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0};"
     "var re=/" + _LINK_RE + "/;var seen={};var out=[];"
-    'var links=[].slice.call(document.querySelectorAll("a[href]")).filter(v);'
-    "for(var k=0;k<links.length;k++){var a=links[k];var m=a.href.match(re);if(!m)continue;"
-    "var handle=m[1]||m[3];if(!handle||seen[handle])continue;"
+    'var main=document.querySelector("[role=main]")||document;'
+    'var links=[].slice.call(main.querySelectorAll("a[href]")).filter(v);'
+    'for(var k=0;k<links.length;k++){var a=links[k];if(a.closest("[role=tablist]"))continue;'
+    "var m=a.href.match(re);if(!m)continue;"
+    "var handle=m[1]||m[2];if(!handle||seen[handle])continue;"
     'var card=a.closest("[role=listitem]")||(a.parentElement&&a.parentElement.parentElement&&a.parentElement.parentElement.parentElement);'
     'var t=(card?card.innerText:"").split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
     "if(!t.length)continue;seen[handle]=1;"
@@ -47,8 +50,6 @@ LIST_ENTRIES_JS = (
     "out.push({handle:handle,name:t[0],mutual_text:mut});}"
     "return JSON.stringify(out);})()"
 )
-
-LIST_LINK_COUNT_JS = 'document.querySelectorAll("a[href]").length'
 
 EXTRACTOR_JS = (
     "(function(){if(/This content isn't available right now|This page isn't available/i.test(document.body.innerText))"
@@ -195,19 +196,23 @@ def assign_handles(entries: list[dict], records: list[dict]) -> list[dict]:
 
 
 def list_friends(browser, max_scrolls: int = 60, settle_s: float = 2.5) -> list[dict]:
-    """Scroll the friends page until the link count stops growing and return
-    the entries (handle, name, mutual_text)."""
+    """Keep entries before virtualization removes them; stop after three
+    scrolls add no new handles, or the operator's scroll limit is reached."""
     import json
     import time
 
     browser.navigate(LIST_URL, 12000)
     time.sleep(settle_s)
-    counts: list[int] = []
-    for _ in range(max_scrolls):
+    entries: dict[str, dict] = {}
+    unchanged = 0
+    for step in range(max_scrolls + 1):
+        raw = browser.eval(LIST_ENTRIES_JS)
+        batch = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        before = len(entries)
+        entries.update({e["handle"]: e for e in batch})
+        unchanged = unchanged + 1 if len(entries) == before else 0
+        if unchanged >= 3 or step == max_scrolls:
+            break
         browser.scroll(2000)
         time.sleep(settle_s)
-        counts.append(int(browser.eval(LIST_LINK_COUNT_JS) or 0))
-        if len(counts) >= 3 and counts[-1] == counts[-2] == counts[-3]:
-            break
-    raw = browser.eval(LIST_ENTRIES_JS)
-    return json.loads(raw) if isinstance(raw, str) else (raw or [])
+    return list(entries.values())
