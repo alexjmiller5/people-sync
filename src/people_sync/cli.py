@@ -140,6 +140,11 @@ def cmd_list(args: argparse.Namespace) -> None:
 
             entries = strava.list_athletes(browser)
             print(json.dumps({"entries": len(entries), **strava.ingest_entries(entries)}))
+        elif args.platform == "spotify":
+            from people_sync.scrape import spotify
+
+            entries = spotify.list_users(browser)
+            print(json.dumps({"entries": len(entries), **spotify.ingest_entries(entries)}))
         else:
             from people_sync.scrape import partiful
 
@@ -239,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_p = sub.add_parser(
         "list", help="capture a platform's friends list and give name-only records their handles"
     )
-    list_p.add_argument("platform", choices=["facebook", "partiful", "strava"])
+    list_p.add_argument("platform", choices=["facebook", "partiful", "strava", "spotify"])
     list_p.add_argument("--start", type=int, default=0, help="partiful: first row index")
     list_p.add_argument("--max", type=int, default=None, help="partiful: rows to process")
     _add_browser_options(list_p)
