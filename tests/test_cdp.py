@@ -254,6 +254,133 @@ def test_navigate_times_out_without_load_event(tmp_path, fake_chrome):
         browser.close()
 
 
+def test_navigation_finishes_when_dom_and_late_profile_body_arrive(tmp_path, fake_chrome):
+    async def navigate(ws, msg):
+        sid = msg.get("sessionId")
+        await ws.send(json.dumps({"id": msg["id"], "result": {}}))
+        await ws.send(json.dumps({"method": "Page.loadEventFired", "sessionId": sid}))
+
+        async def late_response():
+            await asyncio.sleep(0.1)
+            await ws.send(
+                json.dumps(
+                    {
+                        "method": "Network.responseReceived",
+                        "sessionId": sid,
+                        "params": {
+                            "requestId": "profile",
+                            "response": {"url": "https://x.test/api/profile", "status": 200},
+                        },
+                    }
+                )
+            )
+            await ws.send(
+                json.dumps(
+                    {
+                        "method": "Network.loadingFinished",
+                        "sessionId": sid,
+                        "params": {"requestId": "profile"},
+                    }
+                )
+            )
+
+        asyncio.create_task(late_response())
+
+    async def evaluate(ws, msg):
+        await ws.send(json.dumps({"id": msg["id"], "result": {"result": {"value": True}}}))
+
+    async def body(ws, msg):
+        await ws.send(json.dumps({"id": msg["id"], "result": {"body": '{"bio":"complete"}'}}))
+
+    fake_chrome.on("Page.navigate", navigate)
+    fake_chrome.on("Runtime.evaluate", evaluate)
+    fake_chrome.on("Network.getResponseBody", body)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+        start = time.monotonic()
+        result = browser.navigate(
+            "https://x.test/profile",
+            2000,
+            capture=["/api/"],
+            ready_js="READY()",
+            capture_ready=lambda entries: bool(entries),
+        )
+        assert time.monotonic() - start < 1.5
+        assert result["captured"][0]["body"] == '{"bio":"complete"}'
+        assert result["data_ready"] is True
+    finally:
+        browser.close()
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_blocked_response_stops_without_waiting_for_body(tmp_path, fake_chrome, status):
+    stop = threading.Event()
+    reasons = []
+
+    async def navigate(ws, msg):
+        await ws.send(json.dumps({"id": msg["id"], "result": {}}))
+        await ws.send(
+            json.dumps(
+                {
+                    "method": "Network.responseReceived",
+                    "sessionId": "S1",
+                    "params": {
+                        "requestId": "blocked",
+                        "type": "XHR",
+                        "response": {"url": "https://x.test/api/profile", "status": status},
+                    },
+                }
+            )
+        )
+
+    fake_chrome.on("Page.navigate", navigate)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    try:
+
+        def halt(reason):
+            reasons.append(reason)
+            stop.set()
+
+        browser.watch_blocks("https://x.test/profile", halt, stop)
+        with pytest.raises(cdp.ScrapeStopped):
+            browser.navigate(
+                "https://x.test/profile",
+                2000,
+                capture=["/api/"],
+                ready_js="READY()",
+                capture_ready=lambda entries: bool(entries),
+            )
+        assert reasons == [f"HTTP {status}"]
+        assert stop.is_set()
+        assert any(m["method"] == "Page.stopLoading" for m in fake_chrome.messages)
+    finally:
+        browser.close()
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {"url": "https://x.test/challenge/", "text": "Continue"},
+        {"url": "https://x.test/profile", "text": "We detected unusual activity"},
+    ],
+)
+def test_existing_warning_stops_before_any_navigation(tmp_path, fake_chrome, page):
+    async def evaluate(ws, msg):
+        await ws.send(json.dumps({"id": msg["id"], "result": {"result": {"value": page}}}))
+
+    fake_chrome.on("Runtime.evaluate", evaluate)
+    browser = cdp.Browser.connect(devtools_port_path=fake_chrome.devtools_port_file(tmp_path))
+    stop = threading.Event()
+    try:
+        browser.watch_blocks("https://x.test/profile", lambda reason: stop.set(), stop)
+        assert stop.is_set()
+        with pytest.raises(cdp.ScrapeStopped):
+            browser.navigate("https://x.test/profile", 100)
+        assert not any(m["method"] == "Page.navigate" for m in fake_chrome.messages)
+    finally:
+        browser.close()
+
+
 def test_navigate_without_load_event_still_returns_captured_bodies(tmp_path, fake_chrome):
     # Same SPA-never-loads scenario, but with a capture pattern active and a
     # normal (fast) matching response - proves the capture window still runs

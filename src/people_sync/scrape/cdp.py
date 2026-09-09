@@ -26,6 +26,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+from people_sync.scrape.pace import challenge_marker
 
 import httpx
 import structlog
@@ -137,6 +138,10 @@ RESPONSE_BODY_TIMEOUT = 10.0
 
 class CdpError(RuntimeError):
     """A CDP handshake timeout, protocol error, or Runtime.evaluate exception."""
+
+
+class ScrapeStopped(RuntimeError):
+    """A shared stop was raised; leave this record pending."""
 
 
 def _read_devtools_port(path: str | Path) -> tuple[str, str]:
@@ -346,6 +351,11 @@ class Browser:
         self._captured_returned_upto = 0
         self._pending_responses: dict[str, dict] = {}
         self._capture_tasks: list[asyncio.Task] = []
+        self._stop_event = None
+        self._block_callback = None
+        self._block_host = None
+        self._watch_task = None
+        self._block_reported = False
 
     # -- connect / handshake --------------------------------------------
 
@@ -357,6 +367,7 @@ class Browser:
         handshake_timeout: float = HANDSHAKE_TIMEOUT,
         devtools_port_path: str | Path | None = None,
         approve_command: str | None = None,
+        target_id: str | None = None,
     ) -> "Browser":
         """`approve_command` (falling back to PEOPLE_SYNC_CDP_APPROVE_COMMAND)
         is a command that approves the browser's remote-debugging prompt on
@@ -371,6 +382,9 @@ class Browser:
         thread = threading.Thread(target=loop.run_forever, daemon=True)
         thread.start()
         browser = cls(loop)
+        if target_id is not None:
+            browser._target_id = target_id
+            browser._owns_target = False
         fut = asyncio.run_coroutine_threadsafe(
             browser._connect_async(ws_url, handshake_timeout), loop
         )
@@ -427,8 +441,11 @@ class Browser:
             msg["sessionId"] = session_id
         fut = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = fut
-        await self._ws.send(json.dumps(msg))
-        return await fut
+        try:
+            await self._ws.send(json.dumps(msg))
+            return await fut
+        finally:
+            self._pending.pop(msg_id, None)
 
     async def _recv_loop(self) -> None:
         try:
@@ -465,7 +482,15 @@ class Browser:
 
     # -- navigation ---------------------------------------------------------
 
-    def navigate(self, url: str, wait_ms: int = 10000, capture: list[str] | None = None) -> dict:
+    def navigate(
+        self,
+        url: str,
+        wait_ms: int = 10000,
+        capture: list[str] | None = None,
+        *,
+        ready_js: str | None = None,
+        capture_ready=None,
+    ) -> dict:
         """Navigate and wait for Page.loadEventFired (or wait_ms, non-fatal -
         SPAs like Facebook's /friends_all never fire it; the DOM is usually
         already usable, so navigate() proceeds and reports `load_event: False`
@@ -478,11 +503,13 @@ class Browser:
         through `re.escape` first.
         """
         fut = asyncio.run_coroutine_threadsafe(
-            self._navigate_async(url, wait_ms, capture), self._loop
+            self._navigate_async(url, wait_ms, capture, ready_js, capture_ready), self._loop
         )
         return fut.result(timeout=wait_ms / 1000 * 2 + 30)
 
-    async def _navigate_async(self, url: str, wait_ms: int, capture: list[str] | None) -> dict:
+    async def _navigate_async(
+        self, url: str, wait_ms: int, capture: list[str] | None, ready_js=None, capture_ready=None
+    ) -> dict:
         # Clean up any stragglers left pending by a previous navigate/capture
         # window before starting a new one.
         await self._cancel_capture_tasks()
@@ -491,12 +518,38 @@ class Browser:
         self._pending_responses = {}
         self._capture_patterns = list(capture) if capture else []
         try:
-            if self._capture_patterns:
+            if self._capture_patterns or self._block_callback:
                 await self._send("Network.enable", session_id=self._session_id)
 
             self._load_waiter = asyncio.get_running_loop().create_future()
             start = time.monotonic()
+            self.check_stop()
             await self._send("Page.navigate", {"url": url}, session_id=self._session_id)
+            if ready_js:
+                # A page-specific contract replaces the unconditional second
+                # capture window. Keep listening until BOTH DOM and profile JSON
+                # are ready; an absent JSON response still gets the full timeout.
+                ready = False
+                while True:
+                    self.check_stop()
+                    try:
+                        dom = await self._eval_async(ready_js)
+                    except CdpError:
+                        dom = False  # navigation can briefly destroy the JS context
+                    ready = bool(dom) and (
+                        dom == "unavailable" or not capture_ready or capture_ready(self._captured)
+                    )
+                    if ready or time.monotonic() - start >= wait_ms / 1000 * 2:
+                        break
+                    await asyncio.sleep(0.25)
+                await self._settle_capture_tasks()
+                self.check_stop()
+                result = self._drain_captured(
+                    load_ms=(time.monotonic() - start) * 1000, load_event=self._load_waiter.done()
+                )
+                result["data_ready"] = ready
+                result["dom_ready"] = bool(dom)
+                return result
             load_event = True
             try:
                 await asyncio.wait_for(self._load_waiter, timeout=wait_ms / 1000)
@@ -513,9 +566,11 @@ class Browser:
                 await self._settle_capture_tasks()
 
             return self._drain_captured(load_ms=load_ms, load_event=load_event)
-        except BaseException:
+        except BaseException as e:
             # A Page.navigate RPC error (or anything else) still leaves
             # nothing pending behind for the loop to destroy later.
+            if isinstance(e, ScrapeStopped):
+                await self._send("Page.stopLoading", session_id=self._session_id)
             await self._cancel_capture_tasks()
             raise
 
@@ -705,6 +760,13 @@ class Browser:
     def _on_response_received(self, params: dict) -> None:
         response = params.get("response") or {}
         url = response.get("url", "")
+        if (
+            self._block_callback
+            and self._is_source(url)
+            and params.get("type") in ("Document", "XHR", "Fetch")
+            and response.get("status") in (401, 403, 429)
+        ):
+            self._report_block(f"HTTP {int(response['status'])}")
         if self._capture_patterns and self._matches(url):
             self._pending_responses[params["requestId"]] = {
                 "url": url,
@@ -730,10 +792,85 @@ class Browser:
                 timeout=RESPONSE_BODY_TIMEOUT,
             )
             body = result.get("body", "") if result else ""
+            if result and result.get("base64Encoded"):
+                body = base64.b64decode(body).decode("utf-8")
         except Exception as e:
-            log.warning("response body fetch failed", host=_url_host(info["url"]), reason=str(e))
+            log.warning(
+                "response body fetch failed", host=_url_host(info["url"]), reason=type(e).__name__
+            )
             return
+        if self._block_callback and self._is_source(info["url"]):
+            try:
+                payload = json.loads(body)
+            except (ValueError, TypeError):
+                payload = None
+            if isinstance(payload, dict):
+                # Error envelope only, never scan user bios for challenge words.
+                message = " ".join(
+                    str(payload.get(k, ""))
+                    for k in ("message", "error_type", "checkpoint_url", "challenge", "errors")
+                )
+                marker = challenge_marker(message.replace("_", " "))
+                if marker or payload.get("require_login") or payload.get("challenge"):
+                    self._report_block(f"API challenge: {marker or 'authentication required'}")
+                elif payload.get("status") == "fail":
+                    self._report_block("API reported failure")
         self._captured.append({**info, "body": body})
+
+    def check_stop(self) -> None:
+        if self._stop_event is not None and self._stop_event.is_set():
+            raise ScrapeStopped()
+
+    def _is_source(self, url: str) -> bool:
+        host = (urlsplit(url).hostname or "").removeprefix("www.")
+        return host == self._block_host or host.endswith("." + (self._block_host or "invalid"))
+
+    def _report_block(self, reason: str) -> None:
+        if not self._block_reported:
+            self._block_reported = True
+            self._block_callback(reason)
+
+    def watch_blocks(self, url: str, callback, stop: threading.Event) -> None:
+        """Monitor this source tab, including during storage and pacing pauses."""
+        self._block_host = (urlsplit(url).hostname or "").removeprefix("www.")
+        self._block_callback, self._stop_event = callback, stop
+
+        async def start():
+            await self._send("Network.enable", session_id=self._session_id)
+            await self._inspect_page()
+            self._watch_task = asyncio.create_task(self._watch_blocks())
+
+        asyncio.run_coroutine_threadsafe(start(), self._loop).result(timeout=10)
+
+    async def _inspect_page(self):
+        page = await asyncio.wait_for(
+            self._eval_async(
+                '({url:location.href,text:document.title+"\\n"+(document.body?.innerText||"")})'
+            ),
+            timeout=5,
+        )
+        if isinstance(page, dict) and self._is_source(page.get("url", "")):
+            path = urlsplit(page["url"]).path
+            marker = challenge_marker(page.get("text", ""))
+            if any(p in path for p in ("/challenge/", "/checkpoint/", "/accounts/login")):
+                marker = "authentication checkpoint"
+            if marker:
+                self._report_block(f"challenge page: {marker}")
+
+    async def _watch_blocks(self):
+        failures = 0
+        while not self._stop_event.is_set():
+            try:
+                await self._inspect_page()
+                failures = 0
+            except (CdpError, TimeoutError):
+                # One navigation can invalidate a context, but a blind monitor
+                # cannot authorize the queue to keep issuing requests.
+                failures += 1
+                if failures >= 3:
+                    self._report_block("page monitor unavailable")
+            await asyncio.sleep(0.25)
+        await self._send("Page.stopLoading", session_id=self._session_id)
 
     # -- eval / close ---------------------------------------------------
 
@@ -769,6 +906,11 @@ class Browser:
 
     async def _close_async(self) -> None:
         try:
+            if self._watch_task:
+                if self._stop_event.is_set():
+                    await self._send("Page.stopLoading", session_id=self._session_id)
+                self._watch_task.cancel()
+                await asyncio.gather(self._watch_task, return_exceptions=True)
             await self._cancel_capture_tasks()
             if self._target_id and self._owns_target:
                 await self._send("Target.closeTarget", {"targetId": self._target_id})

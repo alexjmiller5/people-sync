@@ -136,9 +136,9 @@ pending user's profile header and profile picture, when present.
 `people-sync scrape venmo` reads existing ledger handles from signed-in
 personal profile pages. It captures identity, friendship status and the profile
 picture; payment feeds, contact details and authentication state are excluded.
-The web profile exposes a friend count, not a complete friend directory. Use
-Venmo's social-data export to discover the full list and verify its structure
-before importing it.
+The web profile exposes a friend count, not a complete friend directory.
+Venmo's social-data export can contain activity without a friends list;
+verify its structure and never treat payment activity as a friend inventory.
 
 `scrape` and `login` drive a Chrome over CDP. Where it is and how it is
 signed in come from options or environment variables; nothing here is ever
@@ -186,3 +186,30 @@ Set `PEOPLE_SYNC_CDP_TARGET` to an existing CDP page target to use a specific
 tab across login, list and scrape calls. The caller owns that tab: the CLI
 detaches on exit without closing it, preserving tab-scoped sessions. An
 invalid target fails; it never selects another tab.
+
+For a coordinated scrape, create and group the tabs first, then pass each ID:
+
+```bash
+people-sync scrape instagram --max 100 --endpoint <host:port> \
+  --target <tab-1> --target <tab-2> --target <tab-3> --target <tab-4>
+```
+
+One process owns the queue, with up to four profiles in flight and serialized
+storage writes. `--max` applies to the whole run. Attempts consume one shared
+daily budget before navigation, including failures. Page starts are staggered
+by the normal 8-25 second gap divided by the number of tabs; every 25 attempts
+adds the full 2-5 minute break to the shared queue. The cap is an operator
+precaution, not a platform-published allowance. Concurrent invocations using
+the same platform and state path are refused.
+
+Instagram proceeds once its profile header and matching profile JSON have
+arrived, preserving captured structured fields and the best available avatar.
+If the JSON never arrives, a bounded 24-second wait retains the existing DOM
+fallback; an incomplete header stays pending. Logs report the actual data wait.
+
+Coordinated tabs share a stop signal. Source HTTP 401/403/429 responses, API
+failure/challenge envelopes, warning text, login/checkpoint redirects, browser
+loss, or unexpected failures halt the queue. Already-loading tabs stop loading;
+no queued record is retried automatically. Each tab is checked before its first
+navigation and while storage or pacing is in progress. A halt preserves pending
+records and screenshots for review. A new run is an explicit operator action.

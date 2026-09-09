@@ -80,6 +80,7 @@ def cmd_scrape(args: argparse.Namespace) -> None:
         endpoint=args.endpoint,
         data_dir=args.data_dir,
         approve_command=args.approve_command,
+        **({"targets": args.target} if args.target else {}),
     )
     print(json.dumps(result))
 
@@ -231,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_p.add_argument("platform")
     scrape_p.add_argument("--max", type=int, default=None)
     scrape_p.add_argument("--state", default=DEFAULT_STATE_PATH)
+    scrape_p.add_argument(
+        "--target",
+        action="append",
+        help="caller-owned CDP tab ID; repeat up to four times for a coordinated run",
+    )
     _add_browser_options(scrape_p)
     scrape_p.set_defaults(func=cmd_scrape)
 
