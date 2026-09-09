@@ -36,7 +36,8 @@ def test_store_photo_dedupes_existing_sha(mocker):
 
 
 def test_store_photo_uploads_new_sha(mocker, monkeypatch):
-    monkeypatch.setenv("CF_API_TOKEN", "test-token")
+    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "test-token")
     mocker.patch("people_sync.lifedata.sql", return_value=[])
     insert = mocker.patch("people_sync.lifedata.insert")
     mocker.patch(
@@ -52,7 +53,7 @@ def test_store_photo_uploads_new_sha(mocker, monkeypatch):
 
     expected_key = f"photos/people/p1/instagram-{sha8}.jpg"
     assert result == expected_key
-    assert put.call_args.args[0].endswith(f"/objects/{expected_key}")
+    assert put.call_args.args[0].endswith(f"/v1/files/{expected_key}")
     assert put.call_args.kwargs["content"] == image
 
     table, rows = insert.call_args.args
@@ -66,7 +67,8 @@ def test_store_photo_uploads_new_sha(mocker, monkeypatch):
 
 
 def test_store_photo_dedupe_is_scoped_per_person(mocker, monkeypatch):
-    monkeypatch.setenv("CF_API_TOKEN", "test-token")
+    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "test-token")
     stored_rows: list[tuple[str, str]] = []  # simulates person_photos: (person_id, sha256)
 
     def fake_sql(query):
@@ -173,3 +175,16 @@ def test_fetch_apple_photo_returns_none_without_photo(mocker):
 def test_fetch_apple_photo_returns_none_on_vcard_fetch_failure(mocker):
     mocker.patch("people_sync.sources._run", side_effect=RuntimeError("boom"))
     assert photos.fetch_apple_photo("XXXX:ABPerson") is None
+
+
+def test_object_api_uses_only_scoped_life_credential(mocker, monkeypatch):
+    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test/")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "client-token")
+    put = mocker.patch("people_sync.photos.httpx.put", return_value=_Resp())
+    get = mocker.patch("people_sync.photos.httpx.get", return_value=_Resp(content=b"raw"))
+    photos.put_object("profiles/source/a b.json", b"raw", "application/json")
+    assert put.call_args.args[0] == "https://hub.test/v1/files/profiles/source/a%20b.json"
+    assert put.call_args.kwargs["headers"]["Authorization"] == "Bearer client-token"
+    assert photos.get_object("profiles/source/a b.json") == b"raw"
+    assert get.call_count == 1
+    assert get.call_args.args[0] == put.call_args.args[0]
