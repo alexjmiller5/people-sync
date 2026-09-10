@@ -73,7 +73,7 @@ are ready. Unrelated users in captured responses must never satisfy readiness
 or supply another profile's fields. Missing profile JSON gets a bounded wait
 and the existing complete-header fallback, not an empty cached profile.
 
-Repeat `scrape --target` up to four times for a coordinated queue. One process
+Repeat `scrape --target` up to six times for a coordinated queue. One process
 selects records once, staggers starts, reserves attempts atomically in `Pacer`,
 and serializes writes through the existing CLI path. All tabs share the daily
 budget and full periodic breaks. A per-platform run lock prevents competing
