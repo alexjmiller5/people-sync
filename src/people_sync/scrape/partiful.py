@@ -15,6 +15,7 @@ import json
 import random
 import time
 
+from people_sync import photos
 from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://partiful.com/u/{handle}"
@@ -123,12 +124,15 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
         if browser.wait_for("location.pathname.startsWith('/u/')", 10):
             browser.wait_for("!!document.querySelector('h1')", 8)
             time.sleep(1.0)
+            entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
             raw = browser.eval(EXTRACTOR_JS)
+            entry["raw_r2_key"] = photos.archive_profile(
+                "partiful", f"partiful:{entry['uid']}", raw, [], context=row
+            )
             try:
                 entry["profile"] = parse(json.loads(raw) if isinstance(raw, str) else raw)
             except ExtractError as e:
                 entry["error"] = str(e)
-            entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
         else:
             entry["error"] = "no-navigation"
         browser.eval("history.back()")
@@ -140,7 +144,7 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
 def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
     """Ledger + profile rows for one harvested mutual. Returns the record id,
     or None when the row never reached a profile."""
-    from people_sync import ledger, lifedata, photos
+    from people_sync import ledger
     from people_sync.scrape import run as scrape_run
     from people_sync.scrape.profile import upsert_profile
 
@@ -162,11 +166,8 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
         name=entry.get("name") or profile.display_name,
         raw=raw,
     )
-    raw_key = f"profiles/partiful/{scrape_run._record_key(record.row_id)}/{lifedata.now_iso()}.json"
-    photos.put_object(
-        raw_key,
-        json.dumps({"eval": profile.raw["extractor"], "captured": []}).encode(),
-        content_type="application/json",
+    raw_key = entry.get("raw_r2_key") or photos.archive_profile(
+        "partiful", record.row_id, profile.raw["extractor"], []
     )
     ledger.upsert([record])
     profile.record_id = record.row_id

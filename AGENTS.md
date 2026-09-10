@@ -89,8 +89,22 @@ so the list is walked click-by-click and profiles are written as it goes;
 and followed users, excluding artist pages and checking the displayed totals). Partiful
 records match a person only through the Instagram handle on their profile
 (`match.py`), never by name. The mutual-list importer archives the original
-profile extractor result before updating the ledger/cache, and passes its file
-key to `upsert_profile`; an archive failure leaves the existing cache intact.
+profile extractor result and mutual-row context before parsing or navigating
+back, and passes its file key to `upsert_profile` without uploading it again.
+An archive failure halts the import and leaves the existing ledger/cache intact.
+
+`photos.archive_profile` is shared by ordinary/coordinated scrapes and Partiful
+mutuals. It retains exact string extractor results as `raw_eval`, a compatible
+decoded `eval` (the original string when malformed), and allowlisted response
+bodies as `captured`. Snapshot names include a random suffix so repeated
+observations cannot overwrite each other at the same clock timestamp. Parsing,
+avatar fetches and cache writes happen only after the upload succeeds. Failed
+parses retain their files even without a cache row; unavailable placeholders
+link to the retained file. Responses already returned by navigation are also
+archived if readiness, enrichment or extraction subsequently raises. Archive
+failure stops the run, including the shared coordinated queue. This does not
+capture responses never received or protect against process death before upload;
+the existing secret/payment exclusions still apply.
 
 ## Logins
 

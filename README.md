@@ -196,7 +196,7 @@ people-sync scrape instagram --max 100 --endpoint <host:port> \
 ```
 
 One process owns the queue, with up to ten profiles in flight and serialized
-storage writes. `--max` applies to the whole run; omit it to exhaust the queue.
+database writes. `--max` applies to the whole run; omit it to exhaust the queue.
 There is no daily cap unless explicitly configured. Attempts are recorded
 before navigation, including failures. Page starts are staggered
 by the normal 8-25 second gap divided by the number of tabs; every 25 attempts
@@ -207,6 +207,13 @@ Instagram proceeds once its profile header and matching profile JSON have
 arrived, preserving captured structured fields and the best available avatar.
 If the JSON never arrives, a bounded 24-second wait retains the existing DOM
 fallback; an incomplete header stays pending. Logs report the actual data wait.
+
+Profile captures are archived before parsing, photo fetching or database updates.
+Malformed extractor results and captured response bodies survive parser failures.
+Partiful mutuals are archived before leaving each profile. An archive upload
+failure stops the run. This protects received captures, within the existing
+field/response allowlists; it cannot recover older omissions, responses that
+never arrived, or a process killed before it could upload.
 
 Coordinated tabs share a stop signal. Source HTTP 401/403/429 responses, API
 failure/challenge envelopes, warning text, login/checkpoint redirects, browser
