@@ -17,7 +17,7 @@ src/people_sync/
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
   sources.py       google (via gog) and apple (local AddressBook sqlite) ingests
   match.py         conservative auto-linker
-  photos.py        R2 profile-photo storage, sha256-deduped, plus per-platform fetchers
+  photos.py        Life Data profile-photo storage, sha256-deduped, plus per-platform fetchers
   notion_people.py Notion People stub-page creation (the row-id invariant)
   scrape/          CDP harness (cdp.py), human pacing (pace.py), the scrape loop
                    (run.py), per-platform extractors, and the login flow
@@ -355,3 +355,15 @@ a dedicated `LIFE_HUB_TOKEN`, with separate `files:read:<prefix>/` and
 `files:write:<prefix>/` grants for those three namespaces. Existing object
 keys and rows stay stable. No Cloudflare token or bucket config reaches
 this client. Scrapes validate both settings before opening a source page.
+
+## Notion credential boundary
+
+People Sync owns a dedicated internal connection with Read content and
+Insert content only. Connect exactly People, Gifts, Quotes, Trips and
+Calendar. No Update content, comments, user information or agent access.
+Notion applies those capabilities to every connected database, so Insert
+content also applies to the four relation-check databases; the application
+creates pages only in People. `NOTION_API_TOKEN` comes from this project's
+environment, including the installed mini wrapper. Stub creation references
+the stable `title` property ID. Relation checks are read-only; human
+operators re-point relations and handle deletions.

@@ -113,8 +113,8 @@ only and no plaintext:
 - `LIFE_HUB_URL` and `LIFE_HUB_TOKEN` - the life-data file service URL and
   a dedicated client token with read/write grants for `photos/people/`,
   `photos/records/`, and `profiles/`.
-- `NOTION_API_TOKEN` - Notion integration secret, used only by `new-person`
-  to create the People stub page whose id becomes the life-data row id.
+- `NOTION_API_TOKEN` - dedicated Notion connection token for People stub insertion
+  and the relation reads performed by `scripts/reconcile.py`.
 
 Run anything that needs them through 1Password:
 
@@ -221,3 +221,15 @@ loss, or unexpected failures halt the queue. Already-loading tabs stop loading;
 no queued record is retried automatically. Each tab is checked before its first
 navigation and while storage or pacing is in progress. A halt preserves pending
 records and screenshots for review. A new run is an explicit operator action.
+
+## Notion credential boundary
+
+People Sync owns a dedicated internal connection with Read content and
+Insert content only. Connect exactly People, Gifts, Quotes, Trips and
+Calendar. No Update content, comments, user information or agent access.
+Notion applies those capabilities to every connected database, so Insert
+content also applies to the four relation-check databases; the application
+creates pages only in People. `NOTION_API_TOKEN` comes from this project's
+environment, including the installed mini wrapper. Stub creation references
+the stable `title` property ID. Relation checks are read-only; human
+operators re-point relations and handle deletions.
