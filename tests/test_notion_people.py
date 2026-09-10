@@ -36,7 +36,7 @@ def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
         "type": "data_source_id",
         "data_source_id": notion_people.DATA_SOURCE_ID,
     }
-    assert body["properties"] == {"Name": {"title": [{"text": {"content": "Test Person"}}]}}
+    assert body["properties"] == {"title": {"title": [{"text": {"content": "Test Person"}}]}}
 
 
 def test_create_stub_raises_clear_error_when_token_missing(monkeypatch, mocker):

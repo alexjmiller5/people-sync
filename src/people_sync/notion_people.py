@@ -26,7 +26,7 @@ def create_stub(name: str) -> str:
     }
     body = {
         "parent": {"type": "data_source_id", "data_source_id": DATA_SOURCE_ID},
-        "properties": {"Name": {"title": [{"text": {"content": name}}]}},
+        "properties": {"title": {"title": [{"text": {"content": name}}]}},
     }
     resp = httpx.post(_API, headers=headers, json=body, timeout=30)
     resp.raise_for_status()
