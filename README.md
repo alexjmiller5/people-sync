@@ -55,7 +55,7 @@ uv run python -m people_sync <command>
 | `new-person --name <name>` | Creates a Notion People stub page, then the life-data `people` row using that page id |
 | `photos store --person <id> --platform <p> --file <path>` | Stores a profile photo in R2 and appends a `person_photos` row, deduped by sha256 |
 | `login <platform>` | Signs the browser's profile into a platform at human pace (TOTP / SMS / mailed codes via the wired commands); idempotent |
-| `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (human-paced, daily-capped) and writes `people_sync_profiles` rows + pictures |
+| `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (paced, without a daily cap by default) and writes `people_sync_profiles` rows + pictures |
 | `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |
 | `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
@@ -149,7 +149,7 @@ stored by the app.
 | `--endpoint` / `PEOPLE_SYNC_CDP_ENDPOINT` | `host:port` of a Chrome started with its own `--remote-debugging-port` (a dedicated profile) |
 | `--data-dir` / `PEOPLE_SYNC_CHROME_DATA_DIR` | Chrome data dir whose `DevToolsActivePort` names the port; default is Chrome's own data dir |
 | `--approve-command` / `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | Command that approves the browser's remote-debugging prompt on hosts that show one; started detached before connecting, never with `--endpoint` |
-| `PEOPLE_SYNC_DAILY_CAPS` | JSON object `{"<platform>": <int>}` merged over the built-in per-platform daily caps; malformed values fail at startup |
+| `PEOPLE_SYNC_DAILY_CAPS` | JSON object `{"<platform>": <int>}` with optional per-platform daily caps; omitted platforms have no daily cap; malformed values fail at startup |
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND` | Run as `sh -c "<command>" people-sync-login <platform>`; prints `{"username": ..., "password": ..., "totp": ...}` (`totp` = current code or null) |
 | `PEOPLE_SYNC_EMAIL_CODE_COMMAND` | Same invocation; prints the newest one-time code from email that arrived after `$PEOPLE_SYNC_CODE_AFTER` (ISO-8601 UTC, set by `login` to the moment it submitted the credentials), or nothing if none has yet (polled every 5-10 s for up to 90 s) |
 | `PEOPLE_SYNC_SMS_CODE_COMMAND` | Same, for a code delivered by SMS to the machine running the job |
@@ -191,15 +191,16 @@ For a coordinated scrape, create and group the tabs first, then pass each ID:
 
 ```bash
 people-sync scrape instagram --max 100 --endpoint <host:port> \
-  --target <tab-1> --target <tab-2> --target <tab-3> --target <tab-4> --target <tab-5> --target <tab-6>
+  --target <tab-1> --target <tab-2> --target <tab-3> --target <tab-4> --target <tab-5> --target <tab-6> \
+  --target <tab-7> --target <tab-8> --target <tab-9> --target <tab-10>
 ```
 
-One process owns the queue, with up to six profiles in flight and serialized
-storage writes. `--max` applies to the whole run. Attempts consume one shared
-daily budget before navigation, including failures. Page starts are staggered
+One process owns the queue, with up to ten profiles in flight and serialized
+storage writes. `--max` applies to the whole run; omit it to exhaust the queue.
+There is no daily cap unless explicitly configured. Attempts are recorded
+before navigation, including failures. Page starts are staggered
 by the normal 8-25 second gap divided by the number of tabs; every 25 attempts
-adds the full 2-5 minute break to the shared queue. The cap is an operator
-precaution, not a platform-published allowance. Concurrent invocations using
+adds the full 2-5 minute break to the shared queue. Concurrent invocations using
 the same platform and state path are refused.
 
 Instagram proceeds once its profile header and matching profile JSON have

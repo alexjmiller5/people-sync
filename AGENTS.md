@@ -73,10 +73,10 @@ are ready. Unrelated users in captured responses must never satisfy readiness
 or supply another profile's fields. Missing profile JSON gets a bounded wait
 and the existing complete-header fallback, not an empty cached profile.
 
-Repeat `scrape --target` up to six times for a coordinated queue. One process
+Repeat `scrape --target` up to ten times for a coordinated queue. One process
 selects records once, staggers starts, reserves attempts atomically in `Pacer`,
-and serializes writes through the existing CLI path. All tabs share the daily
-budget and full periodic breaks. A per-platform run lock prevents competing
+and serializes writes through the existing CLI path. There is no default daily
+cap; all tabs share full periodic breaks. A per-platform run lock prevents competing
 invocations. A source block or warning sets one shared stop event, stops tab
 loading, and leaves unfinished records pending. Do not use independent scraper
 processes as a substitute for this queue. No scheduled resume or automatic retry.
