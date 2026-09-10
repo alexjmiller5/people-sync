@@ -367,3 +367,19 @@ creates pages only in People. `NOTION_API_TOKEN` comes from this project's
 environment, including the installed mini wrapper. Stub creation references
 the stable `title` property ID. Relation checks are read-only; human
 operators re-point relations and handle deletions.
+
+## Private review page
+
+`scripts/build_review.py` renders prepared review-context JSON into an offline
+HTML page using `scripts/review.html`. Pass repeated `--batch LABEL JSON`, a
+`--photos` manifest mapping retained photo keys to local `photos/<filename>`
+paths, and `--output` outside the repository. Download and verify retained
+photos through the file service before rendering. No credentials enter the
+HTML; the page makes no API requests or database writes.
+
+Choices are keyed by person and source-record IDs, saved in browser storage
+for that exact evidence snapshot, and exported as JSON for agent review.
+A same-name photo preview is an unconfirmed clue, never an identity link.
+Keep every generated page, image and decision export outside source control.
+The optional `tests/review_browser.mjs` check exercises a synthetic page via
+the chrome-control CDP bridge, including reload persistence and safe rendering.
