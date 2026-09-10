@@ -191,10 +191,10 @@ For a coordinated scrape, create and group the tabs first, then pass each ID:
 
 ```bash
 people-sync scrape instagram --max 100 --endpoint <host:port> \
-  --target <tab-1> --target <tab-2> --target <tab-3> --target <tab-4>
+  --target <tab-1> --target <tab-2> --target <tab-3> --target <tab-4> --target <tab-5> --target <tab-6>
 ```
 
-One process owns the queue, with up to four profiles in flight and serialized
+One process owns the queue, with up to six profiles in flight and serialized
 storage writes. `--max` applies to the whole run. Attempts consume one shared
 daily budget before navigation, including failures. Page starts are staggered
 by the normal 8-25 second gap divided by the number of tabs; every 25 attempts
