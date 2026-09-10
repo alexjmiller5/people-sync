@@ -235,7 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_p.add_argument(
         "--target",
         action="append",
-        help="caller-owned CDP tab ID; repeat up to four times for a coordinated run",
+        help="caller-owned CDP tab ID; repeat up to six times for a coordinated run",
     )
     _add_browser_options(scrape_p)
     scrape_p.set_defaults(func=cmd_scrape)
