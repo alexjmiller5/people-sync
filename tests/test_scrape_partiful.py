@@ -114,7 +114,9 @@ def test_harvest_clicks_each_row_and_parses_the_profile_behind_it(mocker):
 def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     upsert = mocker.patch("people_sync.ledger.upsert")
     upsert_profile = mocker.patch("people_sync.scrape.profile.upsert_profile")
-    profile = partiful.parse(FIXTURE)
+    upload = mocker.patch("people_sync.photos.put_object")
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-01-01T00:00:00.000Z")
+    profile = partiful.parse({**FIXTURE, "future_field": "retained"})
     entry = {
         "uid": "uid123",
         "name": "Test Person",
@@ -133,9 +135,24 @@ def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     assert record.raw["instagram_handles"] == ["test.person", "partiful"]
     assert record.raw["url"] == "https://partiful.com/u/uid123"
     assert upsert_profile.call_args.args[0].record_id == "partiful:uid123"
+    upload.assert_called_once()
+    key, body = upload.call_args.args
+    assert key == "profiles/partiful/partiful_uid123/2026-01-01T00:00:00.000Z.json"
+    assert json.loads(body) == {"eval": {**FIXTURE, "future_field": "retained"}, "captured": []}
+    assert upload.call_args.kwargs["content_type"] == "application/json"
+    assert upsert_profile.call_args.kwargs["raw_r2_key"] == key
 
 
 def test_ingest_entry_skips_rows_without_a_profile(mocker):
     upsert = mocker.patch("people_sync.ledger.upsert")
     assert partiful.ingest_entry({"name": "X", "error": "no-navigation"}) is None
     upsert.assert_not_called()
+
+
+def test_ingest_upload_failure_does_not_replace_a_retained_profile(mocker):
+    mocker.patch("people_sync.ledger.upsert")
+    cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
+    mocker.patch("people_sync.photos.put_object", side_effect=RuntimeError("upload failed"))
+    with pytest.raises(RuntimeError, match="upload failed"):
+        partiful.ingest_entry({"uid": "uid123", "profile": partiful.parse(FIXTURE)})
+    cache.assert_not_called()
