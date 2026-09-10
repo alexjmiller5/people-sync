@@ -1,4 +1,4 @@
-"""Human-pace throttling for profile scraping: gaps, breaks, daily caps, and
+"""Profile scraping pace: gaps, breaks, optional daily caps, and
 challenge-page detection.
 
 State (calls made per platform per UTC day, plus the break-cadence counter)
@@ -22,13 +22,7 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-DAILY_CAPS = {
-    "facebook": 150,
-    "instagram": 250,
-    "linkedin": 80,
-}
-DEFAULT_DAILY_CAP = 300
-# Operator override: a JSON object {platform: cap} merged over DAILY_CAPS.
+# Optional operator limits. No platform has a daily cap by default.
 DAILY_CAPS_ENV = "PEOPLE_SYNC_DAILY_CAPS"
 
 DEFAULT_STATE_PATH = "data/scrape-state.json"
@@ -103,12 +97,10 @@ def is_challenge(text: str) -> bool:
 
 
 def daily_caps() -> dict[str, int]:
-    """Built-in caps with the operator's DAILY_CAPS_ENV object merged over
-    them. Anything malformed raises here - before a single page loads - rather
-    than silently running uncapped."""
+    """Explicit operator caps only; malformed configuration fails before navigation."""
     raw = os.environ.get(DAILY_CAPS_ENV)
     if not raw:
-        return dict(DAILY_CAPS)
+        return {}
     try:
         override = json.loads(raw)
     except json.JSONDecodeError:
@@ -118,17 +110,17 @@ def daily_caps() -> dict[str, int]:
     )
     if not valid:
         raise ValueError(f"{DAILY_CAPS_ENV} must be a JSON object of non-negative integer caps")
-    return {**DAILY_CAPS, **override}
+    return override
 
 
 class Pacer:
     def __init__(self, platform: str, state_path: str = DEFAULT_STATE_PATH):
         self.platform = platform
         self.state_path = state_path
-        self._cap = daily_caps().get(platform, DEFAULT_DAILY_CAP)
+        self._cap = daily_caps().get(platform)
 
     @property
-    def cap(self) -> int:
+    def cap(self) -> int | None:
         return self._cap
 
     def _today(self) -> str:
@@ -205,7 +197,9 @@ class Pacer:
             if state is None:
                 return False
             entry = self._today_entry(state)
-            return max(entry.get("calls", 0), entry.get("attempts", 0)) < self.cap
+            return (
+                self.cap is None or max(entry.get("calls", 0), entry.get("attempts", 0)) < self.cap
+            )
 
     def reserve(self) -> bool:
         """Charge an attempt BEFORE navigation, atomically across all tabs.
@@ -221,7 +215,7 @@ class Pacer:
             attempts = max(
                 entry.get("attempts", 0), entry.get("calls", 0), entry.get("gap_calls", 0)
             )
-            if attempts >= self.cap:
+            if self.cap is not None and attempts >= self.cap:
                 return False
             entry["attempts"] = attempts + 1
             self._save(state)

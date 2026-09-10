@@ -239,11 +239,11 @@ def _scrape(
     targets: list[str] | None = None,
 ) -> dict:
     if targets is not None and (
-        not 1 <= len(targets) <= 6
+        not 1 <= len(targets) <= 10
         or any(not t.strip() for t in targets)
         or len(set(targets)) != len(targets)
     ):
-        raise ValueError("targets must contain one to six distinct, nonempty target IDs")
+        raise ValueError("targets must contain one to ten distinct, nonempty target IDs")
     module = import_module(f"people_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
     records = _select_records(platform)
