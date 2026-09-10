@@ -1,4 +1,4 @@
-"""Partiful: the mutuals list (everyone Alex has been to an event with) and
+"""Partiful: the mutuals list (people sharing events with the operator) and
 the profile pages behind it.
 
 https://partiful.com/mutuals renders every mutual as a row (name, last
@@ -140,7 +140,7 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
 def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
     """Ledger + profile rows for one harvested mutual. Returns the record id,
     or None when the row never reached a profile."""
-    from people_sync import ledger
+    from people_sync import ledger, lifedata, photos
     from people_sync.scrape import run as scrape_run
     from people_sync.scrape.profile import upsert_profile
 
@@ -162,6 +162,12 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
         name=entry.get("name") or profile.display_name,
         raw=raw,
     )
+    raw_key = f"profiles/partiful/{scrape_run._record_key(record.row_id)}/{lifedata.now_iso()}.json"
+    photos.put_object(
+        raw_key,
+        json.dumps({"eval": profile.raw["extractor"], "captured": []}).encode(),
+        content_type="application/json",
+    )
     ledger.upsert([record])
     profile.record_id = record.row_id
     key, sha = (None, None)
@@ -175,5 +181,5 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
             None,
             None,
         )
-    upsert_profile(profile, avatar_r2_key=key, avatar_sha256=sha)
+    upsert_profile(profile, avatar_r2_key=key, avatar_sha256=sha, raw_r2_key=raw_key)
     return record.row_id

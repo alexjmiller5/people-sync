@@ -88,7 +88,9 @@ so the list is walked click-by-click and profiles are written as it goes;
 `strava`: followers + following of the signed-in athlete; `spotify`: followers
 and followed users, excluding artist pages and checking the displayed totals). Partiful
 records match a person only through the Instagram handle on their profile
-(`match.py`), never by name.
+(`match.py`), never by name. The mutual-list importer archives the original
+profile extractor result before updating the ledger/cache, and passes its file
+key to `upsert_profile`; an archive failure leaves the existing cache intact.
 
 ## Logins
 
