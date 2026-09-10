@@ -70,6 +70,7 @@ def test_next_gap_break_counter_survives_restart(tmp_path, mocker):
     ],
 )
 def test_allow_respects_daily_cap(tmp_path, mocker, platform, cap):
+    mocker.patch.dict("os.environ", {pace.DAILY_CAPS_ENV: json.dumps({platform: cap})})
     mocker.patch(
         "people_sync.scrape.pace._utcnow",
         return_value=_dt("2026-09-04T12:00:00"),
@@ -114,6 +115,7 @@ def test_record_is_scoped_per_platform(tmp_path, mocker):
 
 
 def test_cap_rolls_over_at_utc_midnight(tmp_path, mocker):
+    mocker.patch.dict("os.environ", {pace.DAILY_CAPS_ENV: '{"linkedin": 80}'})
     state_path = tmp_path / "state.json"
     clock = mocker.patch("people_sync.scrape.pace._utcnow")
 
@@ -267,23 +269,25 @@ def test_login_markers_are_kept_separate_from_challenge_markers():
     assert pace.is_challenge("Please log in to continue") is True
 
 
-def test_daily_caps_default_when_the_environment_is_unset(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform", ["instagram", "facebook", "linkedin", "venmo"])
+def test_no_default_daily_budget_preserves_existing_counts(monkeypatch, tmp_path, platform):
     monkeypatch.delenv(pace.DAILY_CAPS_ENV, raising=False)
-    assert (
-        pace.Pacer("linkedin", state_path=str(tmp_path / "s.json")).cap
-        == pace.DAILY_CAPS["linkedin"]
+    state = tmp_path / "state.json"
+    p = pace.Pacer(platform, state_path=str(state))
+    state.write_text(
+        json.dumps({platform: {p._today(): {"attempts": 10000, "calls": 9990, "gap_calls": 10000}}})
     )
-    assert pace.Pacer("venmo", state_path=str(tmp_path / "s.json")).cap == pace.DEFAULT_DAILY_CAP
+    assert p.cap is None
+    assert p.allow()
+    assert p.reserve()
+    assert json.loads(state.read_text())[platform][p._today()]["attempts"] == 10001
 
 
-def test_daily_caps_environment_overrides_one_platform_and_keeps_the_rest(monkeypatch, tmp_path):
+def test_daily_caps_are_opt_in_per_platform(monkeypatch, tmp_path):
     monkeypatch.setenv(pace.DAILY_CAPS_ENV, '{"linkedin": 5, "venmo": 7}')
     assert pace.Pacer("linkedin", state_path=str(tmp_path / "s.json")).cap == 5
     assert pace.Pacer("venmo", state_path=str(tmp_path / "s.json")).cap == 7
-    assert (
-        pace.Pacer("facebook", state_path=str(tmp_path / "s.json")).cap
-        == pace.DAILY_CAPS["facebook"]
-    )
+    assert pace.Pacer("facebook", state_path=str(tmp_path / "s.json")).cap is None
 
 
 @pytest.mark.parametrize(
