@@ -12,6 +12,11 @@ from people_sync.scrape.cdp import CdpError
 from people_sync.scrape.profile import ExtractError, Profile
 
 
+@pytest.fixture(autouse=True)
+def no_live_archive(mocker):
+    mocker.patch("people_sync.photos.put_object")
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="execute browser fetch guard")
 @pytest.mark.parametrize(
     "ok,mime,expected",
@@ -326,15 +331,15 @@ def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
     assert result == {"done": 2, "skipped": 1, "halted": None}
     assert upsert.call_count == 2
     assert pacer.record.call_count == 2
-    # raw upload never happens for the failed record (parse() raised first)
+    # Parsing failures must retain their original payload too.
     raw_calls = [c for c in put_object.call_args_list if c.args[0].startswith("profiles/")]
-    assert len(raw_calls) == 2
+    assert len(raw_calls) == 3
     warn.assert_any_call("record failed", platform="testplatform", index=1, reason="ValueError")
     # a failure still sleeps the normal gap - it must not speed up the loop
     assert sleep.call_count == 3
 
 
-def test_extractor_error_sentinel_skips_without_any_writes(mocker):
+def test_extractor_error_sentinel_archives_without_cache_writes(mocker):
     class SentinelModule(FakeModule):
         @staticmethod
         def parse(eval_result, captured):
@@ -349,7 +354,7 @@ def test_extractor_error_sentinel_skips_without_any_writes(mocker):
     result = run.scrape("testplatform")
 
     assert result == {"done": 0, "skipped": 1, "halted": None}
-    put_object.assert_not_called()
+    put_object.assert_called_once()
     upsert.assert_not_called()
     pacer.record.assert_not_called()
     pacer.next_gap.assert_called_once()
@@ -477,6 +482,7 @@ def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
     browser, pacer = _patch_common(mocker, [_record()])
     mocker.patch("people_sync.scrape.run.import_module", return_value=GoneModule)
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
+    upload = mocker.patch("people_sync.photos.put_object")
 
     result = run.scrape("testplatform")
 
@@ -484,9 +490,10 @@ def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
     placeholder = upsert.call_args.args[0]
     assert placeholder.record_id == "testplatform:u1" and placeholder.raw == {"unavailable": True}
     assert placeholder.display_name is None
+    assert upsert.call_args.kwargs["raw_r2_key"] == upload.call_args.args[0]
 
 
-def test_other_extract_errors_write_nothing(mocker):
+def test_other_extract_errors_leave_cache_unchanged(mocker):
     class BrokenModule(FakeModule):
         @staticmethod
         def parse(eval_result, captured):
@@ -525,3 +532,110 @@ def test_scrape_merges_a_module_enrich_hook_into_the_captured_entries(mocker):
     result = run.scrape("testplatform")
 
     assert result["done"] == 1 and EnrichingModule.seen == ["u1"]
+
+
+@pytest.mark.parametrize("targets", [None, ["test-tab"]])
+@pytest.mark.parametrize("payload", ['{"username":"u1","future_field":[1,2]}', "{broken"])
+def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, targets, payload):
+    archived = {}
+    captured = [{"url": "https://example.test/profile", "body": '{"extra":true}'}]
+
+    class Browser(FakeBrowser):
+        def navigate(self, *args, **kwargs):
+            super().navigate(*args, **kwargs)
+            return {"captured": captured}
+
+        def eval(self, js):
+            return payload if js == FakeModule.EXTRACTOR_JS else super().eval(js)
+
+        def watch_blocks(self, *args):
+            pass
+
+    browser, _ = _patch_common(mocker, [_record()], browser=Browser())
+
+    def parse(raw, responses):
+        assert archived, "parser ran before durable archival"
+        raw.clear()  # Even a destructive parser must not change the original.
+        raise ExtractError("no-header")
+
+    mocker.patch.object(FakeModule, "parse", side_effect=parse)
+    mocker.patch(
+        "people_sync.photos.put_object",
+        side_effect=lambda key, body, **kw: archived.update({key: body}),
+    )
+    cache = mocker.patch.object(run, "upsert_profile")
+    run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
+
+    assert len(archived) == 1
+    saved = json.loads(next(iter(archived.values())))
+    assert saved["raw_eval"] == payload
+    assert saved["captured"] == captured
+    cache.assert_not_called()
+    assert browser.closed
+
+
+@pytest.mark.parametrize("targets", [None, ["test-tab"]])
+def test_archive_failure_stops_before_parsing_or_next_navigation(mocker, tmp_path, targets):
+    browser, _ = _patch_common(mocker, [_record(), _record(id="testplatform:u2", handle="u2")])
+    browser.watch_blocks = lambda *args: None
+    parse = mocker.patch.object(FakeModule, "parse")
+    cache = mocker.patch.object(run, "upsert_profile")
+    mocker.patch("people_sync.photos.put_object", side_effect=OSError("secret storage detail"))
+
+    result = run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
+
+    assert result["halted"] == "raw archive failed"
+    assert len(browser.navigated) == 1
+    parse.assert_not_called()
+    cache.assert_not_called()
+
+
+def test_readiness_failure_preserves_responses_already_received(mocker, tmp_path):
+    captured = [{"url": "https://example.test/profile", "body": "original response"}]
+    browser, _ = _patch_common(mocker, [_record()])
+    browser.navigate = lambda *args, **kw: {"captured": captured, "dom_ready": False}
+    mocker.patch.object(FakeModule, "READY_JS", "READY()", create=True)
+    mocker.patch.object(FakeModule, "capture_ready", return_value=False, create=True)
+    upload = mocker.patch("people_sync.photos.put_object")
+    cache = mocker.patch.object(run, "upsert_profile")
+
+    run.scrape("testplatform", state_path=str(tmp_path / "state.json"))
+
+    assert json.loads(upload.call_args.args[1])["captured"] == captured
+    cache.assert_not_called()
+
+
+def test_shared_stop_after_collection_keeps_archive_without_cache_write(mocker, tmp_path):
+    browser, _ = _patch_common(mocker, [_record()])
+
+    def watch_blocks(url, halt, stop):
+        browser.halt = halt
+
+    browser.watch_blocks = watch_blocks
+    original_parse = FakeModule.parse
+
+    def stop_after_capture(raw, captured):
+        browser.halt("HTTP 429")
+        return original_parse(raw, captured)
+
+    mocker.patch.object(FakeModule, "parse", side_effect=stop_after_capture)
+    upload = mocker.patch("people_sync.photos.put_object")
+    cache = mocker.patch.object(run, "upsert_profile")
+    result = run.scrape(
+        "testplatform", targets=["test-tab"], state_path=str(tmp_path / "state.json")
+    )
+    assert result["halted"] == "HTTP 429"
+    assert json.loads(upload.call_args.args[1])["eval"]["username"] == "u1"
+    cache.assert_not_called()
+
+
+def test_two_snapshots_at_same_timestamp_do_not_overwrite(mocker):
+    archived = {}
+    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-01-01T00:00:00.000Z")
+    mocker.patch(
+        "people_sync.photos.put_object",
+        side_effect=lambda key, body, **kw: archived.update({key: body}),
+    )
+    for raw in ('{"bio":"before"}', '{"bio":"after"}'):
+        run.photos.archive_profile("testplatform", "testplatform:u1", raw, [])
+    assert {json.loads(body)["eval"]["bio"] for body in archived.values()} == {"before", "after"}

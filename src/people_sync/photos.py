@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 import structlog
@@ -41,6 +42,35 @@ def _upload(key: str, data: bytes, content_type: str | None = None) -> None:
 def put_object(key: str, data: bytes, content_type: str | None = None) -> None:
     """Store a retained original in this client's authorized namespace."""
     _upload(key, data, content_type)
+
+
+class ArchiveError(RuntimeError):
+    """Stop collecting when a source snapshot cannot be retained."""
+
+
+def archive_profile(platform, record_id, raw_eval, captured, *, context=None) -> str:
+    """Retain extractor output and allowlisted responses before interpretation.
+
+    Keep the exact JS result alongside the compatible decoded `eval` field.
+    Malformed JSON is retained as a string; decoding cannot prevent archival.
+    """
+    record_key = record_id.replace(":", "_").replace("/", "_")
+    key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}-{uuid4().hex}.json"
+    payload = {"eval": raw_eval, "captured": captured}
+    if isinstance(raw_eval, str):
+        payload["raw_eval"] = raw_eval
+        try:
+            payload["eval"] = json.loads(raw_eval)
+        except (ValueError, RecursionError):
+            pass
+    if context is not None:
+        payload["context"] = context
+    try:
+        put_object(key, json.dumps(payload).encode(), content_type="application/json")
+    except Exception:
+        # Storage exceptions can contain credentials. Expose only the halt reason.
+        raise ArchiveError("raw archive failed") from None
+    return key
 
 
 def get_object(key: str) -> bytes:

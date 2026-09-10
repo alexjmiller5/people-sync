@@ -19,6 +19,8 @@ class ExtractError(RuntimeError):
     header rendered) instead of profile data. Never upsert on this - it
     would blank a good existing row and stamp scraped_at, blocking retry."""
 
+    raw_r2_key: str | None = None
+
 
 @dataclass
 class Profile:
