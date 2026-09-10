@@ -33,7 +33,7 @@ def test_tabs_share_queue_budget_and_serialize_writes(tmp_path, mocker, workers)
     def collect(browser, module, platform, index, record):
         seen.append(record["id"])
         barrier.wait(timeout=3)
-        return Profile(record_id=record["id"], platform=platform), {}, []
+        return Profile(record_id=record["id"], platform=platform), "profiles/test/archive.json"
 
     def store(*args):
         assert writing.acquire(blocking=False), "concurrent writes to life-data"

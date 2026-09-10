@@ -2,7 +2,7 @@
 
 Selects stale/never-scraped ledger records for a platform, then per record:
 paces, navigates, checks for a challenge page, runs the platform's extractor,
-archives the raw page + captured XHRs to R2, fetches and dedupes the avatar,
+archives extractor output + captured responses before parsing, fetches and dedupes the avatar,
 and upserts `people_sync_profiles`. A platform plugs in by exposing `URL`,
 `CAPTURE`, `EXTRACTOR_JS`, and `parse(eval_result, captured) -> Profile` -
 see `instagram.py`.
@@ -156,45 +156,53 @@ def _collect_profile(browser, module, platform, index, record):
             "capture_ready": lambda entries: capture_ready(entries, handle),
         }
     nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE, **options)
-    if options:
-        log.info(
-            "profile data wait",
-            platform=platform,
-            index=index,
-            milliseconds=round(nav_result.get("load_ms", 0)),
-            ready=nav_result.get("data_ready", False),
-        )
-        if not nav_result.get("dom_ready"):
-            raise ExtractError("profile DOM not ready")
     captured = nav_result.get("captured", [])
+    try:
+        if options:
+            log.info(
+                "profile data wait",
+                platform=platform,
+                index=index,
+                milliseconds=round(nav_result.get("load_ms", 0)),
+                ready=nav_result.get("data_ready", False),
+            )
+            if not nav_result.get("dom_ready"):
+                raise ExtractError("profile DOM not ready")
 
-    ready_js = getattr(module, "READY_JS", None)
-    if not options and ready_js and not browser.wait_for(ready_js, READY_TIMEOUT_S):
-        log.warning("page never became ready", platform=platform, index=index, reason="timeout")
+        ready_js = getattr(module, "READY_JS", None)
+        if not options and ready_js and not browser.wait_for(ready_js, READY_TIMEOUT_S):
+            log.warning("page never became ready", platform=platform, index=index, reason="timeout")
 
-    enrich = getattr(module, "enrich", None)
-    if enrich is not None:
-        captured = list(captured) + list(enrich(browser, handle) or [])
+        enrich = getattr(module, "enrich", None)
+        if enrich is not None:
+            captured = list(captured)
+            captured.extend(enrich(browser, handle) or [])
 
-    page_text = browser.eval(PAGE_TEXT_JS) or ""
-    marker = challenge_marker(page_text)
-    if marker:
-        raise ScrapeStopped(f"challenge page: {marker}")
-    raw_eval = browser.eval(module.EXTRACTOR_JS)
+        page_text = browser.eval(PAGE_TEXT_JS) or ""
+        marker = challenge_marker(page_text)
+        if marker:
+            raise ScrapeStopped(f"challenge page: {marker}")
+        raw_eval = browser.eval(module.EXTRACTOR_JS)
+    except Exception:
+        # A readiness/enrichment/extractor failure must not discard responses
+        # already returned by navigation. Do not capture additional page state.
+        if captured:
+            photos.archive_profile(platform, record["id"], None, captured)
+        raise
+
+    raw_key = photos.archive_profile(platform, record["id"], raw_eval, captured)
     eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
-    profile = module.parse(eval_result, captured)
+    try:
+        profile = module.parse(eval_result, captured)
+    except ExtractError as e:
+        e.raw_r2_key = raw_key
+        raise
     profile.record_id = record["id"]
-    return profile, eval_result, captured
+    return profile, raw_key
 
 
-def _store_profile(browser, platform, index, record, profile, eval_result, captured):
+def _store_profile(browser, platform, index, record, profile, raw_key):
     record_key = _record_key(record["id"])
-    raw_key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}.json"
-    photos.put_object(
-        raw_key,
-        json.dumps({"eval": eval_result, "captured": captured}).encode(),
-        content_type="application/json",
-    )
 
     avatar_key, avatar_sha = _resolve_avatar(
         browser,
@@ -280,11 +288,9 @@ def _scrape(
                 continue
 
             try:
-                profile, eval_result, captured = _collect_profile(
-                    browser, module, platform, index, record
-                )
-                _store_profile(browser, platform, index, record, profile, eval_result, captured)
-            except ScrapeStopped as e:
+                profile, raw_key = _collect_profile(browser, module, platform, index, record)
+                _store_profile(browser, platform, index, record, profile, raw_key)
+            except (ScrapeStopped, photos.ArchiveError) as e:
                 halted = str(e) or "run paused"
                 shot = _halt_screenshot(browser, platform, state_path)
                 log.warning(
@@ -302,7 +308,8 @@ def _scrape(
                     upsert_profile(
                         Profile(
                             record_id=record["id"], platform=platform, raw={"unavailable": True}
-                        )
+                        ),
+                        raw_r2_key=e.raw_r2_key,
                     )
                 log.warning("record failed", platform=platform, index=index, reason=str(e))
                 skipped += 1
@@ -351,17 +358,15 @@ def _coordinated(
         try:
             if stop.is_set():
                 return None
-            profile, evaluated, captured = _collect_profile(
-                browser, module, platform, index, record
-            )
+            profile, raw_key = _collect_profile(browser, module, platform, index, record)
             with write_lock:
                 if stop.is_set():
                     return None
-                _store_profile(browser, platform, index, record, profile, evaluated, captured)
+                _store_profile(browser, platform, index, record, profile, raw_key)
             pacer.record()
             log.info("profile scraped", platform=platform, index=index)
             return "done"
-        except ScrapeStopped as e:
+        except (ScrapeStopped, photos.ArchiveError) as e:
             if str(e):
                 halt(str(e))
             return None
@@ -378,7 +383,8 @@ def _coordinated(
                         upsert_profile(
                             Profile(
                                 record_id=record["id"], platform=platform, raw={"unavailable": True}
-                            )
+                            ),
+                            raw_r2_key=e.raw_r2_key,
                         )
             log.warning("record failed", platform=platform, index=index, reason=str(e))
             return "skipped"

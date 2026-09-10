@@ -99,6 +99,7 @@ class FakeBrowser:
 
 def test_harvest_clicks_each_row_and_parses_the_profile_behind_it(mocker):
     mocker.patch("people_sync.scrape.partiful.time.sleep")
+    mocker.patch("people_sync.photos.put_object")
     b = FakeBrowser()
 
     out = list(partiful.harvest(b))
@@ -137,7 +138,8 @@ def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     assert upsert_profile.call_args.args[0].record_id == "partiful:uid123"
     upload.assert_called_once()
     key, body = upload.call_args.args
-    assert key == "profiles/partiful/partiful_uid123/2026-01-01T00:00:00.000Z.json"
+    assert key.startswith("profiles/partiful/partiful_uid123/2026-01-01T00:00:00.000Z-")
+    assert key.endswith(".json")
     assert json.loads(body) == {"eval": {**FIXTURE, "future_field": "retained"}, "captured": []}
     assert upload.call_args.kwargs["content_type"] == "application/json"
     assert upsert_profile.call_args.kwargs["raw_r2_key"] == key
@@ -153,6 +155,67 @@ def test_ingest_upload_failure_does_not_replace_a_retained_profile(mocker):
     mocker.patch("people_sync.ledger.upsert")
     cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
     mocker.patch("people_sync.photos.put_object", side_effect=RuntimeError("upload failed"))
-    with pytest.raises(RuntimeError, match="upload failed"):
+    with pytest.raises(RuntimeError, match="raw archive failed"):
         partiful.ingest_entry({"uid": "uid123", "profile": partiful.parse(FIXTURE)})
     cache.assert_not_called()
+
+
+def test_harvest_archives_before_parse_and_back_navigation(mocker):
+    mocker.patch("people_sync.scrape.partiful.time.sleep")
+    b = FakeBrowser()
+    archived = {}
+
+    def upload(key, body, **kwargs):
+        assert b.path.startswith("/u/")
+        archived[key] = json.loads(body)
+
+    def broken_parser(*args):
+        assert len(archived) == 1
+        raise ExtractError("no-profile")
+
+    mocker.patch("people_sync.photos.put_object", side_effect=upload)
+    mocker.patch.object(partiful, "parse", side_effect=broken_parser)
+    entries = list(partiful.harvest(b, limit=1))
+
+    assert len(archived) == 1
+    entry = entries[0][2]
+    assert entry["error"] == "no-profile"
+    saved = archived[entry["raw_r2_key"]]
+    assert json.loads(saved["raw_eval"])["path"] == "/u/uid0"
+    assert saved["context"]["shared_events"] == 3
+    assert b.path == "/mutuals"
+
+
+def test_harvest_archive_failure_stops_before_parse_and_back(mocker):
+    mocker.patch("people_sync.scrape.partiful.time.sleep")
+    b = FakeBrowser()
+    mocker.patch("people_sync.photos.put_object", side_effect=OSError("upload failed"))
+    parse = mocker.patch.object(partiful, "parse")
+    with pytest.raises(RuntimeError, match="raw archive failed"):
+        list(partiful.harvest(b))
+    parse.assert_not_called()
+    assert b.path == "/u/uid0"
+
+
+def test_ingest_reuses_harvest_archive(mocker):
+    mocker.patch("people_sync.scrape.partiful.time.sleep")
+    b = FakeBrowser()
+    upload = mocker.patch("people_sync.photos.put_object")
+    mocker.patch("people_sync.ledger.upsert")
+    cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
+    entry = next(partiful.harvest(b, limit=1))[2]
+    partiful.ingest_entry(entry)
+    upload.assert_called_once()
+    assert cache.call_args.kwargs["raw_r2_key"] == entry["raw_r2_key"]
+
+
+def test_harvest_retains_malformed_json_before_decoder_fails(mocker):
+    mocker.patch("people_sync.scrape.partiful.time.sleep")
+    b = FakeBrowser()
+    original_eval = b.eval
+    b.eval = lambda js: "{broken" if js == partiful.EXTRACTOR_JS else original_eval(js)
+    upload = mocker.patch("people_sync.photos.put_object")
+    with pytest.raises(json.JSONDecodeError):
+        list(partiful.harvest(b))
+    assert json.loads(upload.call_args.args[1])["raw_eval"] == "{broken"
+    assert b.path == "/u/uid0"
