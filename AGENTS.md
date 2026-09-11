@@ -377,9 +377,29 @@ paths, and `--output` outside the repository. Download and verify retained
 photos through the file service before rendering. No credentials enter the
 HTML; the page makes no API requests or database writes.
 
-Choices are keyed by person and source-record IDs, saved in browser storage
-for that exact evidence snapshot, and exported as JSON for agent review.
-A same-name photo preview is an unconfirmed clue, never an identity link.
+Optional `--proposals JSON` supplies prepared identity clusters, keyed by
+exact `json.dumps([batch, name], ensure_ascii=False)` group keys with Python's
+default separators. Each proposal contains `clusters` and an optional
+`question`; each cluster has `label`, `reason`, `person_ids`, `record_ids`,
+and optional `uncertainty`. References are validated within their group with
+separate person/record namespaces and no duplicate assignment. A question-only
+proposal can have no clusters; an individual cluster must contain IDs.
+
+Clusters show compact names, circles, Google context and clickable profile
+thumbnails by default; full evidence remains under See full account details.
+The page groups all saved evidence under these proposals, retains unassigned
+items as unresolved, and accepts one approval or freeform correction per name
+group. No proposal or no clusters means approval is disabled. This is a review
+surface, not a matcher; photos never imply an identity link.
+
+The snapshot digest depends only on the original evidence groups so existing
+v1 browser saves remain recoverable. Each proposal has its own digest; changing
+it invalidates that group's approval while preserving previous responses and
+text for reference. V2 saves use `people-review:v2:<snapshot>` and never write
+the original `people-review:v1:<snapshot>` key. JSON exports include proposals,
+responses, prior responses, unresolved IDs, and the original legacy state.
 Keep every generated page, image and decision export outside source control.
 The optional `tests/review_browser.mjs` check exercises a synthetic page via
-the chrome-control CDP bridge, including reload persistence and safe rendering.
+the chrome-control CDP bridge. It refuses to run outside `/review-smoke.html`,
+expects the synthetic Batch Smoke groups Example, Next and Unresolved, and
+restores their original browser saves after checking interactions.
