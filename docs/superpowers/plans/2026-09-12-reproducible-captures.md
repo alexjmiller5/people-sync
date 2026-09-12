@@ -172,7 +172,7 @@ Task2C adds `Record.capture_refs: tuple[dict, ...] = ()`, each reference contain
 
 ### Task 4: Snapshot-based WhatsApp evidence ingestion
 
-**Files:** Create `src/people_sync/whatsapp.py`, `tests/test_whatsapp.py`; modify `src/people_sync/cli.py`, `src/people_sync/replay.py`, optional supported platform listing in promotion.
+**Files:** Create `src/people_sync/whatsapp.py`, `tests/test_whatsapp.py`; modify `src/people_sync/cli.py`, `src/people_sync/replay.py`, `src/people_sync/match.py`, `tests/test_match.py`, optional supported platform listing in promotion.
 
 **Interfaces:** Consume captures and record/profile write paths. Produce `whatsapp.collect(snapshot_path, media_dir, *, state_dir, self_id=None) -> dict` from an explicitly supplied, WAL-consistent snapshot; `whatsapp.parse_snapshot(payload) -> list[dict]` pure; installed `ingest whatsapp --snapshot PATH --media-dir PATH [--self-id ID]` or an equivalently explicit command. No copied machine paths, secrets-store commands or personal IDs in product code.
 
@@ -186,6 +186,7 @@ Task2C adds `Record.capture_refs: tuple[dict, ...] = ()`, each reference contain
 - [ ] Implement explicit read-only snapshot consumption, no live SQLite modifications. Prefer native `@lid` IDs. Maintain a 0600 local random opaque-ID mapping for phone-only counterparts, never unsalted phone hashes; preserve mapping in private recovery state, never upload phone values. Exclude self using explicit native ID or trusted self metadata; ambiguous self detection must be reported, not guessed from a name. No group/status/broadcast rows become people.
 - [ ] Capture permitted source rows, available push/display name/username fields, timestamps and photo metadata before parsing. Do not read message bodies. Use actual media files only within the supplied media root; identify JPEG/PNG signatures and preserve byte hashes. Distinguish thumbnail resolution and missing files. Record source observations as pending ledger/profile evidence, never auto-link names/photos.
 - [ ] Make WhatsApp snapshot captures replay offline using the same pure parser. Test idempotent repeat, WAL-visible data prepared by operator snapshot, missing photo, unknown schema, privacy exclusions and preservation of matched records. Full suite/ruff, commit, report.
+- [ ] Keep WhatsApp pending even when the general `match` command runs later: the existing generic two-word name branch would otherwise auto-link it. Add a fail-first matcher regression with one uniquely named person and one same-name WhatsApp record; assert no account insert or matched-status update and that the record remains pending. Preserve already matched records and other platforms' existing matching rules. This enforces the approved no-name/photo identity-link boundary beyond the ingest command itself.
 
 ### Task 5: Recovery, installed verification, review enrichment and documentation
 
