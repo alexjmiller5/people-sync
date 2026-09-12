@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from people_sync import captures, photos
 from people_sync.scrape import partiful
 from people_sync.scrape.profile import ExtractError
 
@@ -13,6 +14,17 @@ FIXTURE = {
     "birthday_month": "August birthday",
     "path": "/u/uid123",
 }
+
+
+@pytest.fixture(autouse=True)
+def no_live_archive(mocker, monkeypatch, tmp_path):
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    mocker.patch(
+        "people_sync.photos.put_object",
+        side_effect=lambda key, body, **kw: stored.update({key: body}),
+    )
+    mocker.patch("people_sync.photos.get_object", side_effect=stored.__getitem__)
 
 
 def test_parse_raises_on_no_profile():
@@ -99,7 +111,6 @@ class FakeBrowser:
 
 def test_harvest_clicks_each_row_and_parses_the_profile_behind_it(mocker):
     mocker.patch("people_sync.scrape.partiful.time.sleep")
-    mocker.patch("people_sync.photos.put_object")
     b = FakeBrowser()
 
     out = list(partiful.harvest(b))
@@ -115,7 +126,7 @@ def test_harvest_clicks_each_row_and_parses_the_profile_behind_it(mocker):
 def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     upsert = mocker.patch("people_sync.ledger.upsert")
     upsert_profile = mocker.patch("people_sync.scrape.profile.upsert_profile")
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = photos.put_object
     mocker.patch("people_sync.lifedata.now_iso", return_value="2026-01-01T00:00:00.000Z")
     profile = partiful.parse({**FIXTURE, "future_field": "retained"})
     entry = {
@@ -138,9 +149,11 @@ def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     assert upsert_profile.call_args.args[0].record_id == "partiful:uid123"
     upload.assert_called_once()
     key, body = upload.call_args.args
-    assert key.startswith("profiles/partiful/partiful_uid123/2026-01-01T00:00:00.000Z-")
-    assert key.endswith(".json")
-    assert json.loads(body) == {"eval": {**FIXTURE, "future_field": "retained"}, "captured": []}
+    capture = captures.validate(json.loads(body))
+    assert key == f"profiles/partiful/captures/{capture['capture_id']}.json"
+    assert capture["captured_at"] == "2026-01-01T00:00:00.000Z"
+    assert capture["record_id"] == "partiful:uid123"
+    assert capture["payload"] == {"eval": {**FIXTURE, "future_field": "retained"}, "captured": []}
     assert upload.call_args.kwargs["content_type"] == "application/json"
     assert upsert_profile.call_args.kwargs["raw_r2_key"] == key
 
@@ -167,29 +180,39 @@ def test_harvest_archives_before_parse_and_back_navigation(mocker):
 
     def upload(key, body, **kwargs):
         assert b.path.startswith("/u/")
-        archived[key] = json.loads(body)
+        archived[key] = body
 
     def broken_parser(*args):
         assert len(archived) == 1
         raise ExtractError("no-profile")
 
     mocker.patch("people_sync.photos.put_object", side_effect=upload)
+    mocker.patch("people_sync.photos.get_object", side_effect=archived.__getitem__)
     mocker.patch.object(partiful, "parse", side_effect=broken_parser)
     entries = list(partiful.harvest(b, limit=1))
 
     assert len(archived) == 1
     entry = entries[0][2]
     assert entry["error"] == "no-profile"
-    saved = archived[entry["raw_r2_key"]]
+    saved = captures.validate(json.loads(archived[entry["raw_r2_key"]]))["payload"]
     assert json.loads(saved["raw_eval"])["path"] == "/u/uid0"
     assert saved["context"]["shared_events"] == 3
     assert b.path == "/mutuals"
 
 
-def test_harvest_archive_failure_stops_before_parse_and_back(mocker):
+@pytest.mark.parametrize("failure", ["upload", "readback", "index"])
+def test_harvest_archive_failure_stops_before_parse_and_back(mocker, failure):
     mocker.patch("people_sync.scrape.partiful.time.sleep")
     b = FakeBrowser()
-    mocker.patch("people_sync.photos.put_object", side_effect=OSError("upload failed"))
+    if failure == "readback":
+        mocker.patch("people_sync.photos.get_object", return_value=b"wrong bytes")
+    else:
+        target = (
+            "people_sync.photos.put_object"
+            if failure == "upload"
+            else "people_sync.captures.os.replace"
+        )
+        mocker.patch(target, side_effect=OSError("secret storage detail"))
     parse = mocker.patch.object(partiful, "parse")
     with pytest.raises(RuntimeError, match="raw archive failed"):
         list(partiful.harvest(b))
@@ -200,7 +223,7 @@ def test_harvest_archive_failure_stops_before_parse_and_back(mocker):
 def test_ingest_reuses_harvest_archive(mocker):
     mocker.patch("people_sync.scrape.partiful.time.sleep")
     b = FakeBrowser()
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = photos.put_object
     mocker.patch("people_sync.ledger.upsert")
     cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
     entry = next(partiful.harvest(b, limit=1))[2]
@@ -214,8 +237,10 @@ def test_harvest_retains_malformed_json_before_decoder_fails(mocker):
     b = FakeBrowser()
     original_eval = b.eval
     b.eval = lambda js: "{broken" if js == partiful.EXTRACTOR_JS else original_eval(js)
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = photos.put_object
     with pytest.raises(json.JSONDecodeError):
         list(partiful.harvest(b))
-    assert json.loads(upload.call_args.args[1])["raw_eval"] == "{broken"
+    assert (
+        captures.validate(json.loads(upload.call_args.args[1]))["payload"]["raw_eval"] == "{broken"
+    )
     assert b.path == "/u/uid0"

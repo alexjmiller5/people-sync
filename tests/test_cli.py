@@ -328,3 +328,103 @@ def test_scrape_refuses_to_start_without_the_r2_token(mocker, monkeypatch):
 
     assert "LIFE_HUB_TOKEN" in str(exit_info.value.code)
     scrape.assert_not_called()
+
+
+def test_capture_inventory_replay_and_diff_use_private_files(monkeypatch, tmp_path, capsys):
+    from people_sync import photos, captures
+
+    storage = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: storage.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", storage.__getitem__)
+    source = tmp_path / "friends.json"
+    source.write_text('{"friends_v2":[{"name":"Example","timestamp":1},{}]}')
+    cli.main(["capture", "facebook", "--path", str(source)])
+    retained = json.loads(capsys.readouterr().out)
+    c = captures.validate(json.loads(storage[retained["key"]]))
+    local = tmp_path / "state" / "people-sync" / "captures" / f"{c['capture_id']}.json"
+    cli.main(["captures", "--verify"])
+    inventory = json.loads(capsys.readouterr().out)
+    assert inventory["captures"][0]["capture_id"] == c["capture_id"]
+    assert inventory["captures"][0]["verification"] == "payload-checksum"
+    proposal = tmp_path / "proposal.json"
+    cli.main(["replay", "--input", str(local), "--output", str(proposal)])
+    a = json.loads(capsys.readouterr().out)
+    assert a == json.loads(proposal.read_bytes()) and a["status"] == "ok"
+    assert a["observations"][1]["status"] == "skipped"
+    assert proposal.stat().st_mode & 0o777 == 0o600
+    cli.main(["replay", "--input", str(local), "--compare", str(proposal)])
+    same = json.loads(capsys.readouterr().out)
+    assert same["comparison"]["changed"] is False
+    prior = json.loads(proposal.read_text())
+    prior["records"][0]["name"] = "Before"
+    proposal.write_text(json.dumps(prior))
+    cli.main(["replay", "--input", str(local), "--compare", str(proposal)])
+    changed = json.loads(capsys.readouterr().out)
+    assert changed["comparison"]["changed"] is True
+    assert "Before" in changed["comparison"]["diff"] and "Example" in changed["comparison"]["diff"]
+
+
+def test_capture_filters_linkedin_email_before_retention(monkeypatch, tmp_path, capsys):
+    import base64
+    from people_sync import photos, replay
+
+    storage = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: storage.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", storage.__getitem__)
+    source = tmp_path / "Connections.csv"
+    source.write_text(
+        'Notes:\n"private preamble"\n\nFirst Name,Last Name,URL,Email Address,Company,Position,Connected On\n'
+        "Example,Person,https://linkedin.com/in/example,synthetic@example.invalid,Example Co,Role,1 Jan 2026\n"
+        ",,,,,,2 Jan 2026\n\n"
+    )
+    cli.main(["capture", "linkedin", "--path", str(source)])
+    key = json.loads(capsys.readouterr().out)["key"]
+    c = json.loads(storage[key])
+    file = c["payload"]["files"][0]
+    raw = base64.b64decode(file["data"])
+    assert b"synthetic@example.invalid" not in raw and b"private preamble" not in raw
+    assert c["exclusions"] and file["filename"] == "Connections.csv" and file["format"] == "csv"
+    result = replay.replay_capture(c)
+    assert result["records"][0]["name"] == "Example Person"
+    assert [row["ordinal"] for row in result["observations"]] == [0, 1, 2]
+    assert [row["status"] for row in result["observations"]] == ["parsed", "skipped", "skipped"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["replay", "--input", "missing.json"], ["replay", "--input", "missing.json", "--apply"]],
+)
+def test_replay_errors_exit_without_tracebacks_or_apply_mode(args, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(args)
+
+
+def test_replay_malformed_json_and_inventory_tampering_are_explicit(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    directory = tmp_path / "people-sync" / "captures"
+    directory.mkdir(parents=True)
+    bad = directory / "bad.json"
+    bad.write_text('{"secret":"synthetic-secret"')
+    with pytest.raises(SystemExit):
+        cli.main(["replay", "--input", str(bad)])
+    output = capsys.readouterr()
+    assert "synthetic-secret" not in output.out + output.err
+    cli.main(["captures", "--verify"])
+    result = json.loads(capsys.readouterr().out)
+    assert result["captures"][0]["verification"] == "invalid"
+
+
+def test_legacy_cli_uses_source_path_but_hashes_original_file_bytes(tmp_path, capsys):
+    import hashlib
+
+    path = tmp_path / "profiles" / "spotify" / "old.json"
+    path.parent.mkdir(parents=True)
+    original = b'{"eval": {"name":"Example","path":"/user/example"}, "captured": []}\n'
+    path.write_bytes(original)
+    cli.main(["replay", "--input", str(path)])
+    result = json.loads(capsys.readouterr().out)
+    assert result["profile"]["display_name"] == "Example"
+    assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
+    assert result["verification"] == "unverified"

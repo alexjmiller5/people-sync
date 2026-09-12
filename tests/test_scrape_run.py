@@ -7,14 +7,21 @@ import subprocess
 
 import pytest
 
+from people_sync import captures
 from people_sync.scrape import run
 from people_sync.scrape.cdp import CdpError
 from people_sync.scrape.profile import ExtractError, Profile
 
 
 @pytest.fixture(autouse=True)
-def no_live_archive(mocker):
-    mocker.patch("people_sync.photos.put_object")
+def no_live_archive(mocker, monkeypatch, tmp_path):
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    mocker.patch(
+        "people_sync.photos.put_object",
+        side_effect=lambda key, body, **kw: stored.update({key: body}),
+    )
+    mocker.patch("people_sync.photos.get_object", side_effect=stored.__getitem__)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="execute browser fetch guard")
@@ -129,7 +136,7 @@ def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
 
 def test_cap_reached_stops_before_navigating(mocker):
     browser, pacer = _patch_common(mocker, [_record()], allow=False)
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
@@ -146,7 +153,7 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
     browser, pacer = _patch_common(
         mocker, [_record()], browser=FakeBrowser(page_text="Please log in to continue")
     )
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
@@ -162,11 +169,12 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
 def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     browser, pacer = _patch_common(mocker, [_record()])
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     manager = mocker.MagicMock()
     manager.attach_mock(put_object, "put_object")
+    manager.attach_mock(run.photos.get_object, "get_object")
     manager.attach_mock(upsert, "upsert_profile")
 
     result = run.scrape("testplatform")
@@ -174,13 +182,18 @@ def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     assert result == {"done": 1, "skipped": 0, "halted": None}
 
     call_names = [c[0] for c in manager.mock_calls]
-    assert call_names.index("put_object") < call_names.index("upsert_profile")
+    assert (
+        call_names.index("put_object")
+        < call_names.index("get_object")
+        < call_names.index("upsert_profile")
+    )
 
     raw_calls = [c for c in put_object.call_args_list if c.args[0].startswith("profiles/")]
     assert len(raw_calls) == 1
-    assert raw_calls[0].args[0].startswith("profiles/testplatform/testplatform_u1/")
-    payload = json.loads(raw_calls[0].args[1])
-    assert payload["eval"]["username"] == "u1"
+    capture = captures.validate(json.loads(raw_calls[0].args[1]))
+    assert raw_calls[0].args[0] == f"profiles/testplatform/captures/{capture['capture_id']}.json"
+    assert capture["record_id"] == "testplatform:u1"
+    assert capture["payload"]["eval"]["username"] == "u1"
 
     avatar_calls = [c for c in put_object.call_args_list if c.args[0].startswith("photos/records/")]
     assert len(avatar_calls) == 1
@@ -205,7 +218,7 @@ def test_avatar_dedupe_skips_reupload_when_sha_matches(mocker):
     )
     browser, pacer = _patch_common(mocker, [record])
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"avatar-bytes")
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
@@ -225,7 +238,7 @@ def test_avatar_upload_happens_when_sha_changes(mocker):
     )
     browser, pacer = _patch_common(mocker, [record])
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"new-avatar-bytes")
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
@@ -251,7 +264,7 @@ def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
             return json.dumps({"username": "u1", "full_name": "Test User"})
 
     mocker.patch("people_sync.scrape.run.Browser.connect", return_value=PageFetchBrowser())
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     run.scrape("testplatform")
@@ -266,7 +279,7 @@ def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
 
 def test_records_with_no_handle_are_skipped_not_navigated(mocker):
     browser, pacer = _patch_common(mocker, [_record(handle=None)])
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
 
     result = run.scrape("testplatform")
 
@@ -287,7 +300,6 @@ def test_max_n_limits_records_processed(mocker):
     ]
     browser, pacer = _patch_common(mocker, records)
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
-    mocker.patch("people_sync.photos.put_object")
     mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform", max_n=2)
@@ -322,7 +334,7 @@ def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
     pacer.next_gap.return_value = 0.0
     sleep = mocker.patch("people_sync.scrape.run.time.sleep")
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
@@ -347,7 +359,7 @@ def test_extractor_error_sentinel_archives_without_cache_writes(mocker):
 
     browser, pacer = _patch_common(mocker, [_record()])
     mocker.patch("people_sync.scrape.run.import_module", return_value=SentinelModule)
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
@@ -373,7 +385,7 @@ def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
     pacer_cls = mocker.patch("people_sync.scrape.run.Pacer")
     pacer = pacer_cls.return_value
     pacer.allow.return_value = True
-    put_object = mocker.patch("people_sync.photos.put_object")
+    put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
     result = run.scrape("testplatform")
@@ -482,7 +494,7 @@ def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
     browser, pacer = _patch_common(mocker, [_record()])
     mocker.patch("people_sync.scrape.run.import_module", return_value=GoneModule)
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = run.photos.put_object
 
     result = run.scrape("testplatform")
 
@@ -525,7 +537,6 @@ def test_scrape_merges_a_module_enrich_hook_into_the_captured_entries(mocker):
 
     _patch_common(mocker, [_record()])
     mocker.patch("people_sync.scrape.run.import_module", return_value=EnrichingModule)
-    mocker.patch("people_sync.photos.put_object")
     mocker.patch("people_sync.scrape.run.photos.fetch_url_photo", return_value=None)
     mocker.patch("people_sync.scrape.run.upsert_profile")
 
@@ -563,11 +574,12 @@ def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, t
         "people_sync.photos.put_object",
         side_effect=lambda key, body, **kw: archived.update({key: body}),
     )
+    mocker.patch("people_sync.photos.get_object", side_effect=archived.__getitem__)
     cache = mocker.patch.object(run, "upsert_profile")
     run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
 
     assert len(archived) == 1
-    saved = json.loads(next(iter(archived.values())))
+    saved = captures.validate(json.loads(next(iter(archived.values()))))["payload"]
     assert saved["raw_eval"] == payload
     assert saved["captured"] == captured
     cache.assert_not_called()
@@ -575,12 +587,23 @@ def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, t
 
 
 @pytest.mark.parametrize("targets", [None, ["test-tab"]])
-def test_archive_failure_stops_before_parsing_or_next_navigation(mocker, tmp_path, targets):
+@pytest.mark.parametrize("failure", ["upload", "readback", "index"])
+def test_archive_failure_stops_before_parsing_or_next_navigation(
+    mocker, tmp_path, targets, failure
+):
     browser, _ = _patch_common(mocker, [_record(), _record(id="testplatform:u2", handle="u2")])
     browser.watch_blocks = lambda *args: None
     parse = mocker.patch.object(FakeModule, "parse")
     cache = mocker.patch.object(run, "upsert_profile")
-    mocker.patch("people_sync.photos.put_object", side_effect=OSError("secret storage detail"))
+    if failure == "readback":
+        mocker.patch("people_sync.photos.get_object", return_value=b"wrong bytes")
+    else:
+        target = (
+            "people_sync.photos.put_object"
+            if failure == "upload"
+            else "people_sync.captures.os.replace"
+        )
+        mocker.patch(target, side_effect=OSError("secret storage detail"))
 
     result = run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
 
@@ -596,12 +619,14 @@ def test_readiness_failure_preserves_responses_already_received(mocker, tmp_path
     browser.navigate = lambda *args, **kw: {"captured": captured, "dom_ready": False}
     mocker.patch.object(FakeModule, "READY_JS", "READY()", create=True)
     mocker.patch.object(FakeModule, "capture_ready", return_value=False, create=True)
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = run.photos.put_object
     cache = mocker.patch.object(run, "upsert_profile")
 
     run.scrape("testplatform", state_path=str(tmp_path / "state.json"))
 
-    assert json.loads(upload.call_args.args[1])["captured"] == captured
+    assert (
+        captures.validate(json.loads(upload.call_args.args[1]))["payload"]["captured"] == captured
+    )
     cache.assert_not_called()
 
 
@@ -619,13 +644,16 @@ def test_shared_stop_after_collection_keeps_archive_without_cache_write(mocker, 
         return original_parse(raw, captured)
 
     mocker.patch.object(FakeModule, "parse", side_effect=stop_after_capture)
-    upload = mocker.patch("people_sync.photos.put_object")
+    upload = run.photos.put_object
     cache = mocker.patch.object(run, "upsert_profile")
     result = run.scrape(
         "testplatform", targets=["test-tab"], state_path=str(tmp_path / "state.json")
     )
     assert result["halted"] == "HTTP 429"
-    assert json.loads(upload.call_args.args[1])["eval"]["username"] == "u1"
+    assert (
+        captures.validate(json.loads(upload.call_args.args[1]))["payload"]["eval"]["username"]
+        == "u1"
+    )
     cache.assert_not_called()
 
 
@@ -636,6 +664,9 @@ def test_two_snapshots_at_same_timestamp_do_not_overwrite(mocker):
         "people_sync.photos.put_object",
         side_effect=lambda key, body, **kw: archived.update({key: body}),
     )
+    mocker.patch("people_sync.photos.get_object", side_effect=archived.__getitem__)
     for raw in ('{"bio":"before"}', '{"bio":"after"}'):
         run.photos.archive_profile("testplatform", "testplatform:u1", raw, [])
-    assert {json.loads(body)["eval"]["bio"] for body in archived.values()} == {"before", "after"}
+    assert {
+        captures.validate(json.loads(body))["payload"]["eval"]["bio"] for body in archived.values()
+    } == {"before", "after"}
