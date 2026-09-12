@@ -242,6 +242,11 @@ def test_malformed_export_cannot_cross_privacy_boundary():
         ("URL", "https://linkedin.com/in/example%2520%253Faccess_token=synthetic-secret"),
         ("URL", "https://linkedin.com/in/example%09?access_token=synthetic-secret"),
         ("URL", "https://linkedin.com/in/example%20#synthetic-secret"),
+        pytest.param(
+            "Position",
+            "https:\u200b//linkedin.com/in/example?access_token=synthetic-secret",
+            id="format-normalized-url",
+        ),
     ],
 )
 def test_offline_replay_rejects_unsafe_old_export_even_with_matching_checksum(column, contact):
