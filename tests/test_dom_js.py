@@ -165,6 +165,23 @@ def test_venmo_reads_the_target_profile_and_excludes_private_page_state():
     }
 
 
+def test_partiful_extractor_preserves_signed_avatar_for_transient_acquisition():
+    from people_sync.scrape.partiful import EXTRACTOR_JS
+
+    setup = """
+    document.querySelector = () => ({innerText:'Example Person'});
+    document.querySelectorAll = selector => selector === 'img' ? [{
+      src:'https://images.example.test/profileImages/example.jpg?signature=SECRET', naturalWidth:100
+    }] : [];
+    document.body = {innerText:'Example Person'};
+    globalThis.location = {pathname:'/u/example'};
+    """
+    assert (
+        json.loads(run(setup, EXTRACTOR_JS))["avatar"]
+        == "https://images.example.test/profileImages/example.jpg?signature=SECRET"
+    )
+
+
 @pytest.mark.parametrize(
     "js",
     [

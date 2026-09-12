@@ -276,7 +276,8 @@ def test_scrape_caller_parses_only_after_verified_archive(
     ]
     record = {"id": "spotify:example", "handle": "example"}
     if readback_ok:
-        profile, key = run._collect_profile(browser, module, "spotify", 0, record)
+        profile, key, avatar_url = run._collect_profile(browser, module, "spotify", 0, record)
+        assert avatar_url is None
         assert profile.record_id == "spotify:example" and key in stored
     else:
         with pytest.raises(photos.ArchiveError):
