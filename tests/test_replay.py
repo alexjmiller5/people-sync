@@ -1,5 +1,6 @@
 import base64
 import copy
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -200,7 +201,7 @@ def test_export_replays_existing_parsers_with_original_ordinals(
     assert result["observations"][0]["ordinal"] == 0
 
 
-def test_export_malformed_bytes_are_retained_and_reported():
+def test_malformed_export_cannot_cross_privacy_boundary():
     from people_sync import captures, replay
 
     c = captures.build_capture(
@@ -213,10 +214,51 @@ def test_export_malformed_bytes_are_retained_and_reported():
                     "filename": "friends.json",
                     "format": "json",
                     "encoding": "base64",
-                    "data": base64.b64encode(b"{broken").decode(),
+                    "data": base64.b64encode(b'{"friends_v2":[]}').decode(),
                 }
             ]
         },
     )
-    assert replay.replay_capture(c)["status"] == "malformed"
+    c["payload"]["files"][0]["data"] = base64.b64encode(b"{broken").decode()
+    c["payload_sha256"] = hashlib.sha256(captures.encode(c["payload"])).hexdigest()
+    with pytest.raises(ValueError):
+        captures.validate(c)
+    assert replay.replay_capture(c)["status"] == "invalid"
     assert base64.b64decode(c["payload"]["files"][0]["data"]) == b"{broken"
+
+
+@pytest.mark.parametrize(
+    "contact", ["synthetic@example.invalid", "+1 (202) 555-0148", "123 Example Street"]
+)
+def test_offline_replay_rejects_unsafe_old_export_even_with_matching_checksum(contact):
+    from people_sync import captures, replay
+
+    c = captures.build_capture(
+        "linkedin",
+        "export",
+        {
+            "files": [
+                {
+                    "role": "export",
+                    "filename": "Connections.csv",
+                    "format": "csv",
+                    "encoding": "base64",
+                    "data": base64.b64encode(
+                        b"First Name,Last Name,URL,Company,Position\nExample,Person,https://linkedin.com/in/example,Example Co,Engineer\n"
+                    ).decode(),
+                }
+            ]
+        },
+    )
+    # Simulate a retained envelope from the old collector; hashing it is not privacy validation.
+    data = (
+        "First Name,Last Name,URL,Company,Position\n"
+        f"Example,Person,https://linkedin.com/in/example,Example Co,{contact}\n"
+    ).encode()
+    c["payload"]["files"][0]["data"] = base64.b64encode(data).decode()
+    c["payload_sha256"] = hashlib.sha256(captures.encode(c["payload"])).hexdigest()
+    original = copy.deepcopy(c)
+    result = replay.replay_capture(c)
+    assert result["status"] == "invalid" and "records" not in result
+    assert contact not in json.dumps(result)
+    assert c == original

@@ -428,3 +428,56 @@ def test_legacy_cli_uses_source_path_but_hashes_original_file_bytes(tmp_path, ca
     assert result["profile"]["display_name"] == "Example"
     assert result["input_sha256"] == hashlib.sha256(original).hexdigest()
     assert result["verification"] == "unverified"
+
+
+@pytest.mark.parametrize(
+    "contact", ["synthetic@example.invalid", "+1 (202) 555-0148", "123 Example Street"]
+)
+def test_capture_cli_refuses_contact_details_before_upload(monkeypatch, tmp_path, capsys, contact):
+    from people_sync import photos
+
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", stored.__getitem__)
+    path = tmp_path / "Connections.csv"
+    original = (
+        "First Name,Last Name,URL,Company,Position\n"
+        f"Example,Person,https://linkedin.com/in/example,Example Co,Engineer {contact}\n"
+    ).encode()
+    path.write_bytes(original)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["capture", "linkedin", "--path", str(path)])
+    assert not stored and not list((tmp_path / "state").rglob("*.json"))
+    assert path.read_bytes() == original
+    output = capsys.readouterr()
+    assert contact not in str(exc.value) + output.out + output.err
+
+
+def test_capture_and_offline_output_preserve_good_names_and_context(monkeypatch, tmp_path, capsys):
+    import base64
+    from people_sync import photos
+
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", stored.__getitem__)
+    source = tmp_path / "Connections.csv"
+    original = (
+        "First Name,Last Name,URL,Company,Position,Connected On\n"
+        "Éxample,St. Sample,https://linkedin.com/in/example-sample-123,Studio 54 & 3M,Engineer II (.NET),01 Jan 2026\n"
+    ).encode()
+    source.write_bytes(original)
+    cli.main(["capture", "linkedin", "--path", str(source)])
+    key = json.loads(capsys.readouterr().out)["key"]
+    capture = json.loads(stored[key])
+    assert source.read_bytes() == original
+    assert base64.b64decode(capture["payload"]["files"][0]["data"]) == original
+    assert capture["payload"]["files"][0]["verbatim"] is True
+    retained = tmp_path / "state" / "people-sync" / "captures" / f"{capture['capture_id']}.json"
+    cli.main(["replay", "--input", str(retained)])
+    result = json.loads(capsys.readouterr().out)
+    assert result["records"][0]["name"] == "Éxample St. Sample"
+    assert result["records"][0]["raw"]["Company"] == "Studio 54 & 3M"
+    assert result["records"][0]["raw"]["Position"] == "Engineer II (.NET)"
+    assert result["records"][0]["raw"]["Connected On"] == "01 Jan 2026"

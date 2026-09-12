@@ -1,4 +1,5 @@
 import copy
+import csv
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -250,3 +251,96 @@ def test_privacy_filtered_class_supports_collection_boundaries(source):
         exclusions=["source-allowlist-v1: contact details excluded"],
     )
     assert captures.validate(capture)["completeness"] == "privacy-filtered"
+
+
+@pytest.mark.parametrize("column", ["Company", "Position", "URL"])
+@pytest.mark.parametrize(
+    "contact",
+    [
+        "contact synthetic@example.invalid",
+        "contact synthetic%2540example.invalid",
+        "contact synthetic&#64;example.invalid",
+        "contact synthetic [at] example.invalid",
+        "call +1 (202) 555-0148",
+        "call ＋１ (２０２) ５５５-０１４８",
+        "office 123 Example Street",
+        "office 221B Example Road",
+    ],
+)
+def test_export_rejects_contact_values_without_rewriting_original(tmp_path, column, contact):
+    from urllib.parse import quote
+    from people_sync import captures
+
+    path = tmp_path / "Connections.csv"
+    value = (
+        "https://linkedin.com/in/example?contact=" + quote(quote(contact, safe=""), safe="")
+        if column == "URL"
+        else contact
+    )
+    row = {
+        "First Name": "Example",
+        "Last Name": "Person",
+        "URL": "https://linkedin.com/in/example",
+        "Company": "Example Co",
+        "Position": "Engineer",
+        "Connected On": "01 Jan 2026",
+    }
+    row[column] = value
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    original = path.read_bytes()
+    with pytest.raises(ValueError) as exc:
+        captures.capture_export("linkedin", path)
+    assert value not in str(exc.value) and contact not in str(exc.value)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "source,entry",
+    [
+        ("facebook", {"name": "Example synthetic@example.invalid", "timestamp": 1700000000}),
+        ("snapchat", {"Username": "example", "Display Name": "Call 202-555-0148"}),
+        ("snapchat", {"Username": "example", "Display Name": 2025550148}),
+        (
+            "instagram",
+            {
+                "string_list_data": [
+                    {
+                        "value": "example",
+                        "timestamp": 1700000000,
+                        "href": "https://instagram.com/example?address=123%20Example%20Street",
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_export_privacy_boundary_covers_json_values_and_urls(tmp_path, source, entry):
+    from people_sync import captures
+
+    if source == "instagram":
+        path = tmp_path
+        (path / "followers.json").write_text(json.dumps([entry]))
+        (path / "following.json").write_text('{"relationships_following":[]}')
+    else:
+        path = tmp_path / "friends.json"
+        path.write_text(json.dumps({"friends_v2" if source == "facebook" else "Friends": [entry]}))
+    with pytest.raises(ValueError):
+        captures.capture_export(source, path)
+
+
+def test_retain_rechecks_export_privacy_before_upload(storage, tmp_path):
+    import base64
+    from people_sync import captures, photos
+
+    path = tmp_path / "friends.json"
+    path.write_text('{"friends_v2":[{"name":"Example","timestamp":1700000000}]}')
+    capture = captures.capture_export("facebook", path)
+    unsafe = b'{"friends_v2":[{"name":"Example synthetic@example.invalid","timestamp":1700000000}]}'
+    capture["payload"]["files"][0]["data"] = base64.b64encode(unsafe).decode()
+    capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
+    with pytest.raises(photos.ArchiveError):
+        captures.retain(capture, state_dir=tmp_path / "state")
+    assert not storage and not (tmp_path / "state").exists()
