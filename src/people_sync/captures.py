@@ -153,12 +153,12 @@ def _check_export_value(value, field=""):
             parsed = urlsplit(text[match.start() :])
             _require(not (parsed.username or parsed.query or parsed.fragment))
         decoded = unicodedata.normalize("NFKC", html.unescape(unquote_plus(text)))
+        decoded = "".join(c for c in decoded if unicodedata.category(c) != "Cf")
         if decoded == text:
             break
         text = decoded
     else:
         raise ValueError("export privacy boundary could not be established")
-    text = "".join(c for c in text if unicodedata.category(c) != "Cf")
     _require(not re.search(r"\S+\s*(?:@|\[at\]|\(at\))\s*\S+|\d(?:[\W_]*\d){6}", text, re.I))
     _require(
         not re.search(r"\b(?:mailto|tel|sms|phone|address)\s*:|\bp\.?\s*o\.?\s*box\b", text, re.I)

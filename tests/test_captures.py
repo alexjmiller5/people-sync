@@ -374,3 +374,34 @@ def test_retain_rechecks_export_privacy_before_upload(storage, tmp_path):
     with pytest.raises(photos.ArchiveError):
         captures.retain(capture, state_dir=tmp_path / "state")
     assert not storage and not (tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("stage", ["capture", "retain"])
+def test_format_normalized_url_cannot_cross_export_boundary(storage, tmp_path, capsys, stage):
+    import base64
+    from people_sync import captures, photos
+
+    path = tmp_path / "Connections.csv"
+    safe = (
+        "First Name,Last Name,URL,Position\n"
+        "Example,Person,https://linkedin.com/in/example,Engineer\n"
+    ).encode()
+    path.write_bytes(safe)
+    capture = captures.capture_export("linkedin", path)
+    unsafe = safe.replace(
+        b"Engineer", "https:\u200b//linkedin.com/in/example?access_token=synthetic-secret".encode()
+    )
+    path.write_bytes(unsafe)
+    capture["payload"]["files"][0]["data"] = base64.b64encode(unsafe).decode()
+    capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
+    original = copy.deepcopy(capture)
+    if stage == "capture":
+        with pytest.raises(ValueError, match="^invalid capture envelope or payload checksum$"):
+            captures.capture_export("linkedin", path)
+    else:
+        with pytest.raises(photos.ArchiveError, match="^raw archive failed$"):
+            captures.retain(capture, state_dir=tmp_path / "state")
+    assert path.read_bytes() == unsafe and capture == original
+    assert not storage and not (tmp_path / "state").exists()
+    output = capsys.readouterr()
+    assert "synthetic-secret" not in output.out + output.err
