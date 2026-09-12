@@ -140,7 +140,10 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 
 - [ ] Add synthetic failing regressions for canonical numeric LinkedIn URL suffixes and underscored Instagram handles, alongside forbidden userinfo/query/fragment/foreign-host variants. Confirm the current shared free-text checker falsely refuses the permitted identity.
   ```python
-  assert replay_capture(capture_export("linkedin", export))["records"][0]["source_id"]
+  export.write_text("First Name,Last Name,URL,Company,Position,Connected On\nExample,Person,https://www.linkedin.com/in/example-123456789/,secret@example.test,Engineer,01 Jan 2026\n")
+  capture = capture_export("linkedin", export)
+  assert replay_capture(capture)["records"][0]["source_id"] == "example-123456789"
+  retained_bytes = captures.encode(capture)
   assert b"secret@example.test" not in retained_bytes
   ```
   Build the export with a synthetic valid name, numeric canonical URL, one prohibited Company value and another safe row. Assert exact record IDs and retained row ordinals, not just truthiness.
