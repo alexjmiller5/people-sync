@@ -46,6 +46,37 @@ def run(setup: str, expression: str):
     return json.loads(out.stdout)["v"]
 
 
+PARTIFUL_ROW_DOM = """
+globalThis.events = [];
+globalThis.row = {
+  id: '', name: 'Example Before',
+  get innerText() { return this.name; },
+  querySelector(s) {
+    if (s.includes('mutuals_name')) return {innerText: this.name};
+    if (s.includes('mutuals_count')) return {innerText: '2'};
+    return null;
+  },
+  scrollIntoView() {
+    events.push('scroll');
+    if (globalThis.virtualize) this.name = 'Example After';
+  }
+};
+document.querySelectorAll = () => [row];
+"""
+
+
+def test_partiful_row_acquisition_is_passive_under_virtualization():
+    from people_sync.scrape import partiful
+
+    out = run(
+        PARTIFUL_ROW_DOM + "globalThis.virtualize = true;",
+        "(() => {const value = " + partiful.ROW_JS % 0 + "; return {value, events, id:row.id};})()",
+    )
+    assert out["events"] == []
+    assert out["id"] == ""
+    assert out["value"]["name"] == "Example Before"
+
+
 def test_hidden_duplicate_ahead_of_the_real_field_is_skipped():
     setup = 'document.els = [el({w: 0, h: 0}), el({value: "real"})];'
     assert run(setup, cdp.visible_js("input")) is True

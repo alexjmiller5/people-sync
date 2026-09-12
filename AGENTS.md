@@ -106,6 +106,11 @@ rendered row count do not prove full inventory coverage. Strava emits `None`
 for unobserved follow directions. Spotify marks a scope complete only when its
 unique observed count equals the displayed total; unknown totals remain partial.
 All list commands validate file-service configuration before opening a browser.
+Partiful's `ROW_JS` is passive: ID assignment and scrolling happen through
+`ROW_PREPARE_JS` only after verified row retention. If scrolling replaces or
+changes the row, acquisition halts before clicking. Spotify's typed list-ID
+boundary preserves percent-encoded `#` for row and owner path segments; source
+IDs decode and handles re-encode. General profile/text/URL checks remain strict.
 
 List entries and Facebook handle proposals carry `capture_refs`, with
 `capture_key`, `scope`, `ordinal` and `entry_ordinal` for every retained occurrence.

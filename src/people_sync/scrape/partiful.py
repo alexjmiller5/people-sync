@@ -97,11 +97,18 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
 
 ROW_JS = (
     "(function(i){var r=document.querySelectorAll(" + json.dumps(ROW_SELECTOR) + ")[i];"
-    "if(!r)return null;r.id=r.id||('ps_row_'+i);r.scrollIntoView({block:'center'});"
+    "if(!r)return null;var id=r.id||('ps_row_'+i);"
     "var q=function(s){var e=r.querySelector(s);return e?e.innerText.trim():null};"
     "var img=r.querySelector('img');"
-    "return {selector:'#'+r.id,name:q('[class^=mutuals_name]'),last_seen:q('[class^=mutuals_metadata]'),"
+    "return {selector:'#'+id,name:q('[class^=mutuals_name]'),last_seen:q('[class^=mutuals_metadata]'),"
     "shared_events:parseInt(q('[class^=mutuals_count]')||'')||null,thumb:img?img.src.split('?')[0]:null};})(%d)"
+)
+ROW_PREPARE_JS = (
+    "(function prepareRow(i){var rows=function(){return document.querySelectorAll("
+    + json.dumps(ROW_SELECTOR)
+    + ")};var r=rows()[i];if(!r)return false;"
+    "var text=r.innerText;r.id=r.id||('ps_row_'+i);r.scrollIntoView({block:'center'});"
+    "return rows()[i]===r&&r.innerText===text;})(%d)"
 )
 ROW_COUNT_JS = "document.querySelectorAll(" + json.dumps(ROW_SELECTOR) + ").length"
 
@@ -146,6 +153,8 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
         ordinal += 1
         refs = [snapshot.list_ref(page, list_key, 0)]
         try:
+            if not browser.eval(ROW_PREPARE_JS % i):
+                raise ExtractError("mutual-row-changed")
             browser.click(row["selector"])
         except Exception:
             snapshot.retain_list(

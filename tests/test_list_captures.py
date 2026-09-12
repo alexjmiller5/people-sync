@@ -376,7 +376,7 @@ def test_list_typed_identities_do_not_relax_names_or_urls(source, row, retained)
     if source == "facebook":
         assert safe == {"handle": row["handle"], "mutual_text": row["mutual_text"]}
     elif source == "spotify":
-        assert safe == {"name": "Example"}
+        assert safe == row
     elif source == "strava":
         assert safe == {"id": "123456789"}
     else:
@@ -475,3 +475,142 @@ def test_partiful_decisions_remain_untouched_with_capture_refs(retained, mocker)
             "_avatar_url",
         )
     )
+
+
+@pytest.mark.parametrize("failure", [None, "upload", "readback", "index"])
+@pytest.mark.parametrize("virtualize", [False, True])
+def test_partiful_executed_dom_retention_precedes_scroll_and_click(
+    retained, mocker, failure, virtualize
+):
+    from tests.test_dom_js import NODE, PARTIFUL_ROW_DOM, run
+    from tests.test_scrape_partiful import FakeBrowser
+
+    if not NODE:
+        pytest.skip("node")
+
+    events = []
+
+    class Browser(FakeBrowser):
+        dialog = False
+
+        def __init__(self):
+            super().__init__()
+            self.dialog = False
+
+        def eval(self, js):
+            if js.startswith("(function(i)") or js.startswith("(function prepareRow(i)"):
+                result = run(
+                    PARTIFUL_ROW_DOM + f"globalThis.virtualize = {json.dumps(virtualize)};",
+                    "(() => {const value = " + js + ";return {value, events};})()",
+                )
+                events.extend(result["events"])
+                return result["value"]
+            return super().eval(js)
+
+        def click(self, selector):
+            events.append("click")
+            super().click(selector)
+
+    upload = photos.put_object.side_effect
+    readback = photos.get_object.side_effect
+
+    def put(key, body, **kw):
+        events.append("upload")
+        if failure == "upload":
+            raise OSError("synthetic upload failure")
+        upload(key, body, **kw)
+
+    def get(key):
+        if failure == "readback":
+            return b"wrong"
+        body = readback(key)
+        events.append("verified")
+        return body
+
+    photos.put_object.side_effect = put
+    photos.get_object.side_effect = get
+    if failure == "index":
+        mocker.patch(
+            "people_sync.captures.write_private", side_effect=OSError("synthetic index failure")
+        )
+    b = Browser()
+    if failure:
+        with pytest.raises(photos.ArchiveError):
+            next(partiful.harvest(b, limit=1))
+        assert "scroll" not in events and "click" not in events
+    elif virtualize:
+        with pytest.raises(Exception, match="list-acquisition-failed"):
+            next(partiful.harvest(b, limit=1))
+        assert "click" not in events
+        assert events.index("verified") < events.index("scroll")
+    else:
+        entry = next(partiful.harvest(b, limit=1))[2]
+        assert entry["name"] == "Example Before"
+        assert events.index("verified") < events.index("scroll") < events.index("click")
+    if failure != "upload":
+        assert observations(retained)[0][1]["entries"][0]["name"] == "Example Before"
+
+
+@pytest.mark.parametrize("identity", ["test%231", "123456789", "Example%20User"])
+def test_spotify_list_identity_retained_for_rows_and_owner(identity, retained):
+    from people_sync.scrape import snapshot
+
+    payload, key = snapshot.retain_list(
+        "spotify",
+        [{"href": "/user/" + identity}],
+        ordinal=0,
+        scope="followers",
+        account_id=identity,
+    )
+    assert payload["entries"] == [{"href": "/user/" + identity}]
+    assert captures.validate(json.loads(retained[key]))["payload"]["account_id"] == identity
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "test#1",
+        "test?token=x",
+        "person%40example.test",
+        "test%2Fother",
+        "test%25231",
+        "test%00name",
+        "access%20token",
+        "test%3Asecret",
+    ],
+)
+def test_spotify_list_identity_exception_does_not_allow_unsafe_values(identity, retained):
+    from people_sync.scrape import snapshot
+
+    payload, _ = snapshot.retain_list(
+        "spotify", [{"href": "/user/" + identity}], ordinal=0, scope="followers"
+    )
+    assert payload["entries"] == [{}]
+    with pytest.raises(ValueError):
+        snapshot.retain_list("spotify", [], ordinal=0, scope="followers", account_id=identity)
+
+
+def test_spotify_typed_hash_does_not_relax_other_snapshot_fields(retained):
+    from people_sync.scrape import snapshot
+
+    for value in (
+        "https://open.spotify.com/user/test%231",
+        "https://example.test/a?token=x",
+        "https://person:secret@example.test/a",
+    ):
+        with pytest.raises(ValueError):
+            snapshot.safe_url(value, "spotify")
+    payload, _ = snapshot.retain_list(
+        "spotify",
+        [
+            {
+                "href": "/user/test%231",
+                "name": "person@example.test",
+                "avatar": "https://example.test/a?token=x",
+                "session": "secret",
+            }
+        ],
+        ordinal=0,
+        scope="followers",
+    )
+    assert payload["entries"] == [{"href": "/user/test%231"}]
