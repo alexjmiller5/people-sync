@@ -134,7 +134,7 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 
 ### Task 2D: Usable privacy-filtered exports with explicit exclusions
 
-**Files:** `src/people_sync/captures.py`, shared typed identity-URL helper from 2B as needed, export capture/replay tests.
+**Files:** `src/people_sync/captures.py`, `src/people_sync/sources.py`, `src/people_sync/ledger.py`, relevant CLI integration, shared typed identity-URL helper from 2B as needed, export capture/replay/ledger tests.
 
 **Interfaces:** Keep capture/replay/ingest command names and preserved local originals unchanged. Reuse 2B's strictly scoped identity URL handling for canonical source URLs and matching structured handles; never treat arbitrary URLs/free text as typed identities. Archive a versioned field-exclusion manifest by original file role, ordinal and field, with fixed reasons but no excluded values.
 
@@ -150,6 +150,7 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 - [ ] Preserve strict generic privacy validation. At source filtering only, replace prohibited/ambiguous allowed-field values with the source format's missing value, retaining the row and all other permitted fields. Record every excluded field's role/ordinal/path and reason in the capture. Do not copy the excluded value into the manifest. Keep structural malformed entries present and original files byte-identical. An unknown source shape still fails explicitly.
 - [ ] Revalidate retained filtered bytes and typed identity fields at envelope/replay boundaries. Hand-built checksum-valid envelopes containing forbidden values still fail. Do not exempt generic numeric text, arbitrary URL paths, foreign hosts or encoded contact material. No new dependency or universal PII-detector claim.
 - [ ] Offline replay must report field exclusions and their effect, never claim a complete original or silently replace current ledger/cache fields. Test mixed safe/unsafe rows, malformed entries, capture-before-ingest, deterministic replay, unchanged originals and privacy mutation failures. Full pytest/Ruff, normal signed commit and concise report.
+- [ ] Ordinary ingest must also protect existing records: when a permitted-field exclusion affects an existing row, hold that row unchanged for review and report the hold and retained capture. Continue eligible safe/new rows; do not deep-merge excluded fields or silently blank current context. Exercise the real ledger boundary with synthetic existing raw/name values and excluded incoming values. Any in-memory review marker is not a new table column. Held rows are not successful imports; Task3 must not attach an imported_from claim for values it did not update.
 
 ### Task 3: Pin source and promoted-fact provenance to immutable captures
 
