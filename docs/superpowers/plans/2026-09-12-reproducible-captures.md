@@ -153,9 +153,11 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 
 ### Task 3: Pin source and promoted-fact provenance to immutable captures
 
-**Files:** Modify `src/people_sync/ledger.py`, `src/people_sync/scrape/profile.py`, `src/people_sync/promote.py`; create `tests/test_capture_provenance.py`, extend `tests/test_promote.py`.
+**Files:** Modify `src/people_sync/ledger.py`, `src/people_sync/scrape/profile.py`, `src/people_sync/promote.py`, `src/people_sync/cli.py`; create `tests/test_capture_provenance.py`, extend `tests/test_promote.py` and relevant CLI tests.
 
 **Interfaces:** Consume the optional Record capture key and existing profile raw key; produce deterministic `takeout` provenance edges referencing the exact retained file. Do not create new provenance tables or alter existing source facts/approval columns. Existing legacy promotion is reported as legacy rather than rewritten as historical capture evidence.
+
+Task2C adds `Record.capture_refs: tuple[dict, ...] = ()`, each reference containing `capture_key, scope, ordinal, entry_ordinal`. Consume every distinct retained key as well as the singular capture_key, without copying source metadata onto edges. Facebook `assign_handles` proposals also carry these refs; its existing direct CLI handle-update path must emit exact capture evidence through the same helper. No new table column or source attribute in provenance detail is implied.
 
 - [ ] Write a failing test that promotes two observations of one profile and checks each new evidence edge uses its own retained key, not the mutable profile row:
   ```python
