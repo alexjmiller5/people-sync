@@ -139,6 +139,14 @@ def replay_capture(capture) -> dict:
             return result
         if c["kind"] == "export":
             result.update(_export(c), status="ok")
+            result["field_exclusions"] = c["payload"].get("field_exclusions")
+            result["limitations"].append(
+                "privacy-filtered export, not a complete original; excluded fields are missing "
+                "and may prevent parsing or remove proposed values; proposals do not authorize "
+                "replacing current ledger/cache fields"
+            )
+            if result["field_exclusions"] is None:
+                result["limitations"].append("legacy export has no field-exclusion manifest")
             result["limitations"].append("skipped ordinals include malformed or superseded rows")
             return result
         if c["kind"] == "contacts":

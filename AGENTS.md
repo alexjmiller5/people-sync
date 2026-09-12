@@ -317,6 +317,21 @@ reuse an existing one verbatim.
 
 ## Privacy
 
+Export capture uses `export-field-filter-v1`: unsafe or ambiguous allowed-field
+values become missing CSV cells or JSON nulls without dropping row ordinals or
+changing the original files. Malformed objects retain their row slots; unknown
+top-level shapes and duplicate JSON keys/CSV headers fail explicitly.
+`payload.field_exclusions` contains version 1 and entries with file role,
+zero-based data-row ordinal, field path and fixed reason. A null ordinal means
+file-level metadata; `field` plus an index identifies an excluded original
+column/object member without retaining an unknown key, and `preamble` identifies
+discarded CSV preamble text. No excluded value enters the manifest.
+Canonical LinkedIn URLs and Instagram URLs/handles use the shared typed URL
+boundary; arbitrary free text retains generic privacy checks. Envelope validation
+and offline replay reject unsafe retained values, even with a valid checksum.
+Replay reports exclusions and missing-value effects as proposals; this is not
+authorization to replace current ledger/cache fields. It does not apply changes.
+
 The repo is public-grade: no personal data in code, tests, fixtures, docs, or
 commit messages. Concretely:
 

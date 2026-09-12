@@ -431,10 +431,11 @@ def test_legacy_cli_uses_source_path_but_hashes_original_file_bytes(tmp_path, ca
         ("URL", "https://linkedin.com/in/example%20#synthetic-secret"),
     ],
 )
-def test_capture_cli_refuses_contact_details_before_upload(
+def test_capture_cli_filters_contact_details_before_upload(
     monkeypatch, tmp_path, capsys, column, contact
 ):
-    from people_sync import photos
+    import base64
+    from people_sync import photos, replay
 
     stored = {}
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -446,13 +447,15 @@ def test_capture_cli_refuses_contact_details_before_upload(
         writer.writerow(["First Name", "Last Name", column])
         writer.writerow(["Example", "Person", contact])
     original = path.read_bytes()
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["capture", "linkedin", "--path", str(path)])
-    assert not stored and not list((tmp_path / "state").rglob("*.json"))
+    cli.main(["capture", "linkedin", "--path", str(path)])
+    assert len(stored) == 1
+    capture = json.loads(next(iter(stored.values())))
+    assert contact.encode() not in base64.b64decode(capture["payload"]["files"][0]["data"])
+    assert replay.replay_capture(capture)["field_exclusions"]["entries"][0]["path"] == [column]
     assert path.read_bytes() == original
     output = capsys.readouterr()
-    assert contact not in str(exc.value) + output.out + output.err
-    assert "synthetic-secret" not in str(exc.value) + output.out + output.err
+    assert contact not in output.out + output.err
+    assert "synthetic-secret" not in output.out + output.err
 
 
 def test_capture_and_offline_output_preserve_good_names_and_context(monkeypatch, tmp_path, capsys):
