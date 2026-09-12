@@ -265,6 +265,10 @@ def test_privacy_filtered_class_supports_collection_boundaries(source):
         "call ＋１ (２０２) ５５５-０１４８",
         "office 123 Example Street",
         "office 221B Example Road",
+        "office 123, Example Street",
+        "office 123:Example Street",
+        "office 123%252C%2520Example Street",
+        "office 123，Example Street",
     ],
 )
 def test_export_rejects_contact_values_without_rewriting_original(tmp_path, column, contact):
@@ -294,6 +298,32 @@ def test_export_rejects_contact_values_without_rewriting_original(tmp_path, colu
     with pytest.raises(ValueError) as exc:
         captures.capture_export("linkedin", path)
     assert value not in str(exc.value) and contact not in str(exc.value)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("column", ["Company", "Position", "URL"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://linkedin.com/in/example%20?access_token=synthetic-secret",
+        "https://linkedin.com/in/example%2520%253Faccess_token=synthetic-secret",
+        "https://linkedin.com/in/example%09?access_token=synthetic-secret",
+        "https://linkedin.com/in/example&#32;?access_token=synthetic-secret",
+        "https://linkedin.com/in/example%20#synthetic-secret",
+        "https://linkedin.com/in/example ?access_token=synthetic-secret",
+    ],
+)
+def test_export_checks_whole_urls_before_decoding(tmp_path, column, url):
+    from people_sync import captures
+
+    path = tmp_path / "Connections.csv"
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["First Name", "Last Name", column])
+        writer.writerow(["Example", "Person", url])
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="^invalid capture envelope or payload checksum$"):
+        captures.capture_export("linkedin", path)
     assert path.read_bytes() == original
 
 

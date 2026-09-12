@@ -1,3 +1,4 @@
+import csv
 import json
 import sqlite3
 
@@ -431,9 +432,23 @@ def test_legacy_cli_uses_source_path_but_hashes_original_file_bytes(tmp_path, ca
 
 
 @pytest.mark.parametrize(
-    "contact", ["synthetic@example.invalid", "+1 (202) 555-0148", "123 Example Street"]
+    "column,contact",
+    [
+        ("Position", "synthetic@example.invalid"),
+        ("Position", "+1 (202) 555-0148"),
+        ("Position", "123 Example Street"),
+        ("Position", "office 123, Example Street"),
+        ("Position", "office 123:Example Street"),
+        ("Position", "office 123%252C%2520Example Street"),
+        ("URL", "https://linkedin.com/in/example%20?access_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%2520%253Faccess_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%09?access_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%20#synthetic-secret"),
+    ],
 )
-def test_capture_cli_refuses_contact_details_before_upload(monkeypatch, tmp_path, capsys, contact):
+def test_capture_cli_refuses_contact_details_before_upload(
+    monkeypatch, tmp_path, capsys, column, contact
+):
     from people_sync import photos
 
     stored = {}
@@ -441,17 +456,18 @@ def test_capture_cli_refuses_contact_details_before_upload(monkeypatch, tmp_path
     monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
     monkeypatch.setattr(photos, "get_object", stored.__getitem__)
     path = tmp_path / "Connections.csv"
-    original = (
-        "First Name,Last Name,URL,Company,Position\n"
-        f"Example,Person,https://linkedin.com/in/example,Example Co,Engineer {contact}\n"
-    ).encode()
-    path.write_bytes(original)
+    with path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["First Name", "Last Name", column])
+        writer.writerow(["Example", "Person", contact])
+    original = path.read_bytes()
     with pytest.raises(SystemExit) as exc:
         cli.main(["capture", "linkedin", "--path", str(path)])
     assert not stored and not list((tmp_path / "state").rglob("*.json"))
     assert path.read_bytes() == original
     output = capsys.readouterr()
     assert contact not in str(exc.value) + output.out + output.err
+    assert "synthetic-secret" not in str(exc.value) + output.out + output.err
 
 
 def test_capture_and_offline_output_preserve_good_names_and_context(monkeypatch, tmp_path, capsys):
