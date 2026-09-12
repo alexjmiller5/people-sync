@@ -6,6 +6,16 @@ from people_sync.scrape import strava
 from people_sync.scrape.profile import ExtractError
 
 
+@pytest.fixture(autouse=True)
+def offline_archive(mocker, monkeypatch, tmp_path):
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    mocker.patch(
+        "people_sync.photos.put_object", side_effect=lambda k, b, **kw: stored.update({k: b})
+    )
+    mocker.patch("people_sync.photos.get_object", side_effect=stored.__getitem__)
+
+
 def test_parse_maps_an_athlete_page():
     p = strava.parse(
         {
@@ -62,9 +72,9 @@ def test_list_athletes_merges_both_directions(mocker):
     mocker.patch("people_sync.scrape.strava.time.sleep")
     entries = {e["id"]: e for e in strava.list_athletes(FakeBrowser())}
     assert set(entries) == {"1", "2", "3"}
-    assert (entries["1"]["follows_me"], entries["1"]["i_follow"]) == (1, 0)
+    assert (entries["1"]["follows_me"], entries["1"]["i_follow"]) == (1, None)
     assert (entries["2"]["follows_me"], entries["2"]["i_follow"]) == (1, 1)
-    assert (entries["3"]["follows_me"], entries["3"]["i_follow"]) == (0, 1)
+    assert (entries["3"]["follows_me"], entries["3"]["i_follow"]) == (None, 1)
 
 
 def test_ingest_entries_writes_ledger_records_with_urls(mocker):

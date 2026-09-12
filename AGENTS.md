@@ -96,6 +96,27 @@ profile extractor result and mutual-row context before parsing or navigating
 back, and passes its file key to `upsert_profile` without uploading it again.
 An archive failure halts the import and leaves the existing ledger/cache intact.
 
+List collectors retain incremental `list-input-v1` observations through
+`snapshot.retain_list` before deduplication, artist/self filtering or writes.
+Each immutable capture records its source scope, selector, observation ordinal,
+original entry ordinals, observed total, exclusions and complete/truncated status.
+Empty terminal observations carry fixed termination reasons. Facebook's scroll
+stopping heuristic, Strava's single rendered page per direction and Partiful's
+rendered row count do not prove full inventory coverage. Strava emits `None`
+for unobserved follow directions. Spotify marks a scope complete only when its
+unique observed count equals the displayed total; unknown totals remain partial.
+All list commands validate file-service configuration before opening a browser.
+
+List entries and Facebook handle proposals carry `capture_refs`, with
+`capture_key`, `scope`, `ordinal` and `entry_ordinal` for every retained occurrence.
+`Record.capture_refs` is an optional in-memory tuple of these references; the
+existing `capture_key` is also in-memory only. Partiful keeps the profile key in
+`capture_key` and mutual-row references separately. Neither field enters ledger
+columns or `raw`. Multiple observations keep all references. Replay preserves
+metadata in full proposals but excludes both fields from normalized record-value
+comparisons. Pure list replay explicitly reports unsupported inventory
+reconstruction; retained scoped rows remain available as evidence.
+
 `scrape/snapshot.py` owns the profile-input-v1 privacy boundary shared by
 ordinary/coordinated scrapes and Partiful mutual profiles. `collect` reads only
 declared profile regions before field extraction and returns an ordered safe

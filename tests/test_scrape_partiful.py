@@ -182,11 +182,12 @@ def test_harvest_archives_before_parse_and_back_navigation(mocker):
     archived = {}
 
     def upload(key, body, **kwargs):
-        assert b.path.startswith("/u/")
+        c = json.loads(body)
+        assert b.path.startswith("/u/") if c["kind"] == "profile" else b.path == "/mutuals"
         archived[key] = body
 
     def broken_parser(*args):
-        assert len(archived) == 1
+        assert len(archived) == 2
         raise ExtractError("no-profile")
 
     mocker.patch("people_sync.photos.put_object", side_effect=upload)
@@ -194,7 +195,7 @@ def test_harvest_archives_before_parse_and_back_navigation(mocker):
     mocker.patch.object(partiful, "parse", side_effect=broken_parser)
     entries = list(partiful.harvest(b, limit=1))
 
-    assert len(archived) == 1
+    assert len(archived) == 3
     entry = entries[0][2]
     assert entry["error"] == "no-profile"
     saved = captures.validate(json.loads(archived[entry["raw_r2_key"]]))["payload"]
@@ -220,7 +221,7 @@ def test_harvest_archive_failure_stops_before_parse_and_back(mocker, failure):
     with pytest.raises(RuntimeError, match="raw archive failed"):
         list(partiful.harvest(b))
     parse.assert_not_called()
-    assert b.path == "/u/uid0"
+    assert b.path == "/mutuals"
 
 
 def test_ingest_reuses_harvest_archive(mocker):
@@ -231,7 +232,7 @@ def test_ingest_reuses_harvest_archive(mocker):
     cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
     entry = next(partiful.harvest(b, limit=1))[2]
     partiful.ingest_entry(entry)
-    upload.assert_called_once()
+    assert upload.call_count == 2
     assert cache.call_args.kwargs["raw_r2_key"] == entry["raw_r2_key"]
 
 
