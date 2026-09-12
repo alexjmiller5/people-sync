@@ -98,7 +98,7 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 
 ### Task 2B: Profile inputs and legacy parser compatibility
 
-**Files:** `src/people_sync/scrape/snapshot.py`, `run.py`, `partiful.py`, `venmo.py`, `photos.py`, relevant capture/profile/DOM/Partiful/Venmo tests.
+**Files:** `src/people_sync/scrape/snapshot.py`, `run.py`, `partiful.py`, `venmo.py`, `photos.py`, `cli.py`, relevant capture/profile/DOM/Partiful/Venmo/CLI tests.
 
 **Interfaces:** Preserve platform `parse(eval_result, captured)` and `photos.archive_profile(..., context=None)`; add `snapshot.collect(browser, platform: str) -> dict` returning scoped safe DOM input, selector/scope, exclusions and explicit success/partial state. Retain that input alongside extractor output before interpreting the latter. Do not implement list-page capture here; 2C owns it.
 
@@ -111,6 +111,7 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 - [ ] Run the focused test and record failure. Implement scoped DOM collection, with executable/hidden/form/session material excluded and source-specific permitted surfaces only. Record collection failures explicitly, preserving already received permitted responses even when later extraction raises. Retained input, not an unsanitized sibling object, supplies the parser/cache.
 - [ ] Keep Venmo on its strict selected `otherUser` boundary, never a whole DOM/Next.js/network dump. Add explicit legacy REST `display_name`/`profile_picture_url` support alongside web `displayName`/`profilePictureUrl`, with synthetic pure replay tests. A join timestamp is not a birthday.
 - [ ] Preserve safe existing avatar-key conventions, but use a collision-resistant opaque component for record IDs with characters the file service rejects. Never reuse an invalid prior key on the same-image shortcut. Existing retained objects/keys are not renamed or deleted. Add percent-encoded-handle and safe-key compatibility tests.
+- [ ] Add `scrape <platform> --record-id ID` for an explicitly selected fresh or stale record, using the existing scrape flow and halt rules. Validate that the record exists, belongs to the requested source and is pending/matched rather than ignored/tombstoned. The default queue remains unchanged. Test that only that record is selected and invalid/cross-platform IDs fail before browser navigation. This supports Task5's selective recapture without falsifying scraped_at or restarting a broad backfill.
 - [ ] Run profile, coordinated, Partiful, Venmo, privacy and DOM-JS tests, an ordering mutation, full pytest/Ruff; commit and report exact snapshot/capture interfaces to 2C.
 
 ### Task 2C: Incremental list-source retention
