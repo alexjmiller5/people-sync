@@ -379,3 +379,133 @@ def test_instagram_structural_placeholders_remain_replayable(tmp_path):
         (2, "skipped"),
         (3, "parsed"),
     ]
+
+
+@pytest.mark.parametrize("source", ["facebook", "instagram"])
+@pytest.mark.parametrize(
+    "epoch",
+    [
+        True,
+        False,
+        -1,
+        4102444800,
+        4111111111111111,
+        1700000000.0,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "1700000000",
+        "",
+    ],
+)
+def test_invalid_epoch_is_excluded_and_checksum_valid_forgery_rejected(tmp_path, source, epoch):
+    if source == "facebook":
+        body = {"friends_v2": [{"name": "Example Person", "timestamp": epoch}]}
+        path = tmp_path / "friends.json"
+        original_path = path
+    else:
+        body = [{"string_list_data": [{"value": "example_123456789", "timestamp": epoch}]}]
+        path = tmp_path
+        original_path = path / "followers.json"
+        (path / "following.json").write_text('{"relationships_following":[]}')
+    original = json.dumps(body).encode()
+    original_path.write_bytes(original)
+    capture = captures.capture_export(source, path)
+    result = replay.replay_capture(capture)
+    assert result["status"] == "ok" and len(result["records"]) == 1
+    raw = result["records"][0]["raw"]
+    entry = raw if source == "facebook" else raw["followers"]["string_list_data"][0]
+    assert entry["timestamp"] is None
+    assert result["field_exclusions"]["entries"][0]["reason"] == "unsafe-or-ambiguous-value"
+    assert original_path.read_bytes() == original
+    capture["payload"]["files"][0]["data"] = base64.b64encode(original).decode()
+    capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
+    assert replay.replay_capture(capture)["status"] == "invalid"
+    with pytest.raises(ValueError):
+        captures._check_export_value(epoch, "timestamp")
+
+
+@pytest.mark.parametrize("epoch", [0, 1, 1700000000, 4102444799])
+def test_supported_integer_epochs_survive_unchanged(tmp_path, epoch):
+    path = tmp_path / "friends.json"
+    original = captures.encode({"friends_v2": [{"name": "Example Person", "timestamp": epoch}]})
+    path.write_bytes(original)
+    capture = captures.capture_export("facebook", path)
+    result = replay.replay_capture(capture)
+    assert result["records"][0]["raw"]["timestamp"] == epoch
+    assert result["field_exclusions"]["entries"] == []
+    assert retained(capture) == original
+
+
+def test_unicode_linkedin_slugs_preserve_parser_ids_and_every_named_row(tmp_path):
+    path = tmp_path / "Connections.csv"
+    original = (
+        "First Name,Last Name,URL,Company\n"
+        "Example,One,https://www.linkedin.com/in/exampl%C3%A9-123456789/,Studio\n"
+        "Example,Two,https://linkedin.com/in/%E6%B5%8B%E8%AF%95-987654321,Studio\n"
+        "Example,Three,https://linkedin.com/in/example-%E2%80%9Cnickname%E2%80%9D-123456789/,Studio\n"
+        ",,,\n"
+    ).encode()
+    path.write_bytes(original)
+    capture = captures.capture_export("linkedin", path)
+    result = replay.replay_capture(capture)
+    expected = [
+        "exampl%c3%a9-123456789",
+        "%e6%b5%8b%e8%af%95-987654321",
+        "example-%e2%80%9cnickname%e2%80%9d-123456789",
+    ]
+    assert [r["source_id"] for r in result["records"]] == expected
+    assert [r["handle"] for r in result["records"]] == expected
+    assert [o["record_ids"] for o in result["observations"]] == [
+        ["linkedin:" + s] for s in expected
+    ] + [[]]
+    assert [o["ordinal"] for o in result["observations"]] == [0, 1, 2, 3]
+    assert result["field_exclusions"]["entries"] == []
+    assert retained(capture) == path.read_bytes() == original
+    assert replay.replay_capture(capture) == result
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "example%2Fother-123456789",
+        "example%252Fother-123456789",
+        "example%40example.test",
+        "tel%3A123456789",
+        "example%00-123456789",
+        "example%5Cother",
+        "example%3Fsecret",
+        "example%23secret",
+        "example%20other",
+        "example%EF%BC%8Fother",
+        "example%E2%80%8Bother",
+        "%FF",
+        "%C0%AF",
+        "password-synthetic-123456789",
+        "pass%77ord-synthetic-123456789",
+        "example%EF%BC%A0example.test",
+        "example%26%2364%3Bexample.test",
+    ],
+)
+def test_unicode_linkedin_boundary_still_rejects_encoded_forbidden_segments(tmp_path, slug):
+    path = tmp_path / "Connections.csv"
+    original = (
+        f"First Name,Last Name,URL\nExample,Person,https://www.linkedin.com/in/{slug}/\n".encode()
+    )
+    path.write_bytes(original)
+    capture = captures.capture_export("linkedin", path)
+    result = replay.replay_capture(capture)
+    assert result["records"] == []
+    assert result["field_exclusions"]["entries"][0]["path"] == ["URL"]
+    capture["payload"]["files"][0]["data"] = base64.b64encode(original).decode()
+    capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
+    assert replay.replay_capture(capture)["status"] == "invalid"
+
+
+def test_shared_linkedin_identity_preserves_existing_ascii_alphabet():
+    from people_sync.scrape import snapshot
+
+    assert snapshot._identity("example.name_123-456", "linkedin") == "example.name_123-456"
+    for value in (".", "..", "%2E%2E"):
+        with pytest.raises(ValueError):
+            snapshot._identity(value, "linkedin")

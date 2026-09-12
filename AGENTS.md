@@ -327,10 +327,27 @@ file-level metadata; `field` plus an index identifies an excluded original
 column/object member without retaining an unknown key, and `preamble` identifies
 discarded CSV preamble text. No excluded value enters the manifest.
 Canonical LinkedIn URLs and Instagram URLs/handles use the shared typed URL
-boundary; arbitrary free text retains generic privacy checks. Envelope validation
+boundary. LinkedIn permits a single decoded UTF-8 segment with Unicode letters,
+marks, numbers and Pi/Pf quotation punctuation plus the existing ASCII `._-`;
+controls, separators, residual escapes, dot traversal and credential markers fail.
+Inspection never rewrites the URL or the parser's lowercased encoded record ID.
+Export epochs are integer Unix seconds in `[0, 4102444800)` (1970 through 2099);
+booleans, floats, strings and out-of-range values are excluded at capture and
+rejected during revalidation. JSON null is the missing epoch representation.
+Arbitrary free text retains generic privacy checks. Envelope validation
 and offline replay reject unsafe retained values, even with a valid checksum.
 Replay reports exclusions and missing-value effects as proposals; this is not
 authorization to replace current ledger/cache fields. It does not apply changes.
+
+Replay marks proposed records affected by permitted-field exclusions with
+`Record.hold_existing`, an in-memory flag passed through `sources.retained_records`.
+The flag follows the file role and retained record input, including the winning
+duplicate proposal, and never becomes a ledger column or part of `raw`.
+`ledger.upsert` holds flagged EXISTING rows completely unchanged, including
+decisions, tombstones and timestamps, and continues eligible safe/new rows.
+Its optional `held` result lists `record_id`, `capture_key` and a fixed reason;
+held rows are excluded from `new`/`updated` counts. Import consumers must exclude
+these held IDs from successful-import claims, including `imported_from` edges.
 
 The repo is public-grade: no personal data in code, tests, fixtures, docs, or
 commit messages. Concretely:
