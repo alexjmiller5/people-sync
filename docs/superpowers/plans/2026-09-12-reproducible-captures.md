@@ -74,6 +74,63 @@
 - [ ] Retain list-page observations before per-entry filtering/deduplication for Facebook/Spotify/Strava/Partiful. Save page/scroll ordinal, source scope and complete/truncated outcome. Preserve virtualized entries incrementally. Archive errors stop before new ledger/profile writes. Ensure Partiful source DOM is saved on direct and mutual-list paths.
 - [ ] Run focused ingestion, source, list, archive and `test_dom_js` tests; perform a mutation check on capture ordering/privacy exclusion; full pytest/ruff; commit and report.
 
+### Task 2A: File and address-book capture-before-parse
+
+Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subtask. Its requirements above still bind all three; no source is deferred or omitted.
+
+**Files:** `src/people_sync/cli.py`, `captures.py`, `replay.py`, `sources.py`, `parsers.py`, the optional field on `ledger.Record`; `tests/test_capture_ingest.py`, relevant capture/replay/source/CLI tests.
+
+**Interfaces:** Keep `fetch_google() -> list[Record]` and `fetch_apple() -> list[Record]` callable; add `collect_google() -> dict`, `collect_apple() -> dict`, `parse_google(payload: dict) -> list[Record]`, `parse_apple(payload: dict) -> list[Record]`. Collections are privacy-filtered source-shaped payloads with original row ordinals and explicit page/database completeness or acquisition-failure entries. Add `Record.capture_key: str | None = None`; it is not serialized into ledger raw or a table column. Register contacts replay through the same pure parsers.
+
+- [ ] Add a failing real-CLI test that retains a synthetic Facebook document with one valid and one malformed entry; archive failure must precede parser/ledger calls. The fake retained-file service records actual bytes and returns them for verification.
+  ```python
+  export.write_text('{"friends_v2":[{"name":"Example Person"},{"timestamp":7}]}')
+  cli.main(["ingest", "facebook", "--path", str(export)])
+  assert len(retained_capture_entries) == 2
+  assert len(written_records) == 1
+  assert written_records[0].capture_key == retained_key
+  ```
+- [ ] Run the focused ingest test and record its failure. Implement the file path as `capture_export -> retain -> replay_capture -> Record -> ledger.upsert`, refusing non-ok replay. The record construction is `Record(**(row | {"capture_key": retained_key}))`; parse the retained safe bytes, never reread the unfiltered original for ingestion.
+- [ ] Separate Google acquisition from primary-field selection. Retain allowed People API structures (names, memberships, organizations, birthdays, photos, resourceName) before their existing transformations; remove forbidden fields recursively within those known structures. Preserve resource enumeration per page without list phone/email summaries or secret page tokens. Record `has_next`, ordinal, completion and sanitized acquisition failures. Keep typed source IDs, numbers and timestamps distinct from free text. Archive before parsing into Records.
+- [ ] Separate Apple acquisition from name/boolean/birthday transforms. Preserve permitted original scalar fields and birthday epoch number, plus explicit local-time conversion inputs for deterministic replay. Do not read phone/email values. Record database ordinal and sanitized failures, not personal DB paths. Use the retained safe source payload for `parse_apple` and the existing raw-row shape.
+- [ ] Enforce privacy again when validating contacts captures, so a caller cannot bypass filtering with a hand-built checksum-valid envelope. Reject unsafe/unknown input or preserve an explicit exclusion, never label unvalidated data safe. Add pure contacts replay, archive-failure/no-write, partial acquisition, source-value preservation and transformed-value tests. Fix the safe invalid-inventory identifier in this existing CLI edit.
+- [ ] Run covering red/green tests, one capture-order/privacy mutation, full pytest and Ruff. Commit normally and report exact payload/parser interfaces for 2B/2C/3/4, with concise command/output evidence.
+
+### Task 2B: Profile inputs and legacy parser compatibility
+
+**Files:** `src/people_sync/scrape/snapshot.py`, `run.py`, `partiful.py`, `venmo.py`, `photos.py`, relevant capture/profile/DOM/Partiful/Venmo tests.
+
+**Interfaces:** Preserve platform `parse(eval_result, captured)` and `photos.archive_profile(..., context=None)`; add `snapshot.collect(browser, platform: str) -> dict` returning scoped safe DOM input, selector/scope, exclusions and explicit success/partial state. Retain that input alongside extractor output before interpreting the latter. Do not implement list-page capture here; 2C owns it.
+
+- [ ] Write a failing fake-browser integration test recording call order. For both ordinary/coordinated profiles and Partiful mutual profiles, source DOM collection precedes field extraction, verified retention precedes parsing, and an archive failure prevents all downstream writes.
+  ```python
+  assert events.index("source-dom") < events.index("field-extractor")
+  assert events.index("verified-retention") < events.index("parse-profile")
+  assert not any(event == "write-profile" for event in archive_failure_events)
+  ```
+- [ ] Run the focused test and record failure. Implement scoped DOM collection, with executable/hidden/form/session material excluded and source-specific permitted surfaces only. Record collection failures explicitly, preserving already received permitted responses even when later extraction raises. Retained input, not an unsanitized sibling object, supplies the parser/cache.
+- [ ] Keep Venmo on its strict selected `otherUser` boundary, never a whole DOM/Next.js/network dump. Add explicit legacy REST `display_name`/`profile_picture_url` support alongside web `displayName`/`profilePictureUrl`, with synthetic pure replay tests. A join timestamp is not a birthday.
+- [ ] Preserve safe existing avatar-key conventions, but use a collision-resistant opaque component for record IDs with characters the file service rejects. Never reuse an invalid prior key on the same-image shortcut. Existing retained objects/keys are not renamed or deleted. Add percent-encoded-handle and safe-key compatibility tests.
+- [ ] Run profile, coordinated, Partiful, Venmo, privacy and DOM-JS tests, an ordering mutation, full pytest/Ruff; commit and report exact snapshot/capture interfaces to 2C.
+
+### Task 2C: Incremental list-source retention
+
+**Files:** `src/people_sync/cli.py`, `scrape/facebook.py`, `spotify.py`, `strava.py`, `partiful.py`, shared snapshot/replay helpers only as needed; respective list tests.
+
+**Interfaces:** Existing list command names stay unchanged. Each retained page/scroll observation exposes its immutable capture key with original entry ordinals, source scope and observed complete/truncated status. Carry that key with records/handle proposals for Task 3, without source attributes on provenance.
+
+- [ ] For each of Facebook, Spotify, Strava and Partiful, write a failing collector test with repeated and virtualized rows. Capture must occur before deduplication or mutation; an upload failure must stop new writes. Preserve observations even if a later page fails.
+  ```python
+  assert retained_pages[0]["entries"] == first_page_before_filtering
+  assert retained_pages[1]["ordinal"] == 1
+  assert result["complete"] is False  # acquisition stopped before the end
+  assert writes_after_archive_failure == []
+  ```
+- [ ] Run the source-specific tests and record failures. Integrate the existing scoped capture/retention helper at each list boundary. Preserve individual page/scroll observations, expected totals where observed, and explicit termination reasons; do not make an unfinished list imply removals or a full inventory.
+- [ ] Ensure Partiful captures mutual rows before clicking and profile inputs through 2B, so direct and mutual paths share the profile contract. Keep its exact Instagram-link matching rule and existing safe mutation behavior.
+- [ ] Replay supported list formats through pure existing interpretation helpers, or return explicit unsupported status with retained-source limitations. Do not claim successful reconstruction when an extractor cannot run offline. Test archive failures, virtualized pages, duplicates, partial completion and capture-key propagation for all four collectors.
+- [ ] Run focused red/green and one capture-order mutation, then full pytest/Ruff, commit and report. Mark parent Task 2 complete only after all 2A/2B/2C reviews pass.
+
 ### Task 3: Pin source and promoted-fact provenance to immutable captures
 
 **Files:** Modify `src/people_sync/ledger.py`, `src/people_sync/scrape/profile.py`, `src/people_sync/promote.py`; create `tests/test_capture_provenance.py`, extend `tests/test_promote.py`.
