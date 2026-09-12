@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hashlib
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -24,6 +25,7 @@ import httpx
 from websockets.exceptions import ConnectionClosed
 
 from people_sync import lifedata, photos
+from people_sync.scrape import snapshot
 from people_sync.scrape.cdp import Browser, CdpError, ScrapeStopped
 from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, challenge_marker
 from people_sync.scrape.profile import ExtractError, upsert_profile, Profile
@@ -49,7 +51,12 @@ def _stale_cutoff() -> str:
     return cutoff.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _records_sql(platform: str, cutoff: str) -> str:
+def _records_sql(platform: str, cutoff: str, record_id: str | None = None) -> str:
+    selection = (
+        f"AND c.id = {lifedata.sq(record_id)} "
+        if record_id is not None
+        else f"AND (p.record_id IS NULL OR p.scraped_at < {lifedata.sq(cutoff)}) "
+    )
     return (
         "SELECT c.id, c.handle, c.name, "
         "p.avatar_r2_key AS avatar_r2_key, p.avatar_sha256 AS avatar_sha256 "
@@ -57,23 +64,33 @@ def _records_sql(platform: str, cutoff: str) -> str:
         "LEFT JOIN people_sync_profiles p ON p.record_id = c.id "
         f"WHERE c.source = {lifedata.sq(platform)} "
         "AND c.deleted_at IS NULL "
-        "AND c.status IN ('pending', 'matched') "
-        f"AND (p.record_id IS NULL OR p.scraped_at < {lifedata.sq(cutoff)}) "
-        "ORDER BY c.first_seen"
+        "AND c.status IN ('pending', 'matched') " + selection + "ORDER BY c.first_seen"
     )
 
 
-def _select_records(platform: str) -> list[dict]:
-    return lifedata.sql(_records_sql(platform, _stale_cutoff()))
+def _select_records(platform: str, record_id: str | None = None) -> list[dict]:
+    records = lifedata.sql(_records_sql(platform, _stale_cutoff(), record_id))
+    if record_id is not None and len(records) != 1:
+        raise ValueError("record must exist in this source and be pending or matched, not deleted")
+    return records
 
 
 def _record_key(record_id: str) -> str:
-    return record_id.replace(":", "_").replace("/", "_")
+    key = record_id.replace(":", "_").replace("/", "_")
+    return key if _safe_key(key) else hashlib.sha256(record_id.encode()).hexdigest()
+
+
+def _safe_key(key: str | None) -> bool:
+    return (
+        bool(key)
+        and not re.search(r"[%\\\x00-\x1f\x7f]", key)
+        and all(p not in {"", ".", ".."} for p in key.split("/"))
+    )
 
 
 def _ext_from_url(url: str) -> str:
     ext = os.path.splitext(url.split("?", 1)[0])[1].lstrip(".").lower()
-    return ext or "jpg"
+    return ext if ext in {"jpg", "jpeg", "png", "webp", "gif", "avif"} else "jpg"
 
 
 def _fetch_avatar_via_page(browser: Browser, url: str) -> bytes | None:
@@ -102,6 +119,8 @@ def _resolve_avatar(
     existing_key: str | None,
     existing_sha: str | None,
 ) -> tuple[str | None, str | None]:
+    if not _safe_key(existing_key):
+        existing_key, existing_sha = None, None
     if not avatar_url:
         return existing_key, existing_sha
 
@@ -157,6 +176,8 @@ def _collect_profile(browser, module, platform, index, record):
         }
     nav_result = browser.navigate(url, NAV_WAIT_MS, capture=module.CAPTURE, **options)
     captured = nav_result.get("captured", [])
+    context = None
+    failure = "readiness-failed"
     try:
         if options:
             log.info(
@@ -174,6 +195,7 @@ def _collect_profile(browser, module, platform, index, record):
             log.warning("page never became ready", platform=platform, index=index, reason="timeout")
 
         enrich = getattr(module, "enrich", None)
+        failure = "enrichment-failed"
         if enrich is not None:
             captured = list(captured)
             captured.extend(enrich(browser, handle) or [])
@@ -181,19 +203,35 @@ def _collect_profile(browser, module, platform, index, record):
         page_text = browser.eval(PAGE_TEXT_JS) or ""
         marker = challenge_marker(page_text)
         if marker:
+            failure = "challenge"
             raise ScrapeStopped(f"challenge page: {marker}")
+        context = {"source_dom": snapshot.collect(browser, platform)}
+        failure = "extraction-failed"
         raw_eval = browser.eval(module.EXTRACTOR_JS)
     except Exception:
         # A readiness/enrichment/extractor failure must not discard responses
         # already returned by navigation. Do not capture additional page state.
-        if captured:
-            photos.archive_profile(platform, record["id"], None, captured)
+        if captured or context is not None:
+            context = context or {
+                "source_dom": snapshot.incomplete(platform, "collection-not-reached")
+            }
+            photos.archive_profile(
+                platform, record["id"], None, captured, context=context | {"failure": failure}
+            )
         raise
 
-    raw_key = photos.archive_profile(platform, record["id"], raw_eval, captured)
-    eval_result = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
+    payload = snapshot.prepare(platform, record["id"], raw_eval, captured, context=context)
+    raw_key = photos.archive_profile(
+        platform,
+        record["id"],
+        payload.get("raw_eval", payload["eval"]),
+        payload["captured"],
+        context=payload["context"],
+    )
+    eval_result = payload["eval"]
+    eval_result = json.loads(eval_result) if isinstance(eval_result, str) else eval_result
     try:
-        profile = module.parse(eval_result, captured)
+        profile = module.parse(eval_result, payload["captured"])
     except ExtractError as e:
         e.raw_r2_key = raw_key
         raise
@@ -225,6 +263,7 @@ def scrape(
     data_dir: str | None = None,
     approve_command: str | None = None,
     targets: list[str] | None = None,
+    record_id: str | None = None,
 ) -> dict:
     os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
     # Import first: reject invalid platform names before using one in a path.
@@ -234,7 +273,9 @@ def scrape(
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"done": 0, "skipped": 0, "halted": "platform run already active"}
-        return _scrape(platform, max_n, state_path, endpoint, data_dir, approve_command, targets)
+        return _scrape(
+            platform, max_n, state_path, endpoint, data_dir, approve_command, targets, record_id
+        )
 
 
 def _scrape(
@@ -245,6 +286,7 @@ def _scrape(
     data_dir: str | None = None,
     approve_command: str | None = None,
     targets: list[str] | None = None,
+    record_id: str | None = None,
 ) -> dict:
     if targets is not None and (
         not 1 <= len(targets) <= 10
@@ -254,7 +296,9 @@ def _scrape(
         raise ValueError("targets must contain one to ten distinct, nonempty target IDs")
     module = import_module(f"people_sync.scrape.{platform}")
     pacer = Pacer(platform, state_path=state_path)
-    records = _select_records(platform)
+    records = (
+        _select_records(platform, record_id) if record_id is not None else _select_records(platform)
+    )
     if max_n is not None:
         records = records[:max_n]
 

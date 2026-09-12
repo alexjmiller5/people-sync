@@ -20,15 +20,18 @@ EXTRACTOR_JS = """(() => {
 
 
 def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
-    if eval_result.get("error") or not all(
-        eval_result.get(key) for key in ("id", "username", "displayName")
+    name = eval_result.get("displayName") or eval_result.get("display_name")
+    if (
+        eval_result.get("error")
+        or not name
+        or not all(eval_result.get(key) for key in ("id", "username"))
     ):
         raise ExtractError("no-profile")
     return Profile(
         platform="venmo",
         platform_id=str(eval_result["id"]),
         profile_url=URL.format(handle=quote(eval_result["username"], safe="")),
-        display_name=eval_result["displayName"],
-        avatar_url=eval_result.get("profilePictureUrl"),
+        display_name=name,
+        avatar_url=eval_result.get("profilePictureUrl") or eval_result.get("profile_picture_url"),
         raw=eval_result,
     )

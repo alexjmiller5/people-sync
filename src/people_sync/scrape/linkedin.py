@@ -7,7 +7,8 @@ follower counts, the "You both ..." highlights, and the About text - and the
 profile picture is the `profile-displayphoto` image. Experience and
 education sections are not in the rendered text, and the Voyager GraphQL
 calls that carry them do not fire on every load, so any captured response
-is kept verbatim in `raw` for later parsing rather than relied on.
+is filtered at retention to matching profile input before reaching `raw`.
+Unsupported or unscoped response structures are explicitly excluded.
 """
 
 import re
