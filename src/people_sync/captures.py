@@ -3,13 +3,16 @@
 import base64
 import csv
 import hashlib
+import html
 import io
 import json
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote_plus, urlsplit
 from uuid import uuid4
 
 KINDS = {"profile", "export", "list", "contacts"}
@@ -94,7 +97,8 @@ def validate(capture) -> dict:
                 _require(isinstance(file["filename"], str) and file["filename"])
                 _require(file["filename"] not in {".", ".."})
                 _require(not any(char in file["filename"] for char in ("/", "\\", "\0")))
-                base64.b64decode(file["data"], validate=True)
+                _check_export_privacy(c["source"], base64.b64decode(file["data"], validate=True))
+                _check_export_value(file["filename"])
                 roles.append(file["role"])
             _require(
                 sorted(roles)
@@ -108,7 +112,7 @@ def validate(capture) -> dict:
             )
         _require(hashlib.sha256(encode(p)).hexdigest() == c["payload_sha256"])
         encode(c)
-    except (KeyError, TypeError, ValueError, RecursionError):
+    except (KeyError, TypeError, ValueError, RecursionError, StopIteration, csv.Error):
         raise ValueError("invalid capture envelope or payload checksum") from None
     return c
 
@@ -116,6 +120,71 @@ def validate(capture) -> dict:
 def _require(condition):
     if not condition:
         raise ValueError("invalid capture")
+
+
+def _check_export_value(value, field=""):
+    """Reject contact-like or ambiguous values; never redact or rewrite source text."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _check_export_value(key)
+            _check_export_value(item, key)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _check_export_value(item)
+        return
+    if value is None or isinstance(value, bool):
+        return
+    if field == "timestamp" and isinstance(value, (int, float)):
+        return  # Export epoch timestamps are typed metadata, not contact numbers.
+    text = str(value)
+    if field in {"Connected On", "Creation Timestamp", "Last Modified Timestamp"}:
+        for fmt in ("%d %b %Y", "%Y-%m-%d %H:%M:%S UTC", "%Y-%m-%d"):
+            try:
+                datetime.strptime(text, fmt)
+                return
+            except ValueError:
+                pass
+    # Decode only an inspection copy. Nested encodings cannot bypass the check.
+    for _ in range(4):
+        decoded = unicodedata.normalize("NFKC", html.unescape(unquote_plus(text)))
+        if decoded == text:
+            break
+        text = decoded
+    else:
+        raise ValueError("export privacy boundary could not be established")
+    text = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    _require(not re.search(r"\S+\s*(?:@|\[at\]|\(at\))\s*\S+|\d(?:[\W_]*\d){6}", text, re.I))
+    _require(
+        not re.search(r"\b(?:mailto|tel|sms|phone|address)\s*:|\bp\.?\s*o\.?\s*box\b", text, re.I)
+    )
+    # Numbered prose may be an address even without a familiar street suffix.
+    # Refuse that ambiguity rather than stripping useful names/professional context.
+    words = re.sub(r"[-_/]", " ", text)
+    _require(not re.search(r"\b\d{1,6}[a-z]?\s+[^\W\d_]", words, re.I))
+    _require(
+        not re.search(
+            r"\b(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|way|drive|dr|court|ct|rue|calle|strasse|straße)\.?\s+\d",
+            words,
+            re.I,
+        )
+    )
+    for url in re.findall(r"\b[a-z][a-z0-9+.-]*://\S+", text, re.I):
+        parsed = urlsplit(url)
+        _require(not (parsed.username or parsed.query or parsed.fragment))
+
+
+def _check_export_privacy(source: str, data: bytes) -> None:
+    """The shared retention/replay boundary checks every retained value, including URLs."""
+    if source != "linkedin":
+        _check_export_value(json.loads(data))
+        return
+    rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig")), strict=True))
+    start = next(i for i, row in enumerate(rows) if row[:1] == ["First Name"])
+    _check_export_value(rows[: start + 1])
+    for row in rows[start + 1 :]:
+        for i, value in enumerate(row):
+            _check_export_value(value, rows[start][i] if i < len(rows[start]) else "")
 
 
 def state_directory(state_dir=None) -> Path:
@@ -259,7 +328,8 @@ def capture_export(source: str, path) -> dict:
         {"files": files},
         completeness="privacy-filtered",
         exclusions=[
-            f"{source}-export-allowlist-v1: only relationship identity, names, timestamps and professional fields; "
-            "other fields, preambles and unrelated lists excluded; free text is not semantically scrubbed",
+            f"{source}-export-allowlist-v2: only relationship identity, names, timestamps and professional fields; "
+            "other fields, preambles and unrelated lists excluded; contact-like values, ambiguous numbered text "
+            "and URLs with user information, queries or fragments cause rejection without rewriting inputs",
         ],
     )
