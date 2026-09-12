@@ -151,7 +151,8 @@ def test_partiful_mutual_signed_avatar_retention_before_acquisition(
         entry = next(partiful.harvest(browser, limit=1))[2]
         assert partiful.ingest_entry(entry, browser) == "partiful:uid0"
         assert events.index("verified-retention") < events.index("fetch-avatar")
-        assert stored[rows[-1]["avatar_r2_key"]] == b"synthetic-image"
+        profile = next(row for row in rows if "avatar_r2_key" in row)
+        assert stored[profile["avatar_r2_key"]] == b"synthetic-image"
     assert all(b"SECRET" not in body for body in stored.values())
     assert "SECRET" not in json.dumps(rows) and "SECRET" not in capsys.readouterr().out
 

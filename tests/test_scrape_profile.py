@@ -35,7 +35,7 @@ def test_insert_when_no_existing_row(mocker):
         "profiles/instagram/instagram_alice123/2026-09-04T00:00:00.000Z.json",
     )
 
-    table, rows = insert.call_args.args
+    table, rows = insert.call_args_list[0].args
     assert table == "people_sync_profiles"
     row = rows[0]
     assert row["id"] == "instagram:alice123"
@@ -85,7 +85,7 @@ def test_update_when_existing_row_emits_update_not_insert(mocker):
     insert.assert_not_called()
     assert sql.call_count == 2
     select_stmt = sql.call_args_list[0].args[0]
-    assert "SELECT id FROM people_sync_profiles" in select_stmt
+    assert "SELECT id, deleted_at FROM people_sync_profiles" in select_stmt
     assert "record_id = 'instagram:alice123'" in select_stmt
 
     update_stmt = sql.call_args_list[1].args[0]

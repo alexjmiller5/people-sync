@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 
 from people_sync import lifedata
+from people_sync.ledger import capture_edge_id
 
 FROM_KIND = "people_sync_profiles"
 PLATFORMS = ("facebook", "linkedin", "strava", "instagram", "partiful", "spotify", "venmo")
@@ -36,6 +37,7 @@ class Op:
     platform: str
     value: str
     detail: dict = field(default_factory=dict)
+    raw_r2_key: str | None = None
 
 
 def _norm(s: str | None) -> str:
@@ -69,13 +71,11 @@ def plan(
 
     ops: list[Op] = []
     for p in profiles:
+        start = len(ops)
         pid, rid, plat = p["person_id"], p["record_id"], p["platform"]
         person = people.get(pid)
-        if not person:
+        if not person or not p.get("raw_r2_key"):
             continue
-
-        def edge(to_kind: str, to_ref: str) -> str:
-            return f"{FROM_KIND}:{rid}:{to_ref}"
 
         city = (p.get("location") or "").strip()
         if city:
@@ -92,18 +92,14 @@ def plan(
                         {"field": "city", "existing": sorted(open_locs[pid])},
                     )
                 )
-            elif edge("person_locations", f"loc:{pid}:{rid}") not in edges:
+            else:
                 ops.append(
                     Op("location", pid, rid, plat, city, {"cue": p.get("location_cue") or city})
                 )
 
         work = p.get("work") or []
         company = (work[0] if isinstance(work, list) and work else "").strip() if work else ""
-        if (
-            company
-            and _norm(company) not in open_jobs.get(pid, set())
-            and edge("person_employments", f"emp:{pid}:{rid}") not in edges
-        ):
+        if company and _norm(company) not in open_jobs.get(pid, set()):
             ops.append(Op("employment", pid, rid, plat, company, {"cue": company}))
 
         bday = p.get("birthday")
@@ -111,8 +107,7 @@ def plan(
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}|--\d{2}-\d{2}", bday):
                 existing = person.get("birthday")
                 if not existing:
-                    if edge("people", pid) + ":birthday" not in edges:
-                        ops.append(Op("birthday", pid, rid, plat, bday, {"cue": bday}))
+                    ops.append(Op("birthday", pid, rid, plat, bday, {"cue": bday}))
                 elif existing != bday and not (
                     existing.startswith("--") and bday.endswith(existing[2:])
                 ):
@@ -161,6 +156,30 @@ def plan(
                     {"sha256": p["avatar_sha256"], "fetched_at": p.get("scraped_at")},
                 )
             )
+        for op in ops[start:]:
+            op.raw_r2_key = p.get("raw_r2_key")
+        # Retain legacy IDs, and suppress retries of exact capture evidence
+        # (including tombstoned edges) for every supported fact kind.
+        targets = {
+            "location": ("person_locations", f"loc:{pid}:{rid}", "city"),
+            "employment": ("person_employments", f"emp:{pid}:{rid}", "company"),
+            "birthday": ("people", pid, "birthday"),
+            "birthday_month": ("people", pid, "slightly_known_birthday"),
+            "photo": ("person_photos", f"photo:{pid}:{rid}", "r2_key"),
+        }
+        ops[start:] = [
+            op
+            for op in ops[start:]
+            if op.kind == "conflict"
+            or (
+                _edge(op, *targets[op.kind], False)["id"] not in edges
+                and (
+                    f"{FROM_KIND}:{rid}:{targets[op.kind][1]}"
+                    + (f":{targets[op.kind][2]}" if targets[op.kind][0] == "people" else "")
+                )
+                not in edges
+            )
+        ]
     return ops
 
 
@@ -169,7 +188,7 @@ def load_state(
 ) -> tuple[list[dict], dict[str, dict], list[dict], list[dict], list[dict], set[str]]:
     plats = ", ".join(lifedata.sq(p) for p in platforms)
     profiles = lifedata.sql(
-        "SELECT p.record_id, p.platform, p.location, p.work, p.birthday, p.avatar_r2_key, p.avatar_sha256, p.scraped_at, "
+        "SELECT p.record_id, p.platform, p.location, p.work, p.birthday, p.avatar_r2_key, p.avatar_sha256, p.scraped_at, p.raw_r2_key, "
         "r.person_id FROM people_sync_profiles p JOIN people_sync_records r ON r.id = p.record_id "
         f"WHERE p.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'matched' AND r.person_id IS NOT NULL AND p.platform IN ({plats})"
     )
@@ -195,21 +214,22 @@ def load_state(
     edges = {
         e["id"]
         for e in lifedata.sql(
-            f"SELECT id FROM provenance WHERE from_kind = {lifedata.sq(FROM_KIND)} AND deleted_at IS NULL"
+            f"SELECT id FROM provenance WHERE from_kind IN ({lifedata.sq(FROM_KIND)}, 'takeout')"
         )
     }
     return profiles, people, locations, employments, photos, edges
 
 
 def _edge(op: Op, to_kind: str, to_ref: str, field_name: str | None, created: bool) -> dict:
+    if not op.raw_r2_key:
+        raise ValueError("missing capture evidence")
     detail = {"cue": op.detail.get("cue", op.value), "confidence": "high"}
     if created:
         detail["created_row"] = 1
     return {
-        "id": f"{FROM_KIND}:{op.record_id}:{to_ref}"
-        + (f":{field_name}" if to_kind == "people" else ""),
-        "from_kind": FROM_KIND,
-        "from_ref": op.record_id,
+        "id": capture_edge_id(op.raw_r2_key, to_kind, to_ref, "evidence_of", field_name),
+        "from_kind": "takeout",
+        "from_ref": op.raw_r2_key,
         "to_kind": to_kind,
         "to_ref": to_ref,
         "field": field_name,
@@ -222,6 +242,8 @@ def _edge(op: Op, to_kind: str, to_ref: str, field_name: str | None, created: bo
 def apply(ops: list[Op]) -> dict:
     """Write the plan: rows + their edges, one op at a time (each op is
     independently idempotent, so a crash mid-way is a re-run)."""
+    if any(not op.raw_r2_key for op in ops if op.kind != "conflict"):
+        raise ValueError("missing capture evidence")
     counts: dict[str, int] = {}
     edges: list[dict] = []
     for op in ops:
@@ -297,8 +319,19 @@ def apply(ops: list[Op]) -> dict:
 
 
 def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
-    ops = plan(*load_state(platforms))
+    state = load_state(platforms)
+    ops = plan(*state)
     summary = {"planned": {}, "conflicts": [], "applied": {}}
+    summary["legacy"] = sorted(
+        {
+            p["record_id"]
+            for p in state[0]
+            if any(e.startswith(f"{FROM_KIND}:{p['record_id']}:") for e in state[-1])
+        }
+    )
+    summary["missing_evidence"] = sorted(
+        {p["record_id"] for p in state[0] if not p.get("raw_r2_key")}
+    )
     for op in ops:
         if op.kind == "conflict":
             summary["conflicts"].append(
@@ -319,6 +352,7 @@ def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
             "record_id": o.record_id,
             "platform": o.platform,
             "value": o.value,
+            "raw_r2_key": o.raw_r2_key,
         }
         for o in ops
         if o.kind != "conflict"

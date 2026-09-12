@@ -201,11 +201,23 @@ def cmd_list(args: argparse.Namespace) -> None:
                 "SELECT id, name, handle FROM people_sync_records "
                 "WHERE source = 'facebook' AND deleted_at IS NULL"
             )
-            updates = facebook.assign_handles(entries, records)
-            for u in updates:
-                lifedata.sql(
-                    f"UPDATE people_sync_records SET handle = {lifedata.sq(u['handle'])} "
-                    f"WHERE id = {lifedata.sq(u['id'])}"
+            # Recheck the same unique-name proposal for already assigned handles
+            # so a failed evidence write can be repaired without changing a handle.
+            proposals = facebook.assign_handles(entries, [{**r, "handle": None} for r in records])
+            by_id = {r["id"]: r for r in records}
+            updates = []
+            for u in proposals:
+                prior = by_id[u["id"]].get("handle")
+                if prior and prior != u["handle"]:
+                    continue
+                if not prior:
+                    lifedata.sql(
+                        f"UPDATE people_sync_records SET handle = {lifedata.sq(u['handle'])} "
+                        f"WHERE id = {lifedata.sq(u['id'])} AND deleted_at IS NULL"
+                    )
+                    updates.append(u)
+                ledger.imported_from(
+                    "people_sync_records", u["id"], u.get("capture_key"), u.get("capture_refs", ())
                 )
             print(
                 json.dumps(
