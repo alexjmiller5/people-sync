@@ -132,6 +132,22 @@ Task 2 is executed as 2A, 2B and 2C, with one worker and a review gate per subta
 - [ ] Replay supported list formats through pure existing interpretation helpers, or return explicit unsupported status with retained-source limitations. Do not claim successful reconstruction when an extractor cannot run offline. Test archive failures, virtualized pages, duplicates, partial completion and capture-key propagation for all four collectors.
 - [ ] Run focused red/green and one capture-order mutation, then full pytest/Ruff, commit and report. Mark parent Task 2 complete only after all 2A/2B/2C reviews pass.
 
+### Task 2D: Usable privacy-filtered exports with explicit exclusions
+
+**Files:** `src/people_sync/captures.py`, shared typed identity-URL helper from 2B as needed, export capture/replay tests.
+
+**Interfaces:** Keep capture/replay/ingest command names and preserved local originals unchanged. Reuse 2B's strictly scoped identity URL handling for canonical source URLs and matching structured handles; never treat arbitrary URLs/free text as typed identities. Archive a versioned field-exclusion manifest by original file role, ordinal and field, with fixed reasons but no excluded values.
+
+- [ ] Add synthetic failing regressions for canonical numeric LinkedIn URL suffixes and underscored Instagram handles, alongside forbidden userinfo/query/fragment/foreign-host variants. Confirm the current shared free-text checker falsely refuses the permitted identity.
+  ```python
+  assert replay_capture(capture_export("linkedin", export))["records"][0]["source_id"]
+  assert b"secret@example.test" not in retained_bytes
+  ```
+  Build the export with a synthetic valid name, numeric canonical URL, one prohibited Company value and another safe row. Assert exact record IDs and retained row ordinals, not just truthiness.
+- [ ] Preserve strict generic privacy validation. At source filtering only, replace prohibited/ambiguous allowed-field values with the source format's missing value, retaining the row and all other permitted fields. Record every excluded field's role/ordinal/path and reason in the capture. Do not copy the excluded value into the manifest. Keep structural malformed entries present and original files byte-identical. An unknown source shape still fails explicitly.
+- [ ] Revalidate retained filtered bytes and typed identity fields at envelope/replay boundaries. Hand-built checksum-valid envelopes containing forbidden values still fail. Do not exempt generic numeric text, arbitrary URL paths, foreign hosts or encoded contact material. No new dependency or universal PII-detector claim.
+- [ ] Offline replay must report field exclusions and their effect, never claim a complete original or silently replace current ledger/cache fields. Test mixed safe/unsafe rows, malformed entries, capture-before-ingest, deterministic replay, unchanged originals and privacy mutation failures. Full pytest/Ruff, normal signed commit and concise report.
+
 ### Task 3: Pin source and promoted-fact provenance to immutable captures
 
 **Files:** Modify `src/people_sync/ledger.py`, `src/people_sync/scrape/profile.py`, `src/people_sync/promote.py`; create `tests/test_capture_provenance.py`, extend `tests/test_promote.py`.
