@@ -27,6 +27,9 @@ def normalized(result: dict) -> dict:
     }
     if "profile" in out:
         out["profile"].pop("raw", None)
+    for record in out.get("records", []):
+        record.pop("capture_key", None)
+        record.pop("capture_refs", None)
     return out
 
 
@@ -153,6 +156,13 @@ def replay_capture(capture) -> dict:
                 result["limitations"].append(
                     "partial acquisition; records are not a complete inventory"
                 )
+            return result
+        if c["kind"] == "list":
+            result.update(status="unsupported")
+            result["limitations"].append(
+                "list observations retain scoped rows and ordinals; no offline inventory "
+                "reconstruction or identity decisions; excluded and unloaded rows unavailable"
+            )
             return result
         if c["kind"] != "profile" or c["source"] not in PROFILE_SOURCES:
             result.update(status="unsupported")

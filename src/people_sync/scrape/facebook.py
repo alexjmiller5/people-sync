@@ -15,6 +15,7 @@ A profile page (2026-09 layout) renders "Personal details" - "Lives in ...",
 import re
 
 from people_sync.match import normalize
+from people_sync.scrape import snapshot
 from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://www.facebook.com/{handle}"
@@ -37,19 +38,18 @@ _LINK_RE = (
 
 LIST_ENTRIES_JS = (
     "(function(){var v=function(e){var r=e.getBoundingClientRect();return r.width>0&&r.height>0};"
-    "var re=/" + _LINK_RE + "/;var seen={};var out=[];"
+    "var re=/" + _LINK_RE + "/;var out=[];"
     'var own=location.pathname.split("/")[1];'
     'if(own==="profile.php")own+="?id="+new URLSearchParams(location.search).get("id");'
-    'var main=document.querySelector("[role=main]")||document;'
+    'var main=document.querySelector("[role=main]");if(!main)return null;'
     'var links=[].slice.call(main.querySelectorAll("a[href]")).filter(v);'
     'for(var k=0;k<links.length;k++){var a=links[k];if(a.closest("[role=tablist]"))continue;'
     "var m=a.href.match(re);if(!m)continue;"
-    "var handle=m[1]||m[2];if(!handle||handle===own||seen[handle])continue;"
+    "var handle=m[1]||m[2];if(!handle||handle===own)continue;"
     'var card=a.closest("[role=listitem]")||(a.parentElement&&a.parentElement.parentElement&&a.parentElement.parentElement.parentElement);'
     'var t=(card?card.innerText:"").split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
-    "if(!t.length)continue;seen[handle]=1;"
     "var mut=t.filter(function(x){return /mutual friends?$/.test(x)})[0]||null;"
-    "out.push({handle:handle,name:t[0],mutual_text:mut});}"
+    "out.push({handle:handle,name:t[0]||null,mutual_text:mut});}"
     "return JSON.stringify(out);})()"
 )
 
@@ -193,14 +193,16 @@ def assign_handles(entries: list[dict], records: list[dict]) -> list[dict]:
         rs = rec_by_name.get(name) or []
         if not name or len(es) != 1 or len(rs) != 1 or rs[0].get("handle"):
             continue
-        out.append({"id": rs[0]["id"], "handle": es[0]["handle"]})
+        proposal = {"id": rs[0]["id"], "handle": es[0]["handle"]}
+        if es[0].get("capture_refs"):
+            proposal["capture_refs"] = es[0]["capture_refs"]
+        out.append(proposal)
     return out
 
 
 def list_friends(browser, max_scrolls: int = 60, settle_s: float = 2.5) -> list[dict]:
     """Keep entries before virtualization removes them; stop after three
     scrolls add no new handles, or the operator's scroll limit is reached."""
-    import json
     import time
 
     browser.navigate(LIST_URL, 12000)
@@ -208,13 +210,39 @@ def list_friends(browser, max_scrolls: int = 60, settle_s: float = 2.5) -> list[
     entries: dict[str, dict] = {}
     unchanged = 0
     for step in range(max_scrolls + 1):
-        raw = browser.eval(LIST_ENTRIES_JS)
-        batch = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        try:
+            raw = browser.eval(LIST_ENTRIES_JS)
+        except Exception:
+            snapshot.retain_list(
+                "facebook", [], ordinal=step, scope="friends", reason="acquisition-failed"
+            )
+            raise ExtractError("list-acquisition-failed") from None
+        page, key = snapshot.retain_list("facebook", raw, ordinal=step, scope="friends")
         before = len(entries)
-        entries.update({e["handle"]: e for e in batch})
+        for index, e in enumerate(page["entries"]):
+            if not e.get("handle"):
+                continue
+            refs = entries.get(e["handle"], {}).get("capture_refs", [])
+            entries[e["handle"]] = {
+                **e,
+                "capture_refs": refs + [snapshot.list_ref(page, key, index)],
+            }
         unchanged = unchanged + 1 if len(entries) == before else 0
         if unchanged >= 3 or step == max_scrolls:
+            snapshot.retain_list(
+                "facebook",
+                [],
+                ordinal=step + 1,
+                scope="friends",
+                reason="stalled" if unchanged >= 3 else "scroll-limit",
+            )
             break
-        browser.scroll(2000)
+        try:
+            browser.scroll(2000)
+        except Exception:
+            snapshot.retain_list(
+                "facebook", [], ordinal=step + 1, scope="friends", reason="acquisition-failed"
+            )
+            raise ExtractError("list-acquisition-failed") from None
         time.sleep(settle_s)
     return list(entries.values())

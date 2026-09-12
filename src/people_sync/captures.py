@@ -98,6 +98,13 @@ def validate(capture) -> dict:
                 _require(c["exclusions"] == snapshot.EXCLUSIONS)
                 snapshot.validate(c["source"], c["record_id"], p)
                 _require(c["completeness"] == snapshot.completeness(p))
+        if c["kind"] == "list":
+            from people_sync.scrape import snapshot
+
+            snapshot.validate_list(c["source"], p)
+            _require(c["record_id"] is None)
+            _require(c["exclusions"] == snapshot.LIST_EXCLUSIONS)
+            _require(c["completeness"] == ("privacy-filtered" if p["complete"] else "partial"))
         if c["kind"] == "contacts":
             from people_sync.sources import CONTACT_POLICY, validate_contacts
 

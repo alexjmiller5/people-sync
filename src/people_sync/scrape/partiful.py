@@ -116,12 +116,49 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
         time.sleep(2)
     total = int(browser.eval(ROW_COUNT_JS) or 0)
     end = total if limit is None else min(total, start + limit)
+    ordinal = 0
     for i in range(start, end):
-        row = browser.eval(ROW_JS % i)
+        try:
+            row = browser.eval(ROW_JS % i)
+        except Exception:
+            snapshot.retain_list(
+                "partiful",
+                [],
+                ordinal=ordinal,
+                scope="mutuals",
+                expected_total=total,
+                reason="acquisition-failed",
+            )
+            raise ExtractError("list-acquisition-failed") from None
         if not row:
-            break
-        browser.click(row["selector"])
-        entry = {k: v for k, v in row.items() if k != "selector"}
+            snapshot.retain_list(
+                "partiful",
+                [],
+                ordinal=ordinal,
+                scope="mutuals",
+                expected_total=total,
+                reason="row-missing",
+            )
+            return
+        page, list_key = snapshot.retain_list(
+            "partiful", [row], ordinal=ordinal, scope="mutuals", expected_total=total, entry_start=i
+        )
+        ordinal += 1
+        refs = [snapshot.list_ref(page, list_key, 0)]
+        try:
+            browser.click(row["selector"])
+        except Exception:
+            snapshot.retain_list(
+                "partiful",
+                [],
+                ordinal=ordinal,
+                scope="mutuals",
+                expected_total=total,
+                reason="acquisition-failed",
+            )
+            raise ExtractError("list-acquisition-failed") from None
+        row = page["entries"][0]
+        entry = dict(row)
         if browser.wait_for("location.pathname.startsWith('/u/')", 10):
             browser.wait_for("!!document.querySelector('h1')", 8)
             time.sleep(1.0)
@@ -162,10 +199,19 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
                 entry["error"] = str(e)
         else:
             entry["error"] = "no-navigation"
+        entry["capture_refs"] = refs
         browser.eval("history.back()")
         browser.wait_for("location.pathname==='/mutuals' && " + ROW_COUNT_JS + ">0", 10)
         time.sleep(random.uniform(*pause_s))
         yield i, total, entry
+    snapshot.retain_list(
+        "partiful",
+        [],
+        ordinal=ordinal,
+        scope="mutuals",
+        expected_total=total,
+        reason="row-limit" if start or end < total else "rendered-rows-exhausted",
+    )
 
 
 def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
@@ -178,6 +224,7 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
     uid = entry.get("uid")
     profile = entry.get("profile")
     avatar_url = entry.pop("_avatar_url", None)
+    capture_refs = tuple(entry.get("capture_refs", ()))
     if not uid or profile is None:
         return None
     # Compatibility callers also pass through the same retained-input boundary.
@@ -212,6 +259,8 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
         handle=uid,
         name=entry.get("name") or profile.display_name,
         raw=raw,
+        capture_key=entry["raw_r2_key"],
+        capture_refs=capture_refs,
     )
     raw_key = entry["raw_r2_key"]
     ledger.upsert([record])

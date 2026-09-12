@@ -298,7 +298,11 @@ def test_partiful_profile_uses_same_order_and_boundary(mocker, storage, fail):
 
     def parse(raw, captured=None):
         events.append("parse-profile")
-        assert raw == json.loads(next(iter(stored.values())))["payload"]["eval"]
+        profile_capture = next(
+            c for body in stored.values() if (c := json.loads(body))["kind"] == "profile"
+        )
+        assert raw == profile_capture["payload"]["eval"]
+        assert events.count("verified-retention") == 2
         return original(raw, captured)
 
     mocker.patch.object(partiful, "parse", side_effect=parse)
@@ -309,7 +313,14 @@ def test_partiful_profile_uses_same_order_and_boundary(mocker, storage, fail):
         side_effect=lambda *a, **k: events.append("write-profile"),
     )
     if fail:
-        mocker.patch.object(photos, "get_object", return_value=b"wrong")
+        read = photos.get_object
+        mocker.patch.object(
+            photos,
+            "get_object",
+            side_effect=lambda key: (
+                b"wrong" if json.loads(stored[key])["kind"] == "profile" else read(key)
+            ),
+        )
         with pytest.raises(photos.ArchiveError):
             list(partiful.harvest(browser, limit=1))
         assert "write-profile" not in events and "parse-profile" not in events

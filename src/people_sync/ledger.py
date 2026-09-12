@@ -20,6 +20,7 @@ class Record:
     follows_me: int | None = None
     i_follow: int | None = None
     capture_key: str | None = None
+    capture_refs: tuple[dict, ...] = ()
 
     @property
     def row_id(self) -> str:

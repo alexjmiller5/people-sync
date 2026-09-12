@@ -1,11 +1,11 @@
 """Spotify user connections and profile headers from the signed-in web player."""
 
-import json
 import re
 import time
 from urllib.parse import quote, unquote
 
 from people_sync import ledger
+from people_sync.scrape import snapshot
 from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://open.spotify.com/user/{handle}"
@@ -17,7 +17,7 @@ COUNTS_JS = r"""(() => {
   const count = kind => {
     const a = [...document.querySelectorAll('main a')].find(a =>
       a.getAttribute('href') === location.pathname + '/' + kind && /\d/.test(a.textContent));
-    return a ? Number(a.textContent.match(/[\d,]+/)[0].replaceAll(',', '')) : 0;
+    return a ? Number(a.textContent.match(/[\d,]+/)[0].replaceAll(',', '')) : null;
   };
   return {followers: count('followers'), following: count('following')};
 })()"""
@@ -75,34 +75,107 @@ def list_users(browser) -> list[dict]:
     path = browser.eval(ME_JS)
     if not re.fullmatch(r"/user/[^/]+", path or ""):
         raise ExtractError("no-own-profile")
+    owner = snapshot._identity(path.rsplit("/", 1)[-1], "spotify")
     browser.navigate("https://open.spotify.com" + path, 12000)
     if not browser.wait_for(READY_JS, 15):
         raise ExtractError("no-own-profile")
     counts = browser.eval(COUNTS_JS)
     merged = {}
+    ordinal = 0
     for kind, flag in (("followers", "follows_me"), ("following", "i_follow")):
-        browser.navigate("https://open.spotify.com" + path + "/" + kind, 12000)
+        expected = counts.get(kind)
+        snapshot._value(expected, "count", "spotify")
+        try:
+            browser.navigate("https://open.spotify.com" + path + "/" + kind, 12000)
+        except Exception:
+            snapshot.retain_list(
+                "spotify",
+                [],
+                ordinal=ordinal,
+                scope=kind,
+                expected_total=expected,
+                account_id=owner,
+                reason="acquisition-failed",
+            )
+            raise ExtractError("list-acquisition-failed") from None
         seen = {}
         unchanged = 0
-        for _ in range(200):
+        reason = "scroll-limit"
+        for step in range(200):
             time.sleep(2)
-            entries = browser.eval(LIST_ENTRIES_JS)
-            entries = json.loads(entries) if isinstance(entries, str) else entries
+            try:
+                entries = browser.eval(LIST_ENTRIES_JS)
+            except Exception:
+                snapshot.retain_list(
+                    "spotify",
+                    [],
+                    ordinal=ordinal,
+                    scope=kind,
+                    expected_total=expected,
+                    account_id=owner,
+                    reason="acquisition-failed",
+                )
+                raise ExtractError("list-acquisition-failed") from None
+            page, key = snapshot.retain_list(
+                "spotify",
+                entries,
+                ordinal=ordinal,
+                scope=kind,
+                expected_total=expected,
+                account_id=owner,
+            )
+            ordinal += 1
             before = len(seen)
-            seen.update({e["href"]: e for e in entries})
-            if len(seen) >= counts[kind]:
+            for index, e in enumerate(page["entries"]):
+                if not e.get("href"):
+                    continue
+                refs = seen.get(e["href"], {}).get("capture_refs", [])
+                seen[e["href"]] = {
+                    **e,
+                    "capture_refs": refs + [snapshot.list_ref(page, key, index)],
+                }
+            if expected is not None and len(seen) >= expected:
+                reason = "displayed-total" if len(seen) == expected else "coverage-unverified"
                 break
             unchanged = unchanged + 1 if len(seen) == before else 0
-            browser.eval(SCROLL_JS)
             if unchanged >= 4:
-                raise ExtractError("incomplete-connection-list")
-        if len(seen) != counts[kind]:
+                reason = "stalled"
+                break
+            if step < 199:
+                try:
+                    browser.eval(SCROLL_JS)
+                except Exception:
+                    snapshot.retain_list(
+                        "spotify",
+                        [],
+                        ordinal=ordinal,
+                        scope=kind,
+                        expected_total=expected,
+                        account_id=owner,
+                        reason="acquisition-failed",
+                    )
+                    raise ExtractError("list-acquisition-failed") from None
+        snapshot.retain_list(
+            "spotify",
+            [],
+            ordinal=ordinal,
+            scope=kind,
+            expected_total=expected,
+            account_id=owner,
+            reason=reason,
+            complete=reason == "displayed-total",
+        )
+        ordinal += 1
+        if reason != "displayed-total":
             raise ExtractError("incomplete-connection-list")
         for href, entry in seen.items():
             if not href.startswith("/user/"):
                 continue
             uid = unquote(href.split("/")[-1])
-            row = merged.setdefault(uid, {**entry, "id": uid, "follows_me": 0, "i_follow": 0})
+            row = merged.setdefault(
+                uid, {**entry, "id": uid, "follows_me": 0, "i_follow": 0, "capture_refs": []}
+            )
+            row["capture_refs"].extend(entry["capture_refs"])
             row[flag] = 1
             if entry.get("avatar"):
                 row["avatar"] = entry["avatar"]
@@ -116,10 +189,11 @@ def ingest_entries(entries: list[dict]) -> dict:
                 source="spotify",
                 source_id=e["id"],
                 handle=quote(e["id"], safe=""),
-                name=e["name"],
+                name=e.get("name"),
                 raw={"url": URL.format(handle=quote(e["id"], safe="")), "avatar": e.get("avatar")},
                 follows_me=e["follows_me"],
                 i_follow=e["i_follow"],
+                capture_refs=tuple(e.get("capture_refs", ())),
             )
             for e in entries
         ]

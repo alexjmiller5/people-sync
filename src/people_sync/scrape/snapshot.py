@@ -310,6 +310,182 @@ def _value(value, kind, source):
     return value
 
 
+LIST_POLICY = "list-input-v1"
+LIST_EXCLUSIONS = [
+    LIST_POLICY,
+    "declared list rows only; no session, payment, contact details or unrelated DOM",
+    "unknown and unsafe fields excluded before interpretation; unloaded rows unavailable",
+]
+LIST_SCOPES = {
+    "facebook": {"friends": "[role=main] a[href] (visible profile links outside tablist)"},
+    "spotify": {k: "main [data-encore-id=card] a" for k in ("followers", "following")},
+    "strava": {k: 'ul.list-athletes a[href*="/athletes/"]' for k in ("followers", "following")},
+    "partiful": {"mutuals": "[class^=mutuals_row]"},
+}
+_LIST_FIELDS = {
+    "facebook": {"handle": "facebook-handle", "name": "text", "mutual_text": "mutual-text"},
+    "spotify": {"href": "spotify-href", "name": "text", "avatar": "url"},
+    "strava": {"id": "athlete-id", "name": "text", "location": "text", "avatar": "url"},
+    "partiful": _ROW,
+}
+_LIST_REASONS = {
+    "observed",
+    "scroll-limit",
+    "stalled",
+    "displayed-total",
+    "coverage-unverified",
+    "row-limit",
+    "rendered-rows-exhausted",
+    "row-missing",
+    "acquisition-failed",
+    "invalid-source",
+}
+
+
+def _list_entries(source, entries):
+    """Acquire only declared fields, keeping duplicate/malformed row positions."""
+    excluded = set()
+    out = []
+    for row in entries:
+        safe = {}
+        if not isinstance(row, dict):
+            excluded.add("unsafe-or-invalid-values")
+            out.append(safe)
+            continue
+        for key, value in row.items():
+            kind = _LIST_FIELDS[source].get(key)
+            if kind is None:
+                excluded.add("unknown-fields")
+                continue
+            try:
+                if value is not None and kind == "facebook-handle":
+                    if not re.fullmatch(r"profile\.php\?id=\d+", value):
+                        _identity(value, source)
+                elif value is not None and kind == "spotify-href":
+                    captures._require(
+                        isinstance(value, str) and re.fullmatch(r"/(user|artist)/[^/]+", value)
+                    )
+                    _identity(value.rsplit("/", 1)[-1], source)
+                elif value is not None and kind == "athlete-id":
+                    captures._require(isinstance(value, str) and re.fullmatch(r"\d+", value))
+                elif value is not None and kind == "mutual-text":
+                    captures._require(
+                        isinstance(value, str) and re.fullmatch(r"[\d,]+ mutual friends?", value)
+                    )
+                else:
+                    _value(value, kind, source)
+                safe[key] = value
+            except (ValueError, TypeError):
+                excluded.add("unsafe-or-invalid-values")
+        out.append(safe)
+    return out, sorted(excluded)
+
+
+def validate_list(source, payload):
+    p = payload
+    captures._require(source in LIST_SCOPES)
+    captures._require(
+        set(p)
+        == {
+            "format",
+            "scope",
+            "selector",
+            "ordinal",
+            "entries",
+            "entry_ordinals",
+            "expected_total",
+            "complete",
+            "truncated",
+            "reason",
+            "exclusions",
+            "account_id",
+        }
+    )
+    captures._require(p["format"] == LIST_POLICY and p["scope"] in LIST_SCOPES[source])
+    captures._require(p["selector"] == LIST_SCOPES[source][p["scope"]])
+    captures._require(type(p["ordinal"]) is int and p["ordinal"] >= 0)
+    captures._require(type(p["complete"]) is bool and type(p["truncated"]) is bool)
+    captures._require(p["truncated"] is not p["complete"])
+    captures._require(p["reason"] in _LIST_REASONS)
+    captures._require(
+        not p["complete"] or (source == "spotify" and p["reason"] == "displayed-total")
+    )
+    _value(p["expected_total"], "count", source)
+    if p["account_id"] is not None:
+        _identity(p["account_id"], source)
+    captures._require(isinstance(p["entries"], list) and isinstance(p["entry_ordinals"], list))
+    captures._require(len(p["entries"]) == len(p["entry_ordinals"]))
+    captures._require(all(type(i) is int and i >= 0 for i in p["entry_ordinals"]))
+    if p["entry_ordinals"]:
+        start = p["entry_ordinals"][0]
+        captures._require(p["entry_ordinals"] == list(range(start, start + len(p["entries"]))))
+    safe, excluded = _list_entries(source, p["entries"])
+    captures._require(safe == p["entries"] and not excluded)
+    captures._require(
+        isinstance(p["exclusions"], list) and p["exclusions"] == sorted(set(p["exclusions"]))
+    )
+    captures._require(set(p["exclusions"]) <= {"unknown-fields", "unsafe-or-invalid-values"})
+    if p["reason"] != "observed":
+        captures._require(not p["entries"])
+    if p["complete"]:
+        captures._require(p["expected_total"] is not None)
+
+
+def retain_list(
+    source,
+    raw,
+    *,
+    ordinal,
+    scope,
+    expected_total=None,
+    complete=False,
+    reason="observed",
+    entry_start=0,
+    account_id=None,
+):
+    """Filter acquisition, verify retention, then expose that exact safe input and key."""
+    try:
+        entries = json.loads(raw) if isinstance(raw, str) else raw
+        captures._require(isinstance(entries, list))
+    except (ValueError, TypeError):
+        entries, reason, complete = [], "invalid-source", False
+    entries, excluded = _list_entries(source, entries)
+    payload = {
+        "format": LIST_POLICY,
+        "scope": scope,
+        "selector": LIST_SCOPES[source][scope],
+        "ordinal": ordinal,
+        "entries": entries,
+        "entry_ordinals": list(range(entry_start, entry_start + len(entries))),
+        "expected_total": expected_total,
+        "complete": complete,
+        "truncated": not complete,
+        "reason": reason,
+        "exclusions": excluded,
+        "account_id": account_id,
+    }
+    capture = captures.build_capture(
+        source,
+        "list",
+        payload,
+        completeness="privacy-filtered" if complete else "partial",
+        exclusions=LIST_EXCLUSIONS,
+    )
+    key = captures.retain(capture)
+    if reason == "invalid-source":
+        raise ValueError("invalid list source")
+    return payload, key
+
+
+def list_ref(payload, key, index):
+    return {
+        "capture_key": key,
+        "scope": payload["scope"],
+        "ordinal": payload["ordinal"],
+        "entry_ordinal": payload["entry_ordinals"][index],
+    }
+
+
 def _filter(value, schema, source, excluded):
     """Filter at acquisition; revalidation compares against this exact deterministic boundary."""
     if isinstance(schema, dict):

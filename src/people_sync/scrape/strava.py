@@ -11,6 +11,7 @@ import json
 import time
 
 from people_sync.scrape.profile import ExtractError, Profile
+from people_sync.scrape import snapshot
 
 URL = "https://www.strava.com/athletes/{handle}"
 DASHBOARD_URL = "https://www.strava.com/dashboard"
@@ -24,10 +25,11 @@ ME_JS = (
 )
 
 LIST_JS = (
-    "(function(me){var seen={};var out=[];"
-    'var as=[].slice.call(document.querySelectorAll(\'ul.list-athletes a[href*="/athletes/"], a[href*="/athletes/"]\'));'
+    "(function(me){var out=[];"
+    'if(!document.querySelector("ul.list-athletes"))return null;'
+    "var as=[].slice.call(document.querySelectorAll('ul.list-athletes a[href*=\"/athletes/\"]'));"
     "for(var i=0;i<as.length;i++){var a=as[i];var h=a.getAttribute('href')||'';var m=h.match(/\\/athletes\\/(\\d+)\\/?$/);"
-    "if(!m||m[1]===me||seen[m[1]])continue;seen[m[1]]=1;"
+    "if(!m)continue;"
     "var c=a.closest('li')||a.parentElement;var t=(c.innerText||'').split('\\n').map(function(s){return s.trim()}).filter(function(s){return s&&!/^(Following|Follow|Requested)$/.test(s)});"
     "var img=c.querySelector('img');"
     "out.push({id:m[1],name:t[0]||null,location:t[1]||null,avatar:img?img.src:null});}"
@@ -82,14 +84,38 @@ def list_athletes(browser, settle_s: float = 5.0) -> list[dict]:
     me = browser.eval(ME_JS)
     if not me:
         raise ExtractError("no-athlete")
+    snapshot._identity(me, "strava")
     merged: dict[str, dict] = {}
-    for kind, flag in (("followers", "follows_me"), ("following", "i_follow")):
-        browser.navigate(FOLLOWS_URL.format(athlete_id=me, kind=kind), 12000)
-        time.sleep(settle_s)
-        raw = browser.eval(LIST_JS % json.dumps(me))
-        for e in json.loads(raw) if isinstance(raw, str) else (raw or []):
-            entry = merged.setdefault(e["id"], {**e, "follows_me": 0, "i_follow": 0})
+    for ordinal, (kind, flag) in enumerate(
+        (("followers", "follows_me"), ("following", "i_follow"))
+    ):
+        try:
+            browser.navigate(FOLLOWS_URL.format(athlete_id=me, kind=kind), 12000)
+            time.sleep(settle_s)
+            raw = browser.eval(LIST_JS % json.dumps(me))
+        except Exception:
+            snapshot.retain_list(
+                "strava",
+                [],
+                ordinal=ordinal,
+                scope=kind,
+                account_id=me,
+                reason="acquisition-failed",
+            )
+            raise ExtractError("list-acquisition-failed") from None
+        page, key = snapshot.retain_list("strava", raw, ordinal=ordinal, scope=kind, account_id=me)
+        for index, e in enumerate(page["entries"]):
+            if not e.get("id") or e["id"] == me:
+                continue
+            entry = merged.setdefault(
+                e["id"], {**e, "follows_me": None, "i_follow": None, "capture_refs": []}
+            )
+            entry["capture_refs"].append(snapshot.list_ref(page, key, index))
             entry[flag] = 1
+    for ordinal, kind in enumerate(("followers", "following"), start=2):
+        snapshot.retain_list(
+            "strava", [], ordinal=ordinal, scope=kind, account_id=me, reason="coverage-unverified"
+        )
     return list(merged.values())
 
 
@@ -109,6 +135,7 @@ def ingest_entries(entries: list[dict]) -> dict:
             },
             follows_me=e.get("follows_me"),
             i_follow=e.get("i_follow"),
+            capture_refs=tuple(e.get("capture_refs", ())),
         )
         for e in entries
     ]

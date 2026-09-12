@@ -188,8 +188,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     clicks through every mutual and writes ledger + profile rows."""
     from people_sync.scrape.cdp import Browser
 
-    if args.platform != "facebook":
-        _require_file_token()
+    _require_file_token()
     browser = Browser.connect(
         endpoint=args.endpoint, data_dir=args.data_dir, approve_command=args.approve_command
     )

@@ -5,6 +5,19 @@ import pytest
 from people_sync.scrape import facebook
 from people_sync.scrape.profile import ExtractError
 
+
+@pytest.fixture(autouse=True)
+def offline_archive(mocker, monkeypatch, tmp_path):
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("LIFE_HUB_URL", "https://files.example.test")
+    monkeypatch.setenv("LIFE_HUB_TOKEN", "synthetic")
+    mocker.patch(
+        "people_sync.photos.put_object", side_effect=lambda k, b, **kw: stored.update({k: b})
+    )
+    mocker.patch("people_sync.photos.get_object", side_effect=stored.__getitem__)
+
+
 FIXTURE = {
     "name": "Test Person",
     "counts": "457 friends • 179 mutual",
