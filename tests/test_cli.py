@@ -9,48 +9,33 @@ from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 
 
-def test_ingest_instagram_reads_directory_and_upserts(mocker, capsys):
-    parse = mocker.patch("people_sync.parsers.parse_instagram", return_value=["rec"])
-    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 1, "updated": 0})
+@pytest.mark.parametrize("source", ["instagram", "facebook", "snapchat", "linkedin"])
+def test_ingest_exports_replay_verified_bytes(source, monkeypatch, tmp_path, capsys):
+    from people_sync import photos, ledger
 
-    cli.main(["ingest", "instagram", "--path", "/tmp/export"])
-
-    parse.assert_called_once_with("/tmp/export/followers.json", "/tmp/export/following.json")
-    upsert.assert_called_once_with(["rec"])
-    assert json.loads(capsys.readouterr().out) == {"new": 1, "updated": 0}
-
-
-def test_ingest_facebook_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("people_sync.parsers.parse_facebook", return_value=["rec"])
-    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 0, "updated": 1})
-
-    cli.main(["ingest", "facebook", "--path", "/tmp/your_friends.json"])
-
-    parse.assert_called_once_with("/tmp/your_friends.json")
-    upsert.assert_called_once_with(["rec"])
-    assert json.loads(capsys.readouterr().out) == {"new": 0, "updated": 1}
-
-
-def test_ingest_snapchat_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("people_sync.parsers.parse_snapchat", return_value=["rec"])
-    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 1, "updated": 1})
-
-    cli.main(["ingest", "snapchat", "--path", "/tmp/friends.json"])
-
-    parse.assert_called_once_with("/tmp/friends.json")
-    upsert.assert_called_once_with(["rec"])
-    assert json.loads(capsys.readouterr().out) == {"new": 1, "updated": 1}
-
-
-def test_ingest_linkedin_reads_file_and_upserts(mocker, capsys):
-    parse = mocker.patch("people_sync.parsers.parse_linkedin", return_value=["rec"])
-    upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 3, "updated": 0})
-
-    cli.main(["ingest", "linkedin", "--path", "/tmp/Connections.csv"])
-
-    parse.assert_called_once_with("/tmp/Connections.csv")
-    upsert.assert_called_once_with(["rec"])
-    assert json.loads(capsys.readouterr().out) == {"new": 3, "updated": 0}
+    stored, written = {}, []
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", stored.__getitem__)
+    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {"new": len(rows)})
+    path = tmp_path / "export.json"
+    if source == "instagram":
+        path = tmp_path
+        (path / "followers.json").write_text('[{"string_list_data":[{"value":"example"}]}]')
+        (path / "following.json").write_text('{"relationships_following":[]}')
+    else:
+        path.write_text(
+            {
+                "facebook": '{"friends_v2":[{"name":"Example Person"}]}',
+                "snapchat": '{"Friends":[{"Username":"example"}]}',
+                "linkedin": "First Name,Last Name,URL\nExample,Person,https://linkedin.com/in/example\n",
+            }[source]
+        )
+    cli.main(["ingest", source, "--path", str(path)])
+    assert json.loads(capsys.readouterr().out) == {"new": 1}
+    assert len(stored) == 1
+    assert written[0].capture_key in stored
+    assert written[0].source == source
 
 
 def test_ingest_google_calls_fetch_with_no_path_and_upserts(mocker, capsys):

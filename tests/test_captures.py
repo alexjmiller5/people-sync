@@ -242,13 +242,29 @@ def test_export_privacy_filter_preserves_safe_bytes_and_filters_nested_fields(tm
 @pytest.mark.parametrize("source", ["venmo", "google_contacts", "apple_contacts"])
 def test_privacy_filtered_class_supports_collection_boundaries(source):
     from people_sync import captures
+    from people_sync.sources import CONTACT_POLICY
 
+    google = source == "google_contacts"
+    payload = (
+        {"eval": {}, "captured": []}
+        if source == "venmo"
+        else {
+            "format": ("google" if google else "apple") + "-contacts-v1",
+            "complete": True,
+            "pages" if google else "databases": [
+                {"ordinal": 0, "status": "complete", "entries": []}
+                | ({"has_next": False} if google else {})
+            ],
+        }
+    )
     capture = captures.build_capture(
         source,
-        "contacts",
-        {"entries": []},
+        "profile" if source == "venmo" else "contacts",
+        payload,
         completeness="privacy-filtered",
-        exclusions=["source-allowlist-v1: contact details excluded"],
+        exclusions=["source-allowlist-v1: contact details excluded"]
+        if source == "venmo"
+        else [CONTACT_POLICY],
     )
     assert captures.validate(capture)["completeness"] == "privacy-filtered"
 
