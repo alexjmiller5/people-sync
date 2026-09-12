@@ -153,7 +153,10 @@ def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     assert key == f"profiles/partiful/captures/{capture['capture_id']}.json"
     assert capture["captured_at"] == "2026-01-01T00:00:00.000Z"
     assert capture["record_id"] == "partiful:uid123"
-    assert capture["payload"] == {"eval": {**FIXTURE, "future_field": "retained"}, "captured": []}
+    assert capture["payload"]["eval"] == FIXTURE
+    assert capture["payload"]["captured"] == []
+    assert "unknown-fields" in capture["payload"]["context"]["exclusions"]
+    assert "future_field" not in upsert_profile.call_args.args[0].raw["extractor"]
     assert upload.call_args.kwargs["content_type"] == "application/json"
     assert upsert_profile.call_args.kwargs["raw_r2_key"] == key
 

@@ -88,6 +88,16 @@ def validate(capture) -> dict:
         if c["kind"] == "profile":
             _require("eval" in p and isinstance(p.get("captured"), list))
             _require(all(isinstance(item, dict) for item in p["captured"]))
+            from people_sync.scrape import snapshot
+
+            if (
+                snapshot.POLICY in c["exclusions"]
+                or "source_dom" in p.get("context", {})
+                or "exclusions" in p.get("context", {})
+            ):
+                _require(c["exclusions"] == snapshot.EXCLUSIONS)
+                snapshot.validate(c["source"], c["record_id"], p)
+                _require(c["completeness"] == snapshot.completeness(p))
         if c["kind"] == "contacts":
             from people_sync.sources import CONTACT_POLICY, validate_contacts
 

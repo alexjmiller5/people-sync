@@ -57,7 +57,7 @@ class FakeModule:
     @staticmethod
     def parse(eval_result, captured):
         return Profile(
-            platform="testplatform",
+            platform="instagram",
             profile_url=f"https://example.test/{eval_result.get('username')}/",
             platform_id=eval_result.get("username"),
             display_name=eval_result.get("full_name"),
@@ -76,6 +76,8 @@ class FakeBrowser:
         return {"captured": [], "load_ms": 10.0}
 
     def eval(self, js):
+        if "people-sync-source-dom" in js:
+            return [{"tag": "header", "children": [{"text": "Test User"}]}]
         if "innerText" in js:
             return self.page_text
         if "fetch(" in js:
@@ -87,7 +89,7 @@ class FakeBrowser:
 
 
 def _record(**overrides) -> dict:
-    row = {"id": "testplatform:u1", "handle": "u1", "avatar_r2_key": None, "avatar_sha256": None}
+    row = {"id": "instagram:u1", "handle": "u1", "avatar_r2_key": None, "avatar_sha256": None}
     row.update(overrides)
     return row
 
@@ -112,7 +114,7 @@ def test_scrape_passes_endpoint_and_data_dir_to_browser_connect(mocker):
     mocker.patch("people_sync.scrape.run.Pacer")
 
     run.scrape(
-        "testplatform",
+        "instagram",
         endpoint="mini.local:9333",
         data_dir="/tmp/profile",
         approve_command="approve-helper 25",
@@ -129,7 +131,7 @@ def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker):
     connect = mocker.patch("people_sync.scrape.run.Browser.connect", return_value=FakeBrowser())
     mocker.patch("people_sync.scrape.run.Pacer")
 
-    run.scrape("testplatform")
+    run.scrape("instagram")
 
     connect.assert_called_once_with(endpoint=None, data_dir=None, approve_command=None)
 
@@ -139,7 +141,7 @@ def test_cap_reached_stops_before_navigating(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 0, "halted": "daily cap reached"}
     assert browser.navigated == []
@@ -156,7 +158,7 @@ def test_challenge_page_halts_and_writes_nothing(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 0, "halted": "challenge page: log in to continue"}
     assert browser.navigated == ["https://example.test/u1/"]
@@ -177,7 +179,7 @@ def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     manager.attach_mock(run.photos.get_object, "get_object")
     manager.attach_mock(upsert, "upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 1, "skipped": 0, "halted": None}
 
@@ -191,17 +193,17 @@ def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     raw_calls = [c for c in put_object.call_args_list if c.args[0].startswith("profiles/")]
     assert len(raw_calls) == 1
     capture = captures.validate(json.loads(raw_calls[0].args[1]))
-    assert raw_calls[0].args[0] == f"profiles/testplatform/captures/{capture['capture_id']}.json"
-    assert capture["record_id"] == "testplatform:u1"
+    assert raw_calls[0].args[0] == f"profiles/instagram/captures/{capture['capture_id']}.json"
+    assert capture["record_id"] == "instagram:u1"
     assert capture["payload"]["eval"]["username"] == "u1"
 
     avatar_calls = [c for c in put_object.call_args_list if c.args[0].startswith("photos/records/")]
     assert len(avatar_calls) == 1
     sha = hashlib.sha256(b"avatar-bytes").hexdigest()
-    assert avatar_calls[0].args[0] == f"photos/records/testplatform/testplatform_u1-{sha[:8]}.jpg"
+    assert avatar_calls[0].args[0] == f"photos/records/instagram/instagram_u1-{sha[:8]}.jpg"
 
     profile, avatar_key, avatar_sha, raw_key = upsert.call_args.args
-    assert profile.record_id == "testplatform:u1"
+    assert profile.record_id == "instagram:u1"
     assert avatar_key == avatar_calls[0].args[0]
     assert avatar_sha == sha
     assert raw_key == raw_calls[0].args[0]
@@ -213,7 +215,7 @@ def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
 def test_avatar_dedupe_skips_reupload_when_sha_matches(mocker):
     sha = hashlib.sha256(b"avatar-bytes").hexdigest()
     record = _record(
-        avatar_r2_key="photos/records/testplatform/testplatform_u1-existing.jpg",
+        avatar_r2_key="photos/records/instagram/instagram_u1-existing.jpg",
         avatar_sha256=sha,
     )
     browser, pacer = _patch_common(mocker, [record])
@@ -221,19 +223,19 @@ def test_avatar_dedupe_skips_reupload_when_sha_matches(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    run.scrape("testplatform")
+    run.scrape("instagram")
 
     avatar_calls = [c for c in put_object.call_args_list if c.args[0].startswith("photos/records/")]
     assert avatar_calls == []  # no re-upload, bytes are identical
 
     profile, avatar_key, avatar_sha, raw_key = upsert.call_args.args
-    assert avatar_key == "photos/records/testplatform/testplatform_u1-existing.jpg"
+    assert avatar_key == "photos/records/instagram/instagram_u1-existing.jpg"
     assert avatar_sha == sha
 
 
 def test_avatar_upload_happens_when_sha_changes(mocker):
     record = _record(
-        avatar_r2_key="photos/records/testplatform/testplatform_u1-old.jpg",
+        avatar_r2_key="photos/records/instagram/instagram_u1-old.jpg",
         avatar_sha256="a-different-sha",
     )
     browser, pacer = _patch_common(mocker, [record])
@@ -241,7 +243,7 @@ def test_avatar_upload_happens_when_sha_changes(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    run.scrape("testplatform")
+    run.scrape("instagram")
 
     avatar_calls = [c for c in put_object.call_args_list if c.args[0].startswith("photos/records/")]
     assert len(avatar_calls) == 1
@@ -267,7 +269,7 @@ def test_avatar_falls_back_to_page_fetch_when_direct_fetch_fails(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    run.scrape("testplatform")
+    run.scrape("instagram")
 
     sha = hashlib.sha256(b"page-fetched-bytes").hexdigest()
     avatar_calls = [c for c in put_object.call_args_list if c.args[0].startswith("photos/records/")]
@@ -281,7 +283,7 @@ def test_records_with_no_handle_are_skipped_not_navigated(mocker):
     browser, pacer = _patch_common(mocker, [_record(handle=None)])
     put_object = run.photos.put_object
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 1, "halted": None}
     assert browser.navigated == []
@@ -291,7 +293,7 @@ def test_records_with_no_handle_are_skipped_not_navigated(mocker):
 def test_max_n_limits_records_processed(mocker):
     records = [
         {
-            "id": f"testplatform:u{i}",
+            "id": f"instagram:u{i}",
             "handle": f"u{i}",
             "avatar_r2_key": None,
             "avatar_sha256": None,
@@ -302,7 +304,7 @@ def test_max_n_limits_records_processed(mocker):
     mocker.patch("people_sync.photos.fetch_url_photo", return_value=None)
     mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform", max_n=2)
+    result = run.scrape("instagram", max_n=2)
 
     assert result["done"] == 2
     assert len(browser.navigated) == 2
@@ -310,9 +312,9 @@ def test_max_n_limits_records_processed(mocker):
 
 def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
     records = [
-        {"id": "testplatform:u0", "handle": "u0", "avatar_r2_key": None, "avatar_sha256": None},
-        {"id": "testplatform:u1", "handle": "u1", "avatar_r2_key": None, "avatar_sha256": None},
-        {"id": "testplatform:u2", "handle": "u2", "avatar_r2_key": None, "avatar_sha256": None},
+        {"id": "instagram:u0", "handle": "u0", "avatar_r2_key": None, "avatar_sha256": None},
+        {"id": "instagram:u1", "handle": "u1", "avatar_r2_key": None, "avatar_sha256": None},
+        {"id": "instagram:u2", "handle": "u2", "avatar_r2_key": None, "avatar_sha256": None},
     ]
     parse_calls = {"n": 0}
 
@@ -338,7 +340,7 @@ def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 2, "skipped": 1, "halted": None}
     assert upsert.call_count == 2
@@ -346,7 +348,7 @@ def test_record_failure_is_isolated_and_next_record_still_processes(mocker):
     # Parsing failures must retain their original payload too.
     raw_calls = [c for c in put_object.call_args_list if c.args[0].startswith("profiles/")]
     assert len(raw_calls) == 3
-    warn.assert_any_call("record failed", platform="testplatform", index=1, reason="ValueError")
+    warn.assert_any_call("record failed", platform="instagram", index=1, reason="ValueError")
     # a failure still sleeps the normal gap - it must not speed up the loop
     assert sleep.call_count == 3
 
@@ -363,14 +365,14 @@ def test_extractor_error_sentinel_archives_without_cache_writes(mocker):
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     warn = mocker.patch.object(run.log, "warning")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 1, "halted": None}
     put_object.assert_called_once()
     upsert.assert_not_called()
     pacer.record.assert_not_called()
     pacer.next_gap.assert_called_once()
-    warn.assert_any_call("record failed", platform="testplatform", index=0, reason="no-header")
+    warn.assert_any_call("record failed", platform="instagram", index=0, reason="no-header")
 
 
 def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
@@ -388,7 +390,7 @@ def test_browser_lost_error_halts_cleanly_and_closes_browser(mocker):
     put_object = run.photos.put_object
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 0, "halted": "browser lost"}
     assert browser.closed is True
@@ -411,35 +413,35 @@ def test_records_sql_filters_deleted_ignored_and_stale_window():
     conn.executemany(
         "INSERT INTO people_sync_records VALUES (?,?,?,?,?,?,?)",
         [
-            ("testplatform:new", "testplatform", "new", None, "pending", None, "3"),
-            ("testplatform:stale", "testplatform", "stale", None, "matched", None, "2"),
-            ("testplatform:fresh", "testplatform", "fresh", None, "pending", None, "1"),
+            ("instagram:new", "instagram", "new", None, "pending", None, "3"),
+            ("instagram:stale", "instagram", "stale", None, "matched", None, "2"),
+            ("instagram:fresh", "instagram", "fresh", None, "pending", None, "1"),
             (
-                "testplatform:deleted",
-                "testplatform",
+                "instagram:deleted",
+                "instagram",
                 "deleted",
                 None,
                 "pending",
                 "2026-01-01T00:00:00.000Z",
                 "4",
             ),
-            ("testplatform:ignored", "testplatform", "ignored", None, "ignored", None, "5"),
+            ("instagram:ignored", "instagram", "ignored", None, "ignored", None, "5"),
             ("other:someone", "other", "someone", None, "pending", None, "6"),
         ],
     )
     conn.executemany(
         "INSERT INTO people_sync_profiles VALUES (?,?,?,?)",
         [
-            ("testplatform:fresh", "2026-08-01T00:00:00.000Z", None, None),  # recent: excluded
-            ("testplatform:stale", "2026-01-01T00:00:00.000Z", None, None),  # stale: included
+            ("instagram:fresh", "2026-08-01T00:00:00.000Z", None, None),  # recent: excluded
+            ("instagram:stale", "2026-01-01T00:00:00.000Z", None, None),  # stale: included
         ],
     )
     conn.commit()
 
-    query = run._records_sql("testplatform", "2026-03-01T00:00:00.000Z")
+    query = run._records_sql("instagram", "2026-03-01T00:00:00.000Z")
     ids = [row[0] for row in conn.execute(query).fetchall()]
 
-    assert ids == ["testplatform:stale", "testplatform:new"]
+    assert ids == ["instagram:stale", "instagram:new"]
 
 
 def test_scrape_waits_for_a_module_ready_predicate_before_extracting(mocker):
@@ -465,7 +467,7 @@ def test_scrape_waits_for_a_module_ready_predicate_before_extracting(mocker):
     mocker.patch("people_sync.scrape.run.photos.fetch_url_photo", return_value=None)
     mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    run.scrape("testplatform")
+    run.scrape("instagram")
 
     wait = browser.calls.index(f"wait:READY():{run.READY_TIMEOUT_S}")
     assert wait < browser.calls.index("eval:EXTRACT()")
@@ -476,13 +478,11 @@ def test_challenge_halt_names_the_marker_and_saves_a_screenshot(mocker, tmp_path
     browser.screenshot = mocker.Mock()
     _patch_common(mocker, [_record()], browser=browser)
 
-    result = run.scrape("testplatform", state_path=str(tmp_path / "state.json"))
+    result = run.scrape("instagram", state_path=str(tmp_path / "state.json"))
 
     assert result["halted"] == "challenge page: log in to continue"
     shot = browser.screenshot.call_args.args[0]
-    assert (
-        shot.startswith(str(tmp_path)) and "scrape-testplatform-" in shot and shot.endswith(".png")
-    )
+    assert shot.startswith(str(tmp_path)) and "scrape-instagram-" in shot and shot.endswith(".png")
 
 
 def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
@@ -496,11 +496,11 @@ def test_unavailable_profile_gets_a_placeholder_row_and_is_not_retried(mocker):
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
     upload = run.photos.put_object
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result == {"done": 0, "skipped": 1, "halted": None}
     placeholder = upsert.call_args.args[0]
-    assert placeholder.record_id == "testplatform:u1" and placeholder.raw == {"unavailable": True}
+    assert placeholder.record_id == "instagram:u1" and placeholder.raw == {"unavailable": True}
     assert placeholder.display_name is None
     assert upsert.call_args.kwargs["raw_r2_key"] == upload.call_args.args[0]
 
@@ -515,7 +515,7 @@ def test_other_extract_errors_leave_cache_unchanged(mocker):
     mocker.patch("people_sync.scrape.run.import_module", return_value=BrokenModule)
     upsert = mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result["skipped"] == 1
     upsert.assert_not_called()
@@ -528,11 +528,20 @@ def test_scrape_merges_a_module_enrich_hook_into_the_captured_entries(mocker):
         @staticmethod
         def enrich(browser, handle):
             EnrichingModule.seen.append(handle)
-            return [{"url": "https://x/web_profile_info/?username=u1", "body": "{}"}]
+            return [
+                {
+                    "url": "https://www.instagram.com/web_profile_info/?username=u1",
+                    "body": '{"data":{"user":{"username":"u1","biography":"Artist"}}}',
+                }
+            ]
 
         @staticmethod
         def parse(eval_result, captured):
-            assert captured and captured[-1]["url"].endswith("username=u1")
+            assert (
+                captured
+                and json.loads(captured[-1]["body"])["data"]["user"]["biography"] == "Artist"
+            )
+            assert "?" not in captured[-1]["url"]
             return FakeModule.parse(eval_result, captured)
 
     _patch_common(mocker, [_record()])
@@ -540,16 +549,21 @@ def test_scrape_merges_a_module_enrich_hook_into_the_captured_entries(mocker):
     mocker.patch("people_sync.scrape.run.photos.fetch_url_photo", return_value=None)
     mocker.patch("people_sync.scrape.run.upsert_profile")
 
-    result = run.scrape("testplatform")
+    result = run.scrape("instagram")
 
     assert result["done"] == 1 and EnrichingModule.seen == ["u1"]
 
 
 @pytest.mark.parametrize("targets", [None, ["test-tab"]])
-@pytest.mark.parametrize("payload", ['{"username":"u1","future_field":[1,2]}', "{broken"])
+@pytest.mark.parametrize("payload", ['{"username":"u1","bio_lines":["Artist"]}', "{broken"])
 def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, targets, payload):
     archived = {}
-    captured = [{"url": "https://example.test/profile", "body": '{"extra":true}'}]
+    captured = [
+        {
+            "url": "https://www.instagram.com/web_profile_info",
+            "body": '{"data":{"user":{"username":"u1","biography":"Artist"}}}',
+        }
+    ]
 
     class Browser(FakeBrowser):
         def navigate(self, *args, **kwargs):
@@ -576,12 +590,13 @@ def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, t
     )
     mocker.patch("people_sync.photos.get_object", side_effect=archived.__getitem__)
     cache = mocker.patch.object(run, "upsert_profile")
-    run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
+    run.scrape("instagram", targets=targets, state_path=str(tmp_path / "state.json"))
 
     assert len(archived) == 1
     saved = captures.validate(json.loads(next(iter(archived.values()))))["payload"]
     assert saved["raw_eval"] == payload
-    assert saved["captured"] == captured
+    assert saved["captured"][0]["url"] == captured[0]["url"]
+    assert json.loads(saved["captured"][0]["body"]) == json.loads(captured[0]["body"])
     cache.assert_not_called()
     assert browser.closed
 
@@ -591,7 +606,7 @@ def test_original_is_durable_before_decode_or_platform_parse(mocker, tmp_path, t
 def test_archive_failure_stops_before_parsing_or_next_navigation(
     mocker, tmp_path, targets, failure
 ):
-    browser, _ = _patch_common(mocker, [_record(), _record(id="testplatform:u2", handle="u2")])
+    browser, _ = _patch_common(mocker, [_record(), _record(id="instagram:u2", handle="u2")])
     browser.watch_blocks = lambda *args: None
     parse = mocker.patch.object(FakeModule, "parse")
     cache = mocker.patch.object(run, "upsert_profile")
@@ -605,7 +620,7 @@ def test_archive_failure_stops_before_parsing_or_next_navigation(
         )
         mocker.patch(target, side_effect=OSError("secret storage detail"))
 
-    result = run.scrape("testplatform", targets=targets, state_path=str(tmp_path / "state.json"))
+    result = run.scrape("instagram", targets=targets, state_path=str(tmp_path / "state.json"))
 
     assert result["halted"] == "raw archive failed"
     assert len(browser.navigated) == 1
@@ -614,7 +629,12 @@ def test_archive_failure_stops_before_parsing_or_next_navigation(
 
 
 def test_readiness_failure_preserves_responses_already_received(mocker, tmp_path):
-    captured = [{"url": "https://example.test/profile", "body": "original response"}]
+    captured = [
+        {
+            "url": "https://www.instagram.com/web_profile_info",
+            "body": '{"data":{"user":{"biography":"Artist","username":"u1"}}}',
+        }
+    ]
     browser, _ = _patch_common(mocker, [_record()])
     browser.navigate = lambda *args, **kw: {"captured": captured, "dom_ready": False}
     mocker.patch.object(FakeModule, "READY_JS", "READY()", create=True)
@@ -622,7 +642,7 @@ def test_readiness_failure_preserves_responses_already_received(mocker, tmp_path
     upload = run.photos.put_object
     cache = mocker.patch.object(run, "upsert_profile")
 
-    run.scrape("testplatform", state_path=str(tmp_path / "state.json"))
+    run.scrape("instagram", state_path=str(tmp_path / "state.json"))
 
     assert (
         captures.validate(json.loads(upload.call_args.args[1]))["payload"]["captured"] == captured
@@ -646,9 +666,7 @@ def test_shared_stop_after_collection_keeps_archive_without_cache_write(mocker, 
     mocker.patch.object(FakeModule, "parse", side_effect=stop_after_capture)
     upload = run.photos.put_object
     cache = mocker.patch.object(run, "upsert_profile")
-    result = run.scrape(
-        "testplatform", targets=["test-tab"], state_path=str(tmp_path / "state.json")
-    )
+    result = run.scrape("instagram", targets=["test-tab"], state_path=str(tmp_path / "state.json"))
     assert result["halted"] == "HTTP 429"
     assert (
         captures.validate(json.loads(upload.call_args.args[1]))["payload"]["eval"]["username"]
@@ -665,8 +683,9 @@ def test_two_snapshots_at_same_timestamp_do_not_overwrite(mocker):
         side_effect=lambda key, body, **kw: archived.update({key: body}),
     )
     mocker.patch("people_sync.photos.get_object", side_effect=archived.__getitem__)
-    for raw in ('{"bio":"before"}', '{"bio":"after"}'):
-        run.photos.archive_profile("testplatform", "testplatform:u1", raw, [])
+    for raw in ('{"full_name":"before"}', '{"full_name":"after"}'):
+        run.photos.archive_profile("instagram", "instagram:u1", raw, [])
     assert {
-        captures.validate(json.loads(body))["payload"]["eval"]["bio"] for body in archived.values()
+        captures.validate(json.loads(body))["payload"]["eval"]["full_name"]
+        for body in archived.values()
     } == {"before", "after"}

@@ -16,6 +16,7 @@ import random
 import time
 
 from people_sync import photos
+from people_sync.scrape import snapshot
 from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://partiful.com/u/{handle}"
@@ -125,11 +126,35 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
             browser.wait_for("!!document.querySelector('h1')", 8)
             time.sleep(1.0)
             entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
-            raw = browser.eval(EXTRACTOR_JS)
-            entry["raw_r2_key"] = photos.archive_profile(
-                "partiful", f"partiful:{entry['uid']}", raw, [], context=row
-            )
+            context = {**row, "source_dom": snapshot.collect(browser, "partiful")}
             try:
+                raw = browser.eval(EXTRACTOR_JS)
+            except Exception:
+                photos.archive_profile(
+                    "partiful",
+                    f"partiful:{entry['uid']}",
+                    None,
+                    [],
+                    context=context | {"failure": "extraction-failed"},
+                )
+                raise
+            payload = snapshot.prepare(
+                "partiful", f"partiful:{entry['uid']}", raw, [], context=context
+            )
+            entry["raw_r2_key"] = photos.archive_profile(
+                "partiful",
+                f"partiful:{entry['uid']}",
+                payload.get("raw_eval", payload["eval"]),
+                [],
+                context=payload["context"],
+            )
+            entry = {
+                "uid": entry["uid"],
+                "raw_r2_key": entry["raw_r2_key"],
+                **{k: v for k, v in payload["context"].items() if k in snapshot._ROW},
+            }
+            try:
+                raw = payload["eval"]
                 entry["profile"] = parse(json.loads(raw) if isinstance(raw, str) else raw)
             except ExtractError as e:
                 entry["error"] = str(e)
@@ -152,6 +177,24 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
     profile = entry.get("profile")
     if not uid or profile is None:
         return None
+    # Compatibility callers also pass through the same retained-input boundary.
+    if not entry.get("raw_r2_key"):
+        payload = snapshot.prepare(
+            "partiful",
+            f"partiful:{uid}",
+            profile.raw["extractor"],
+            [],
+            context={k: v for k, v in entry.items() if k in snapshot._ROW},
+        )
+        raw_key = photos.archive_profile(
+            "partiful", f"partiful:{uid}", payload["eval"], [], context=payload["context"]
+        )
+        profile = parse(payload["eval"], payload["captured"])
+        entry = {
+            "uid": uid,
+            "raw_r2_key": raw_key,
+            **{k: v for k, v in payload["context"].items() if k in snapshot._ROW},
+        }
     raw = {
         "url": URL.format(handle=uid),
         "last_seen": entry.get("last_seen"),
@@ -166,9 +209,7 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
         name=entry.get("name") or profile.display_name,
         raw=raw,
     )
-    raw_key = entry.get("raw_r2_key") or photos.archive_profile(
-        "partiful", record.row_id, profile.raw["extractor"], []
-    )
+    raw_key = entry["raw_r2_key"]
     ledger.upsert([record])
     profile.record_id = record.row_id
     key, sha = (None, None)

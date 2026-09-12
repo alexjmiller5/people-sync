@@ -162,6 +162,7 @@ def cmd_scrape(args: argparse.Namespace) -> None:
         data_dir=args.data_dir,
         approve_command=args.approve_command,
         **({"targets": args.target} if args.target else {}),
+        **({"record_id": args.record_id} if args.record_id is not None else {}),
     )
     print(json.dumps(result))
 
@@ -333,6 +334,9 @@ def build_parser() -> argparse.ArgumentParser:
     scrape_p = sub.add_parser("scrape", help="scrape a platform's pending/matched profiles")
     scrape_p.add_argument("platform")
     scrape_p.add_argument("--max", type=int, default=None)
+    scrape_p.add_argument(
+        "--record-id", help="recapture exactly one pending/matched record, even if fresh"
+    )
     scrape_p.add_argument("--state", default=DEFAULT_STATE_PATH)
     scrape_p.add_argument(
         "--target",

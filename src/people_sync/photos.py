@@ -48,25 +48,16 @@ class ArchiveError(RuntimeError):
 
 
 def archive_profile(platform, record_id, raw_eval, captured, *, context=None) -> str:
-    """Retain extractor output and allowlisted responses before interpretation.
+    """Verify retention of safe profile input before interpretation.
 
-    Keep the exact JS result alongside the compatible decoded `eval` field.
-    Malformed JSON is retained as a string; decoding cannot prevent archival.
+    Exact JS strings survive only when the privacy boundary leaves them intact.
+    Filtered or malformed structured input carries explicit exclusions.
     """
     from people_sync import captures
+    from people_sync.scrape import snapshot
 
     try:
-        payload = {"eval": raw_eval, "captured": captured}
-        if isinstance(raw_eval, str):
-            payload["raw_eval"] = raw_eval
-            try:
-                decoded = json.loads(raw_eval)
-                captures.encode(decoded)  # Reject Python's nonstandard NaN/Infinity JSON extension.
-                payload["eval"] = decoded
-            except (ValueError, RecursionError):
-                pass
-        if context is not None:
-            payload["context"] = context
+        payload = snapshot.prepare(platform, record_id, raw_eval, captured, context=context)
         return captures.retain(
             captures.build_capture(
                 platform,
@@ -74,10 +65,8 @@ def archive_profile(platform, record_id, raw_eval, captured, *, context=None) ->
                 payload,
                 record_id=record_id,
                 captured_at=lifedata.now_iso(),
-                completeness="extracted-only",
-                exclusions=[
-                    "collector-selected fields and allowlisted responses only; unloaded fields excluded"
-                ],
+                completeness=snapshot.completeness(payload),
+                exclusions=snapshot.EXCLUSIONS,
             )
         )
     except Exception:

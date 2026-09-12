@@ -80,6 +80,9 @@ cap; all tabs share full periodic breaks. A per-platform run lock prevents compe
 invocations. A source block or warning sets one shared stop event, stops tab
 loading, and leaves unfinished records pending. Do not use independent scraper
 processes as a substitute for this queue. No scheduled resume or automatic retry.
+`scrape --record-id ID` selects exactly one pending/matched, nondeleted record
+from the requested source, bypassing only staleness. Invalid selections fail
+before connecting to the browser; the default queue is unchanged.
 
 Sources whose export lacks profile links get a `list` command (`facebook`:
 the friends page gives name-only records a handle by unique exact name;
@@ -93,18 +96,34 @@ profile extractor result and mutual-row context before parsing or navigating
 back, and passes its file key to `upsert_profile` without uploading it again.
 An archive failure halts the import and leaves the existing ledger/cache intact.
 
-`photos.archive_profile` is shared by ordinary/coordinated scrapes and Partiful
-mutuals. It retains exact string extractor results as `raw_eval`, a compatible
-decoded `eval` (the original string when malformed), and allowlisted response
-bodies as `captured`. Snapshot names include a random suffix so repeated
-observations cannot overwrite each other at the same clock timestamp. Parsing,
-avatar fetches and cache writes happen only after the upload succeeds. Failed
-parses retain their files even without a cache row; unavailable placeholders
-link to the retained file. Responses already returned by navigation are also
-archived if readiness, enrichment or extraction subsequently raises. Archive
-failure stops the run, including the shared coordinated queue. This does not
-capture responses never received or protect against process death before upload;
-the existing secret/payment exclusions still apply.
+`scrape/snapshot.py` owns the profile-input-v1 privacy boundary shared by
+ordinary/coordinated scrapes and Partiful mutual profiles. `collect` reads only
+declared profile regions before field extraction and returns an ordered safe
+DOM tree with selector, exclusions and success/partial status. There is no
+body/main fallback. Venmo never collects DOM or responses, only selected
+`otherUser` fields. List-page acquisition is separate.
+
+`prepare` filters extractor fields, context and matching source API profiles;
+the exact resulting payload supplies both `photos.archive_profile` and parsing.
+Only declared typed identities/counts/dates bypass free-text contact detection.
+Canonical identity URLs have source-specific hosts/paths and no userinfo,
+queries or fragments; all other URLs retain the strict generic privacy check.
+Unknown and unsafe values carry fixed exclusion labels. Exact `raw_eval` strings
+survive only when filtering leaves them intact, including no duplicate keys.
+Malformed structured input without a provable boundary is excluded explicitly.
+Legacy capture replay remains compatible, including Venmo REST field names;
+`date_joined` is never a birthday.
+
+`photos.archive_profile` uses unique versioned capture keys and upload/read-back
+verification before parsing, avatar fetches or cache writes. Profile-input
+envelopes revalidate their payload and declared policy. Failed parses keep their
+files; unavailable placeholders link to them. Already received permitted API
+input and collected DOM survive later failures with explicit failure metadata.
+Archive failure stops the run, including the coordinated queue. Unreceived
+responses and process death before retention remain outside this guarantee.
+Unsafe avatar record-key components use full SHA256; safe existing keys remain
+compatible, and invalid prior keys never satisfy the same-image reuse shortcut.
+Existing retained objects are never renamed or deleted.
 
 ## Logins
 

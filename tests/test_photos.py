@@ -211,7 +211,7 @@ def test_archive_profile_retains_real_verified_envelope(monkeypatch, tmp_path, r
     key = photos.archive_profile("spotify", "spotify:example", raw, [], context=context)
     c = captures.validate(json.loads(stored[key]))
     assert c["record_id"] == "spotify:example" and c["completeness"] == "extracted-only"
-    assert c["payload"]["context"] == context
+    assert c["payload"]["context"] == {"exclusions": ["unknown-fields"]}
     assert c["payload"]["eval"] == (json.loads(raw) if raw and raw != "{broken" else raw)
     if isinstance(raw, str):
         assert c["payload"]["raw_eval"] == raw
@@ -237,7 +237,7 @@ def test_archive_profile_failure_hides_exception_details(monkeypatch, tmp_path, 
     assert secret not in str(exc.value) and exc.value.__suppress_context__
 
 
-def test_nonstandard_json_is_retained_as_malformed_text(monkeypatch, tmp_path):
+def test_nonstandard_structured_json_has_explicit_privacy_exclusion(monkeypatch, tmp_path):
     stored = {}
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
@@ -245,7 +245,8 @@ def test_nonstandard_json_is_retained_as_malformed_text(monkeypatch, tmp_path):
     raw = '{"count":NaN}'
     key = photos.archive_profile("spotify", "spotify:example", raw, [])
     payload = json.loads(stored[key])["payload"]
-    assert payload["raw_eval"] == payload["eval"] == raw
+    assert payload["eval"] is None and "raw_eval" not in payload
+    assert payload["context"]["exclusions"] == ["unsafe-or-invalid-values"]
 
 
 @pytest.mark.parametrize("readback_ok", [True, False])
@@ -268,7 +269,11 @@ def test_scrape_caller_parses_only_after_verified_archive(
     module = SimpleNamespace(URL=spotify.URL, CAPTURE=[], EXTRACTOR_JS="synthetic", parse=parse)
     browser = mocker.Mock()
     browser.navigate.return_value = {"captured": []}
-    browser.eval.side_effect = ["Example", '{"name":"Example","path":"/user/example"}']
+    browser.eval.side_effect = [
+        "Example",
+        [{"tag": "h1", "children": [{"text": "Example"}]}],
+        '{"name":"Example","path":"/user/example"}',
+    ]
     record = {"id": "spotify:example", "handle": "example"}
     if readback_ok:
         profile, key = run._collect_profile(browser, module, "spotify", 0, record)
