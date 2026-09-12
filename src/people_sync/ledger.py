@@ -1,6 +1,8 @@
 """people_sync_records resolution ledger - idempotent upserts."""
 
+import hashlib
 import json
+import os
 from dataclasses import dataclass
 
 import structlog
@@ -32,6 +34,39 @@ def _int_sql(v: int | None) -> str:
     return "NULL" if v is None else str(v)
 
 
+def capture_edge_id(key: str, table: str, row_id: str, rel: str, field: str | None) -> str:
+    identity = json.dumps([key, table, row_id, rel, field], ensure_ascii=False)
+    return "takeout:" + hashlib.sha256(identity.encode()).hexdigest()
+
+
+def imported_from(table: str, row_id: str, capture_key=None, capture_refs=()) -> None:
+    """Repair missing whole-row observation edges; never resurrect deleted edges."""
+    keys = {ref["capture_key"] for ref in capture_refs}
+    if capture_key:
+        keys.add(capture_key)
+    rows = [
+        {
+            "id": capture_edge_id(key, table, row_id, "imported_from", None),
+            "from_kind": "takeout",
+            "from_ref": key,
+            "to_kind": table,
+            "to_ref": row_id,
+            "rel": "imported_from",
+            "field": None,
+            "detail": None,
+            "asserted_by": os.environ.get("PEOPLE_SYNC_ASSERTED_BY") or "script:people-sync ingest",
+        }
+        for key in sorted(keys)
+    ]
+    if not rows:
+        return
+    ids = ",".join(lifedata.sq(row["id"]) for row in rows)
+    existing = {r["id"] for r in lifedata.sql(f"SELECT id FROM provenance WHERE id IN ({ids})")}
+    missing = [row for row in rows if row["id"] not in existing]
+    if missing:
+        lifedata.insert("provenance", missing)
+
+
 def upsert(records: list[Record]) -> dict:
     if not records:
         return {"new": 0, "updated": 0}
@@ -48,10 +83,14 @@ def upsert(records: list[Record]) -> dict:
             dropped=len(records) - len(deduped),
             reason="source has no stable id; row_id derived from the display name",
         )
+    observations = records
     records = deduped
     ids = ",".join(lifedata.sq(r.row_id) for r in records)
     existing = {
-        row["id"] for row in lifedata.sql(f"SELECT id FROM people_sync_records WHERE id IN ({ids})")
+        row["id"]: row
+        for row in lifedata.sql(
+            f"SELECT id, deleted_at FROM people_sync_records WHERE id IN ({ids})"
+        )
     }
     now = lifedata.now_iso()
     new_rows = []
@@ -59,12 +98,14 @@ def upsert(records: list[Record]) -> dict:
     held = []
     for r in records:
         if r.row_id in existing:
-            if r.hold_existing:
+            if r.hold_existing or existing[r.row_id].get("deleted_at"):
                 held.append(
                     {
                         "record_id": r.row_id,
                         "capture_key": r.capture_key,
-                        "reason": "permitted-field-exclusions",
+                        "reason": "permitted-field-exclusions"
+                        if r.hold_existing
+                        else "deleted-record",
                     }
                 )
                 continue
@@ -97,4 +138,8 @@ def upsert(records: list[Record]) -> dict:
             )
     if new_rows:
         lifedata.insert("people_sync_records", new_rows)
+    held_ids = {row["record_id"] for row in held}
+    for r in observations:
+        if r.row_id not in held_ids and not (r.hold_existing and r.row_id in existing):
+            imported_from("people_sync_records", r.row_id, r.capture_key, r.capture_refs)
     return {"new": len(new_rows), "updated": updated} | ({"held": held} if held else {})

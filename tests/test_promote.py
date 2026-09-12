@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from people_sync import promote
 
 
@@ -14,6 +16,7 @@ def _profile(**kw):
         "avatar_r2_key": "photos/records/facebook/r1-abc.jpg",
         "avatar_sha256": "abc",
         "scraped_at": "2026-09-08T00:00:00Z",
+        "raw_r2_key": "profiles/facebook/captures/observation.json",
     }
     base.update(kw)
     return base
@@ -121,16 +124,13 @@ def test_apply_writes_rows_and_one_provenance_edge_per_value(mocker):
         "person_photos",
     }
     assert all(
-        e["from_kind"] == "people_sync_profiles"
-        and e["from_ref"] == "facebook:r1"
+        e["from_kind"] == "takeout"
+        and e["from_ref"] == "profiles/facebook/captures/observation.json"
         and e["rel"] == "evidence_of"
         for e in edges
     )
     birthday_edge = next(e for e in edges if e["to_kind"] == "people")
-    assert (
-        birthday_edge["id"] == "people_sync_profiles:facebook:r1:p1:birthday"
-        and birthday_edge["field"] == "birthday"
-    )
+    assert birthday_edge["id"].startswith("takeout:") and birthday_edge["field"] == "birthday"
     assert json.loads(birthday_edge["detail"]) == {"cue": "2002-12-09", "confidence": "high"}
     assert "UPDATE people SET birthday = '2002-12-09'" in sql.call_args.args[0]
 
@@ -146,3 +146,69 @@ def test_run_dry_run_prints_the_plan_and_writes_nothing(mocker):
     assert summary["planned"] == {"location": 1, "employment": 1, "birthday": 1, "photo": 1}
     assert summary["applied"] == {} and summary["conflicts"] == []
     inserts.assert_not_called()
+
+
+def test_missing_capture_is_reported_and_apply_refuses_before_any_write(mocker):
+    mocker.patch(
+        "people_sync.promote.load_state",
+        return_value=([_profile(raw_r2_key=None)], PEOPLE, [], [], [], set()),
+    )
+    insert = mocker.patch.object(promote.lifedata, "insert")
+    sql = mocker.patch.object(promote.lifedata, "sql")
+    summary = promote.run(apply_writes=True)
+    assert summary["missing_evidence"] == ["facebook:r1"]
+    assert summary["planned"] == summary["applied"] == {}
+    with pytest.raises(ValueError, match="missing capture evidence"):
+        promote.apply([promote.Op("birthday", "p1", "facebook:r1", "facebook", "--01-02")])
+    insert.assert_not_called()
+    sql.assert_not_called()
+
+
+def test_legacy_evidence_is_reported_without_historical_rewrite(mocker):
+    mocker.patch(
+        "people_sync.promote.load_state",
+        return_value=(
+            [_profile(raw_r2_key=None)],
+            PEOPLE,
+            [],
+            [],
+            [],
+            {"people_sync_profiles:facebook:r1:p1:birthday"},
+        ),
+    )
+    insert = mocker.patch.object(promote.lifedata, "insert")
+    summary = promote.run(apply_writes=True)
+    assert summary["legacy"] == ["facebook:r1"]
+    assert summary["applied"] == {}
+    insert.assert_not_called()
+
+
+def test_exact_capture_edges_make_planning_idempotent(mocker):
+    insert = mocker.patch.object(promote.lifedata, "insert")
+    mocker.patch.object(promote.lifedata, "sql", return_value=[])
+    promote.apply(promote.plan([_profile()], PEOPLE, [], [], [], set()))
+    edges = {e["id"] for e in insert.call_args.args[1]}
+    assert promote.plan([_profile()], PEOPLE, [], [], [], edges) == []
+
+
+def test_load_state_includes_capture_and_deleted_evidence(mocker):
+    sql = mocker.patch.object(promote.lifedata, "sql", return_value=[])
+    promote.load_state()
+    assert "p.raw_r2_key" in sql.call_args_list[0].args[0]
+    query = sql.call_args_list[-1].args[0]
+    assert "'takeout'" in query and "deleted_at IS NULL" not in query
+
+
+def test_legacy_month_and_photo_are_not_recast_as_capture_evidence():
+    ops = promote.plan(
+        [_profile(location=None, work=None, birthday="--08")],
+        PEOPLE,
+        [],
+        [],
+        [],
+        {
+            "people_sync_profiles:facebook:r1:p1:slightly_known_birthday",
+            "people_sync_profiles:facebook:r1:photo:p1:facebook:r1",
+        },
+    )
+    assert ops == []

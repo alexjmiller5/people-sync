@@ -267,6 +267,22 @@ the next sync.
 `lifedata.sq()` quotes every value interpolated into SQL. Use it; do not
 f-string a raw value into a query.
 
+`ledger.imported_from(table, row_id, capture_key=None, capture_refs=())` attaches
+whole-row `imported_from` evidence to each distinct retained key after successful
+record/profile writes. IDs hash the capture key, destination table/row, relation
+and field. Retries insert missing edges only, including when a Facebook handle
+already equals its unique-name proposal. Deleted edges and source/profile rows
+stay untouched. Duplicate ledger observations retain their distinct keys before
+last-row deduplication; held IDs receive no import claims. Tombstoned records
+are reported through `held` with reason `deleted-record`.
+
+Promotion operations carry `raw_r2_key`; new `takeout` evidence references that
+file, never the mutable profile row. The report exposes `missing_evidence` and
+`legacy` record IDs. Missing captures block new promotion; historical profile-row
+edges remain unchanged. Import-edge detail is null; promotion detail contains
+only assertion properties. Replay remains proposal-only and preserves the
+original capture identity/time without writing or claiming a fresh visit.
+
 Birthdays are `YYYY-MM-DD`. A source that gives a month and day but no year
 is stored ISO 8601 style as `--MM-DD`; filter with
 `substr(birthday, -5)` when matching a month/day.

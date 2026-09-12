@@ -28,13 +28,17 @@ def synthetic_ledger(monkeypatch):
             person_id TEXT, suggested_person_id TEXT, first_seen TEXT, last_seen TEXT,
             deleted_at TEXT, updated_at TEXT
         )""")
+        db.execute("""CREATE TABLE provenance (
+            id TEXT PRIMARY KEY, from_kind TEXT, from_ref TEXT, to_kind TEXT, to_ref TEXT,
+            rel TEXT, field TEXT, detail TEXT, asserted_by TEXT, deleted_at TEXT
+        )""")
 
         def sql(query):
             cursor = db.execute(query)
             return [dict(row) for row in cursor.fetchall()] if cursor.description else []
 
         def insert(table, rows):
-            assert table == "people_sync_records"
+            assert table in {"people_sync_records", "people_sync_profiles", "provenance"}
             for row in rows:
                 columns = ",".join(row)
                 placeholders = ",".join("?" for _ in row)
@@ -425,7 +429,11 @@ def test_non_ok_replay_keeps_capture_but_never_writes(monkeypatch, tmp_path, ret
 def test_capture_key_seam_is_not_serialized_to_ledger(monkeypatch):
     rows = []
     monkeypatch.setattr(ledger.lifedata, "sql", lambda query: [])
-    monkeypatch.setattr(ledger.lifedata, "insert", lambda table, batch: rows.extend(batch))
+    monkeypatch.setattr(
+        ledger.lifedata,
+        "insert",
+        lambda table, batch: rows.extend(batch) if table == "people_sync_records" else None,
+    )
     record = ledger.Record(
         "google_contacts",
         "people/c1",

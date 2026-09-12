@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 from people_sync import lifedata
+from people_sync.ledger import imported_from
 
 _JSON_COLUMNS = ("education", "work", "links")
 _BOOL_COLUMNS = ("is_private", "is_verified")
@@ -95,9 +96,11 @@ def upsert_profile(
 ) -> None:
     row = _row(p, avatar_r2_key, avatar_sha256, raw_r2_key, lifedata.now_iso())
     existing = lifedata.sql(
-        f"SELECT id FROM people_sync_profiles WHERE record_id = {lifedata.sq(p.record_id)}"
+        f"SELECT id, deleted_at FROM people_sync_profiles WHERE record_id = {lifedata.sq(p.record_id)}"
     )
     if existing:
+        if existing[0].get("deleted_at"):
+            return
         set_clause = ", ".join(f"{col} = {_sql_value(val)}" for col, val in row.items())
         lifedata.sql(
             f"UPDATE people_sync_profiles SET {set_clause} WHERE record_id = {lifedata.sq(p.record_id)}"
@@ -106,3 +109,6 @@ def upsert_profile(
         lifedata.insert(
             "people_sync_profiles", [{"id": p.record_id, "record_id": p.record_id, **row}]
         )
+    imported_from(
+        "people_sync_profiles", existing[0]["id"] if existing else p.record_id, raw_r2_key
+    )

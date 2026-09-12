@@ -460,9 +460,11 @@ def test_partiful_decisions_remain_untouched_with_capture_refs(retained, mocker)
 
     entry = next(partiful.harvest(FakeBrowser(), limit=1))[2]
     sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "partiful:uid0"}])
+    inserted = mocker.patch("people_sync.lifedata.insert")
     mocker.patch("people_sync.scrape.profile.upsert_profile")
     partiful.ingest_entry(entry)
-    update = sql.call_args.args[0]
+    update = next(c.args[0] for c in sql.call_args_list if c.args[0].startswith("UPDATE"))
+    assert all(c.args[0] == "provenance" for c in inserted.call_args_list)
     assert "UPDATE people_sync_records" in update
     assert all(
         field not in update
