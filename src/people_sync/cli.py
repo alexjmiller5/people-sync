@@ -1,11 +1,15 @@
 """CLI entrypoint: uv run python -m people_sync <cmd>."""
 
 import argparse
+import difflib
+import hashlib
 import json
 import os
 import sys
+from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from people_sync import captures, replay
 from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
@@ -24,6 +28,80 @@ QUEUE_QUERY = """
 # tests can mock.patch the underlying parser/source functions.
 _PARSE_WITH_PATH = ("facebook", "snapchat", "linkedin")
 _FETCH_NO_PATH = ("google", "apple")
+
+
+def cmd_capture(args: argparse.Namespace) -> None:
+    try:
+        capture = captures.capture_export(args.source, args.path)
+        key = captures.retain(capture, state_dir=args.state_dir)
+    except Exception:
+        sys.exit("capture failed; input or retention could not be verified")
+    print(json.dumps({"key": key, "capture_id": capture["capture_id"]}))
+
+
+def cmd_captures(args: argparse.Namespace) -> None:
+    entries = []
+    directory = captures.state_directory(args.state_dir) / "captures"
+    for path in sorted(directory.glob("*.json")):
+        try:
+            c = json.loads(path.read_bytes())
+            captures.validate(c)
+            entries.append(
+                {
+                    key: c[key]
+                    for key in (
+                        "capture_id",
+                        "source",
+                        "kind",
+                        "record_id",
+                        "captured_at",
+                        "payload_sha256",
+                    )
+                }
+                | {"verification": "payload-checksum"}
+            )
+        except Exception:
+            entries.append({"verification": "invalid"})
+    print(json.dumps({"captures": entries}))
+
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    try:
+        original = Path(args.input).read_bytes()
+        c = json.loads(original)
+        # Old archive objects carried no source metadata. Recover only an explicit
+        # source namespace from their retained path, never guess from profile fields.
+        if isinstance(c, dict) and "schema_version" not in c and not c.get("source"):
+            parts = Path(args.input).parts
+            for i, part in enumerate(parts[:-1]):
+                if part == "profiles" and parts[i + 1] in replay.PROFILE_SOURCES:
+                    c = {**c, "source": parts[i + 1]}
+                    break
+        result = replay.replay_capture(c)
+        if isinstance(c, dict) and "schema_version" not in c:
+            result["input_sha256"] = hashlib.sha256(original).hexdigest()
+        if args.compare:
+            before = json.loads(Path(args.compare).read_bytes())
+            a, b = replay.normalized(before), replay.normalized(result)
+            result["comparison"] = {
+                "changed": a != b,
+                "diff": "\n".join(
+                    difflib.unified_diff(
+                        json.dumps(a, ensure_ascii=False, sort_keys=True, indent=2).splitlines(),
+                        json.dumps(b, ensure_ascii=False, sort_keys=True, indent=2).splitlines(),
+                        fromfile="previous",
+                        tofile="current",
+                        lineterm="",
+                    )
+                ),
+            }
+        if args.output:
+            captures.write_private(args.output, captures.encode(result))
+    except Exception:
+        sys.exit("replay failed; local input or output is invalid")
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if result["status"] != "ok":
+        sys.exit(1)
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -207,6 +285,27 @@ def _add_browser_options(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="people_sync")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    capture_p = sub.add_parser("capture", help="retain a privacy-filtered export without ingesting")
+    capture_p.add_argument("source", choices=captures.EXPORT_SOURCES)
+    capture_p.add_argument("--path", required=True, help="file, or directory for Instagram")
+    capture_p.add_argument("--state-dir", help="private local state root (default: XDG state)")
+    capture_p.set_defaults(func=cmd_capture)
+
+    captures_p = sub.add_parser(
+        "captures", help="inventory local captures and verify their checksums"
+    )
+    captures_p.add_argument("--state-dir")
+    captures_p.add_argument(
+        "--verify", action="store_true", help="explicit verification (always on)"
+    )
+    captures_p.set_defaults(func=cmd_captures)
+
+    replay_p = sub.add_parser("replay", help="parse retained input offline into a proposal")
+    replay_p.add_argument("--input", required=True)
+    replay_p.add_argument("--compare", help="previous replay proposal JSON")
+    replay_p.add_argument("--output", help="private proposal file outside source control")
+    replay_p.set_defaults(func=cmd_replay)
 
     ingest = sub.add_parser("ingest", help="parse an export or fetch a source into the ledger")
     ingest_sub = ingest.add_subparsers(dest="source", required=True)

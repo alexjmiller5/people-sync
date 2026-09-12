@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from urllib.parse import quote
-from uuid import uuid4
 
 import httpx
 import structlog
@@ -54,23 +53,36 @@ def archive_profile(platform, record_id, raw_eval, captured, *, context=None) ->
     Keep the exact JS result alongside the compatible decoded `eval` field.
     Malformed JSON is retained as a string; decoding cannot prevent archival.
     """
-    record_key = record_id.replace(":", "_").replace("/", "_")
-    key = f"profiles/{platform}/{record_key}/{lifedata.now_iso()}-{uuid4().hex}.json"
-    payload = {"eval": raw_eval, "captured": captured}
-    if isinstance(raw_eval, str):
-        payload["raw_eval"] = raw_eval
-        try:
-            payload["eval"] = json.loads(raw_eval)
-        except (ValueError, RecursionError):
-            pass
-    if context is not None:
-        payload["context"] = context
+    from people_sync import captures
+
     try:
-        put_object(key, json.dumps(payload).encode(), content_type="application/json")
+        payload = {"eval": raw_eval, "captured": captured}
+        if isinstance(raw_eval, str):
+            payload["raw_eval"] = raw_eval
+            try:
+                decoded = json.loads(raw_eval)
+                captures.encode(decoded)  # Reject Python's nonstandard NaN/Infinity JSON extension.
+                payload["eval"] = decoded
+            except (ValueError, RecursionError):
+                pass
+        if context is not None:
+            payload["context"] = context
+        return captures.retain(
+            captures.build_capture(
+                platform,
+                "profile",
+                payload,
+                record_id=record_id,
+                captured_at=lifedata.now_iso(),
+                completeness="extracted-only",
+                exclusions=[
+                    "collector-selected fields and allowlisted responses only; unloaded fields excluded"
+                ],
+            )
+        )
     except Exception:
         # Storage exceptions can contain credentials. Expose only the halt reason.
         raise ArchiveError("raw archive failed") from None
-    return key
 
 
 def get_object(key: str) -> bytes:
