@@ -1,6 +1,7 @@
 """Synthetic capture boundary regressions; no source or estate access."""
 
 import hashlib
+import base64
 import json
 import sqlite3
 
@@ -8,6 +9,188 @@ import pytest
 
 from people_sync import captures, cli, photos, replay
 from people_sync.scrape import partiful, run, spotify, venmo
+
+
+@pytest.mark.parametrize("targets", [None, ["synthetic-tab"]])
+@pytest.mark.parametrize("failure", [False, True])
+@pytest.mark.parametrize("acquisition", ["direct", "page"])
+@pytest.mark.parametrize("source", ["facebook", "instagram", "partiful"])
+def test_signed_avatar_survives_shared_flow_without_url_persistence(
+    mocker, tmp_path, storage, capsys, targets, failure, acquisition, source
+):
+    from importlib import import_module
+
+    module = import_module("people_sync.scrape." + source)
+    stored, events = storage
+    signed = "https://images.example.test/photo.jpg?signature=SECRET"
+    record_id = "facebook:exámple_o'example" if source == "facebook" else source + ":example"
+    raw = {
+        "name": "Example Person",
+        "path": "/different.handle" if source == "facebook" else "/u/example",
+        "avatar": signed,
+    }
+    responses = []
+    if source == "instagram":
+        raw = {"username": "example", "full_name": "Example Person"}
+        responses = [
+            {
+                "url": "https://www.instagram.com/web_profile_info",
+                "body": json.dumps(
+                    {"data": {"user": {"username": "example", "profile_pic_url_hd": signed}}}
+                ),
+            }
+        ]
+
+    class Browser(ProfileBrowser):
+        def navigate(self, *args, **kwargs):
+            return {"captured": responses, "dom_ready": True}
+
+        def eval(self, js):
+            if "await fetch(" in js:
+                assert signed in js and "verified-retention" in events
+                events.append("page-fetch")
+                return base64.b64encode(b"synthetic-image").decode()
+            if js == module.EXTRACTOR_JS:
+                events.append("field-extractor")
+                return json.dumps(raw)
+            return super().eval(js)
+
+    mocker.patch.object(run.Browser, "connect", return_value=Browser(events))
+    mocker.patch.object(
+        run,
+        "_select_records",
+        return_value=[
+            {"id": record_id, "handle": "different.handle" if source == "facebook" else "example"}
+        ],
+    )
+    pacer = mocker.patch.object(run, "Pacer").return_value
+    pacer.next_gap.return_value = 0
+    original = module.parse
+
+    def parse(value, captured):
+        events.append("parse-profile")
+        saved = json.loads(next(iter(stored.values())))["payload"]
+        assert value == saved["eval"] and captured == saved["captured"]
+        assert "SECRET" not in json.dumps(saved)
+        return original(value, captured)
+
+    mocker.patch.object(module, "parse", side_effect=parse)
+
+    def fetch(url, **kwargs):
+        assert url == signed and kwargs == {"halt_on_block": True}
+        events.append("fetch-avatar")
+        return b"synthetic-image" if acquisition == "direct" else None
+
+    mocker.patch.object(photos, "fetch_url_photo", side_effect=fetch)
+    rows = []
+    mocker.patch.object(run.lifedata, "sql", return_value=[])
+    mocker.patch.object(
+        run.lifedata, "insert", side_effect=lambda table, values: rows.extend(values)
+    )
+    if failure:
+        mocker.patch.object(photos, "get_object", return_value=b"wrong")
+    result = run.scrape(source, targets=targets, state_path=str(tmp_path / "pace"))
+    if failure:
+        assert result["halted"] == "raw archive failed"
+        assert "fetch-avatar" not in events and not rows
+    else:
+        assert result["done"] == 1
+        assert (
+            events.index("verified-retention")
+            < events.index("parse-profile")
+            < events.index("fetch-avatar")
+        )
+        assert rows[0]["record_id"] == record_id
+        assert stored[rows[0]["avatar_r2_key"]] == b"synthetic-image"
+        assert ("page-fetch" in events) == (acquisition == "page")
+        if source == "facebook":
+            assert rows[0]["platform_id"] == "different.handle"
+    assert "SECRET" not in json.dumps(rows)
+    assert all(b"SECRET" not in body for body in stored.values())
+    assert "SECRET" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_partiful_mutual_signed_avatar_retention_before_acquisition(
+    mocker, storage, capsys, failure
+):
+    from tests.test_scrape_partiful import FakeBrowser, FIXTURE
+
+    stored, events = storage
+    signed = "https://images.example.test/photo.jpg?signature=SECRET"
+    browser = FakeBrowser()
+    evaluate = browser.eval
+    browser.eval = lambda js: (
+        json.dumps(FIXTURE | {"path": "/u/uid0", "avatar": signed})
+        if js == partiful.EXTRACTOR_JS
+        else evaluate(js)
+    )
+    mocker.patch.object(partiful.time, "sleep")
+    rows = []
+    mocker.patch(
+        "people_sync.ledger.upsert",
+        side_effect=lambda records: rows.extend(vars(r) for r in records),
+    )
+    mocker.patch.object(run.lifedata, "sql", return_value=[])
+    mocker.patch.object(
+        run.lifedata, "insert", side_effect=lambda table, values: rows.extend(values)
+    )
+
+    def fetch(url, **kwargs):
+        assert url == signed and "verified-retention" in events
+        events.append("fetch-avatar")
+        return b"synthetic-image"
+
+    mocker.patch.object(photos, "fetch_url_photo", side_effect=fetch)
+    if failure:
+        mocker.patch.object(photos, "get_object", return_value=b"wrong")
+        with pytest.raises(photos.ArchiveError):
+            next(partiful.harvest(browser, limit=1))
+        assert not rows and "fetch-avatar" not in events
+    else:
+        entry = next(partiful.harvest(browser, limit=1))[2]
+        assert partiful.ingest_entry(entry, browser) == "partiful:uid0"
+        assert events.index("verified-retention") < events.index("fetch-avatar")
+        assert stored[rows[-1]["avatar_r2_key"]] == b"synthetic-image"
+    assert all(b"SECRET" not in body for body in stored.values())
+    assert "SECRET" not in json.dumps(rows) and "SECRET" not in capsys.readouterr().out
+
+
+def test_partiful_signed_avatar_http_error_does_not_expose_url(mocker, storage):
+    import httpx
+    from tests.test_scrape_partiful import FakeBrowser, FIXTURE
+
+    browser = FakeBrowser()
+    evaluate = browser.eval
+    signed = "https://images.example.test/photo.jpg?signature=SECRET"
+    browser.eval = lambda js: (
+        json.dumps(FIXTURE | {"path": "/u/uid0", "avatar": signed})
+        if js == partiful.EXTRACTOR_JS
+        else evaluate(js)
+    )
+    mocker.patch.object(partiful.time, "sleep")
+    mocker.patch("people_sync.ledger.upsert")
+    cache = mocker.patch("people_sync.scrape.profile.upsert_profile")
+    response = httpx.Response(403, request=httpx.Request("GET", signed))
+    mocker.patch.object(photos.httpx, "get", return_value=response)
+    entry = next(partiful.harvest(browser, limit=1))[2]
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        partiful.ingest_entry(entry, browser)
+    assert "SECRET" not in str(exc.value)
+    assert exc.value.response.status_code == 403
+    assert "_avatar_url" not in entry
+    cache.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "record_id",
+    ["facebook:secret@example.test", "facebook:123_main_street", "facebook:example\nname"],
+)
+def test_facebook_ledger_id_still_rejects_contact_or_control_values(storage, record_id):
+    with pytest.raises(photos.ArchiveError):
+        photos.archive_profile(
+            "facebook", record_id, {"name": "Example", "path": "/different.handle"}, []
+        )
 
 
 @pytest.fixture
@@ -220,7 +403,9 @@ def test_cli_record_selector_bypasses_staleness_only(
     visited = []
     mocker.patch.object(run.Browser, "connect", return_value=ProfileBrowser([]))
     mocker.patch.object(
-        run, "_collect_profile", side_effect=lambda b, m, p, i, r: (visited.append(r["id"]), "key")
+        run,
+        "_collect_profile",
+        side_effect=lambda b, m, p, i, r: (visited.append(r["id"]), "key", None),
     )
     mocker.patch.object(run, "_store_profile")
     pacer = mocker.patch.object(run, "Pacer").return_value

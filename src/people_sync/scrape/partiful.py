@@ -41,7 +41,7 @@ EXTRACTOR_JS = (
     "var t=document.body.innerText.split('\\n').map(function(s){return s.trim()}).filter(Boolean);"
     "var events=t.filter(function(x,i){return /^(In about |In \\d+ |\\d+ (days?|months?|years?) ago$|Yesterday|Today)/.test(t[i+1]||'')}).length;"
     "var bday=t.filter(function(x){return /\\b(January|February|March|April|May|June|July|August|September|October|November|December) birthday$/i.test(x)})[0]||null;"
-    "return JSON.stringify({name:name,instagram:ig,avatar:imgs[0]?imgs[0].src.split('?')[0]:null,"
+    "return JSON.stringify({name:name,instagram:ig,avatar:imgs[0]?imgs[0].src:null,"
     "events:events,birthday_month:bday,path:location.pathname});})()"
 )
 
@@ -154,8 +154,10 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
                 **{k: v for k, v in payload["context"].items() if k in snapshot._ROW},
             }
             try:
+                avatar_url = snapshot.avatar_url("partiful", raw, [], entry["uid"])
                 raw = payload["eval"]
                 entry["profile"] = parse(json.loads(raw) if isinstance(raw, str) else raw)
+                entry["_avatar_url"] = avatar_url
             except ExtractError as e:
                 entry["error"] = str(e)
         else:
@@ -175,10 +177,12 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
 
     uid = entry.get("uid")
     profile = entry.get("profile")
+    avatar_url = entry.pop("_avatar_url", None)
     if not uid or profile is None:
         return None
     # Compatibility callers also pass through the same retained-input boundary.
     if not entry.get("raw_r2_key"):
+        avatar_url = snapshot.avatar_url("partiful", profile.raw["extractor"], [], uid)
         payload = snapshot.prepare(
             "partiful",
             f"partiful:{uid}",
@@ -213,13 +217,13 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
     ledger.upsert([record])
     profile.record_id = record.row_id
     key, sha = (None, None)
-    if browser is not None and profile.avatar_url:
+    if browser is not None and (avatar_url or profile.avatar_url):
         key, sha = scrape_run._resolve_avatar(
             browser,
             "partiful",
             index,
             scrape_run._record_key(record.row_id),
-            profile.avatar_url,
+            avatar_url or profile.avatar_url,
             None,
             None,
         )

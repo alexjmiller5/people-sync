@@ -124,6 +124,13 @@ responses and process death before retention remain outside this guarantee.
 Unsafe avatar record-key components use full SHA256; safe existing keys remain
 compatible, and invalid prior keys never satisfy the same-image reuse shortcut.
 Existing retained objects are never renamed or deleted.
+Signed avatar URLs use a separate transient acquisition handoff after verified
+retention; they never enter the retained payload, parsed Profile or persisted
+rows. Ordinary/coordinated storage consumes that handoff; Partiful harvest
+passes `_avatar_url` only until ingest pops it. Existing direct/page fetch,
+deduplication and block status handling apply; HTTP error details omit signed
+URLs. Facebook ledger IDs follow the export's normalized-name contract (including
+Unicode/apostrophes), independently of profile handles and safe storage keys.
 
 ## Logins
 

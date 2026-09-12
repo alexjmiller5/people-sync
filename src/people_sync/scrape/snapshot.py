@@ -191,6 +191,60 @@ def _identity(value, source):
     return value
 
 
+def _record_identity(record_id, source):
+    captures._require(isinstance(record_id, str) and record_id.startswith(source + ":"))
+    value = record_id.split(":", 1)[1]
+    if source == "facebook":
+        # Export IDs are normalized display names, not the separately assigned handle.
+        captures._require(bool(value) and value == value.strip().lower().replace(" ", "_"))
+        _value(value, "text", source)
+        captures._require(not re.search(r"[\x00-\x1f\x7f]", value))
+    else:
+        _identity(value, source)
+
+
+def avatar_url(platform, raw_eval, captured, handle):
+    """Transient acquisition only. Never add this URL to a capture or parsed Profile."""
+    try:
+        raw = json.loads(raw_eval) if isinstance(raw_eval, str) else raw_eval
+        if not isinstance(raw, dict) or raw.get("error"):
+            return None
+        url = (
+            (raw.get("profilePictureUrl") or raw.get("profile_picture_url"))
+            if platform == "venmo"
+            else raw.get("avatar")
+        )
+        if platform == "instagram":
+            from people_sync.scrape import instagram
+
+            responses = [
+                c
+                for c in captured
+                if urlsplit(c.get("url", "")).netloc in _HOSTS["instagram"]
+                and urlsplit(c["url"]).scheme == "https"
+            ]
+            body = instagram._web_profile_info(responses, handle)
+            user = body["data"]["user"] if body else instagram._graphql_user(responses, handle)
+            if user:
+                url = (
+                    user.get("profile_pic_url_hd")
+                    or (user.get("hd_profile_pic_url_info") or {}).get("url")
+                    or url
+                )
+        if not isinstance(url, str) or re.search(r"[\x00-\x20\x7f]", url):
+            return None
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname
+            and not (parsed.username or parsed.password or parsed.fragment)
+        ):
+            return url
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return None
+
+
 def safe_url(value, source):
     """Typed canonical profile URLs only; all other URLs keep the strict text boundary."""
     captures._require(isinstance(value, str))
@@ -428,8 +482,7 @@ def _linkedin_users(node, handle, depth=0):
 def prepare(platform, record_id, raw_eval, captured, *, context=None):
     """The exact safe payload used for both verified retention and subsequent parsing."""
     schema = SCHEMAS[platform] | _COMMON
-    captures._require(isinstance(record_id, str) and record_id.startswith(platform + ":"))
-    _identity(record_id.split(":", 1)[1], platform)
+    _record_identity(record_id, platform)
     excluded = set()
     original = raw_eval
     duplicates = False

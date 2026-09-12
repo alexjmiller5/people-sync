@@ -126,7 +126,16 @@ def _resolve_avatar(
 
     if isinstance(browser, Browser):
         browser.check_stop()
-    image = photos.fetch_url_photo(avatar_url, halt_on_block=True)
+    try:
+        image = photos.fetch_url_photo(avatar_url, halt_on_block=True)
+    except httpx.HTTPStatusError as error:
+        # Keep the existing block signal/status without an expiring signed URL
+        # in an exception that an outer CLI may display.
+        raise httpx.HTTPStatusError(
+            "avatar request blocked",
+            request=None,
+            response=httpx.Response(error.response.status_code),
+        ) from None
     source = "direct"
     if image is None:
         if isinstance(browser, Browser):
@@ -236,10 +245,10 @@ def _collect_profile(browser, module, platform, index, record):
         e.raw_r2_key = raw_key
         raise
     profile.record_id = record["id"]
-    return profile, raw_key
+    return profile, raw_key, snapshot.avatar_url(platform, raw_eval, captured, handle)
 
 
-def _store_profile(browser, platform, index, record, profile, raw_key):
+def _store_profile(browser, platform, index, record, profile, raw_key, avatar_url=None):
     record_key = _record_key(record["id"])
 
     avatar_key, avatar_sha = _resolve_avatar(
@@ -247,7 +256,7 @@ def _store_profile(browser, platform, index, record, profile, raw_key):
         platform,
         index,
         record_key,
-        profile.avatar_url,
+        avatar_url or profile.avatar_url,
         record.get("avatar_r2_key"),
         record.get("avatar_sha256"),
     )
@@ -332,8 +341,10 @@ def _scrape(
                 continue
 
             try:
-                profile, raw_key = _collect_profile(browser, module, platform, index, record)
-                _store_profile(browser, platform, index, record, profile, raw_key)
+                profile, raw_key, avatar_url = _collect_profile(
+                    browser, module, platform, index, record
+                )
+                _store_profile(browser, platform, index, record, profile, raw_key, avatar_url)
             except (ScrapeStopped, photos.ArchiveError) as e:
                 halted = str(e) or "run paused"
                 shot = _halt_screenshot(browser, platform, state_path)
@@ -402,11 +413,13 @@ def _coordinated(
         try:
             if stop.is_set():
                 return None
-            profile, raw_key = _collect_profile(browser, module, platform, index, record)
+            profile, raw_key, avatar_url = _collect_profile(
+                browser, module, platform, index, record
+            )
             with write_lock:
                 if stop.is_set():
                     return None
-                _store_profile(browser, platform, index, record, profile, raw_key)
+                _store_profile(browser, platform, index, record, profile, raw_key, avatar_url)
             pacer.record()
             log.info("profile scraped", platform=platform, index=index)
             return "done"
