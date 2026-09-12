@@ -1,6 +1,8 @@
 import base64
 import copy
+import csv
 import hashlib
+import io
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -228,9 +230,21 @@ def test_malformed_export_cannot_cross_privacy_boundary():
 
 
 @pytest.mark.parametrize(
-    "contact", ["synthetic@example.invalid", "+1 (202) 555-0148", "123 Example Street"]
+    "column,contact",
+    [
+        ("Position", "synthetic@example.invalid"),
+        ("Position", "+1 (202) 555-0148"),
+        ("Position", "123 Example Street"),
+        ("Position", "office 123, Example Street"),
+        ("Position", "office 123:Example Street"),
+        ("Position", "office 123%252C%2520Example Street"),
+        ("URL", "https://linkedin.com/in/example%20?access_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%2520%253Faccess_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%09?access_token=synthetic-secret"),
+        ("URL", "https://linkedin.com/in/example%20#synthetic-secret"),
+    ],
 )
-def test_offline_replay_rejects_unsafe_old_export_even_with_matching_checksum(contact):
+def test_offline_replay_rejects_unsafe_old_export_even_with_matching_checksum(column, contact):
     from people_sync import captures, replay
 
     c = captures.build_capture(
@@ -251,11 +265,11 @@ def test_offline_replay_rejects_unsafe_old_export_even_with_matching_checksum(co
         },
     )
     # Simulate a retained envelope from the old collector; hashing it is not privacy validation.
-    data = (
-        "First Name,Last Name,URL,Company,Position\n"
-        f"Example,Person,https://linkedin.com/in/example,Example Co,{contact}\n"
-    ).encode()
-    c["payload"]["files"][0]["data"] = base64.b64encode(data).decode()
+    data = io.StringIO()
+    writer = csv.writer(data)
+    writer.writerow(["First Name", "Last Name", column])
+    writer.writerow(["Example", "Person", contact])
+    c["payload"]["files"][0]["data"] = base64.b64encode(data.getvalue().encode()).decode()
     c["payload_sha256"] = hashlib.sha256(captures.encode(c["payload"])).hexdigest()
     original = copy.deepcopy(c)
     result = replay.replay_capture(c)

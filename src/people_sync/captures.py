@@ -147,6 +147,11 @@ def _check_export_value(value, field=""):
                 pass
     # Decode only an inspection copy. Nested encodings cannot bypass the check.
     for _ in range(4):
+        # Inspect original components and each decoding layer without splitting at
+        # whitespace: an encoded space must not hide a query or fragment suffix.
+        for match in re.finditer(r"\b[a-z][a-z0-9+.-]*://", text, re.I):
+            parsed = urlsplit(text[match.start() :])
+            _require(not (parsed.username or parsed.query or parsed.fragment))
         decoded = unicodedata.normalize("NFKC", html.unescape(unquote_plus(text)))
         if decoded == text:
             break
@@ -160,7 +165,7 @@ def _check_export_value(value, field=""):
     )
     # Numbered prose may be an address even without a familiar street suffix.
     # Refuse that ambiguity rather than stripping useful names/professional context.
-    words = re.sub(r"[-_/]", " ", text)
+    words = re.sub(r"[\W_]+", " ", text)
     _require(not re.search(r"\b\d{1,6}[a-z]?\s+[^\W\d_]", words, re.I))
     _require(
         not re.search(
@@ -169,9 +174,6 @@ def _check_export_value(value, field=""):
             re.I,
         )
     )
-    for url in re.findall(r"\b[a-z][a-z0-9+.-]*://\S+", text, re.I):
-        parsed = urlsplit(url)
-        _require(not (parsed.username or parsed.query or parsed.fragment))
 
 
 def _check_export_privacy(source: str, data: bytes) -> None:
