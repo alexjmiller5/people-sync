@@ -18,6 +18,19 @@ from uuid import uuid4
 KINDS = {"profile", "export", "list", "contacts"}
 COMPLETENESS = {"complete", "partial", "privacy-filtered", "extracted-only", "legacy-parsed-only"}
 EXPORT_SOURCES = ("instagram", "facebook", "snapchat", "linkedin")
+EXPORT_FIELDS = {
+    "linkedin": {"First Name", "Last Name", "URL", "Company", "Position", "Connected On"},
+    "instagram": {"href", "value", "timestamp"},
+    "facebook": {"name", "timestamp"},
+    "snapchat": {
+        "Username",
+        "Display Name",
+        "Creation Timestamp",
+        "Last Modified Timestamp",
+        "Source",
+    },
+}
+EXPORT_POLICY = "export-field-filter-v1"
 
 
 def encode(value) -> bytes:
@@ -121,7 +134,11 @@ def validate(capture) -> dict:
                 _require(isinstance(file["filename"], str) and file["filename"])
                 _require(file["filename"] not in {".", ".."})
                 _require(not any(char in file["filename"] for char in ("/", "\\", "\0")))
-                _check_export_privacy(c["source"], base64.b64decode(file["data"], validate=True))
+                _check_export_privacy(
+                    c["source"],
+                    base64.b64decode(file["data"], validate=True),
+                    filtered="field_exclusions" in p or EXPORT_POLICY in c["exclusions"],
+                )
                 _check_export_value(file["filename"])
                 roles.append(file["role"])
             _require(
@@ -134,6 +151,10 @@ def validate(capture) -> dict:
                     for file in p["files"]
                 )
             )
+            if "field_exclusions" in p or EXPORT_POLICY in c["exclusions"]:
+                _require(c["exclusions"] == [EXPORT_POLICY])
+                _require(c["completeness"] == "privacy-filtered")
+                _validate_field_exclusions(c["source"], p)
         _require(hashlib.sha256(encode(p)).hexdigest() == c["payload_sha256"])
         encode(c)
     except (KeyError, TypeError, ValueError, RecursionError, StopIteration, csv.Error):
@@ -183,6 +204,7 @@ def _check_export_value(value, field=""):
         text = decoded
     else:
         raise ValueError("export privacy boundary could not be established")
+    _require(not re.search(r"\b(?:bearer|password|csrf|access.token|session.token)\b", text, re.I))
     _require(not re.search(r"\S+\s*(?:@|\[at\]|\(at\))\s*\S+|\d(?:[\W_]*\d){6}", text, re.I))
     _require(
         not re.search(r"\b(?:mailto|tel|sms|phone|address)\s*:|\bp\.?\s*o\.?\s*box\b", text, re.I)
@@ -200,17 +222,57 @@ def _check_export_value(value, field=""):
     )
 
 
-def _check_export_privacy(source: str, data: bytes) -> None:
+def _check_export_privacy(source: str, data: bytes, *, filtered=False) -> None:
     """The shared retention/replay boundary checks every retained value, including URLs."""
-    if source != "linkedin":
-        _check_export_value(json.loads(data))
+    safe = _filter_export(source, data, strict=True)
+    if filtered:
+        _require(safe == data)
+
+
+def _check_export_field(source, value, field):
+    from people_sync.scrape import snapshot
+
+    if value is None or value == "":
         return
-    rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig")), strict=True))
-    start = next(i for i, row in enumerate(rows) if row[:1] == ["First Name"])
-    _check_export_value(rows[: start + 1])
-    for row in rows[start + 1 :]:
-        for i, value in enumerate(row):
-            _check_export_value(value, rows[start][i] if i < len(rows[start]) else "")
+    if field != "timestamp":
+        _require(isinstance(value, str))
+    if (source == "linkedin" and field == "URL") or (source == "instagram" and field == "href"):
+        snapshot.safe_url(value, source, canonical=True)
+    elif source == "instagram" and field == "value":
+        snapshot._identity(value, source)
+        snapshot.safe_url("https://instagram.com/" + value, source, canonical=True)
+    else:
+        _check_export_value(value, field)
+
+
+def _validate_field_exclusions(source, payload):
+    manifest = payload["field_exclusions"]
+    _require(isinstance(manifest, dict) and manifest.keys() == {"version", "entries"})
+    _require(type(manifest["version"]) is int and manifest["version"] == 1)
+    _require(isinstance(manifest["entries"], list))
+    from people_sync.replay import export_entries
+
+    counts = {
+        f["role"]: len(export_entries(source, base64.b64decode(f["data"])))
+        for f in payload["files"]
+    }
+    paths = EXPORT_FIELDS[source] | {"string_list_data", "field", "preamble"}
+    for entry in manifest["entries"]:
+        _require(isinstance(entry, dict) and entry.keys() == {"role", "ordinal", "path", "reason"})
+        _require(entry["role"] in counts)
+        ordinal = entry["ordinal"]
+        _require(ordinal is None or (type(ordinal) is int and 0 <= ordinal < counts[entry["role"]]))
+        _require(isinstance(entry["path"], list))
+        _require(
+            all(
+                (type(p) is int and p >= 0) or (isinstance(p, str) and p in paths)
+                for p in entry["path"]
+            )
+        )
+        _require(
+            entry["reason"]
+            in {"unsafe-or-ambiguous-value", "field-not-allowed", "invalid-structure"}
+        )
 
 
 def state_directory(state_dir=None) -> Path:
@@ -263,64 +325,128 @@ def retain(capture, *, state_dir=None) -> str:
     return key
 
 
-def _filter_export(source: str, data: bytes) -> bytes:
-    """Version 1 structural allowlists. Preserve row positions, including malformed rows."""
+def _filter_export(
+    source: str, data: bytes, *, role="export", exclusions=None, strict=False
+) -> bytes:
+    """Filter at acquisition; reject unsafe values at retention/replay. Never drop rows."""
+    if exclusions is None:
+        exclusions = []
+
+    def exclude(ordinal, path, reason):
+        exclusions.append({"role": role, "ordinal": ordinal, "path": path, "reason": reason})
+
+    def value(item, field, ordinal, path, missing=None):
+        try:
+            _require(item is None or isinstance(item, (str, int, float, bool)))
+            _check_export_field(source, item, field)
+            return item
+        except (ValueError, TypeError):
+            if strict:
+                raise ValueError("invalid retained export field") from None
+            exclude(ordinal, path, "unsafe-or-ambiguous-value")
+            return missing
+
     if source == "linkedin":
-        rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
+        rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig")), strict=True))
         start = next(i for i, row in enumerate(rows) if row[:1] == ["First Name"])
-        allowed = {"First Name", "Last Name", "URL", "Company", "Position", "Connected On"}
+        allowed = EXPORT_FIELDS[source]
+        _require(len(rows[start]) == len(set(rows[start])))
         indices = [i for i, name in enumerate(rows[start]) if name in allowed]
-        safe = [
-            [row[i] if i < len(row) else "" for i in indices] if row else [] for row in rows[start:]
-        ]
+        if start:
+            if strict:
+                _check_export_value(rows[:start])
+            exclude(None, ["preamble"], "field-not-allowed")
+        safe = [[rows[start][i] for i in indices]]
+        for ordinal, row in enumerate(rows[start + 1 :]):
+            safe.append(
+                [
+                    value(row[i], rows[start][i], ordinal, [rows[start][i]], "")
+                    if i < len(row)
+                    else ""
+                    for i in indices
+                ]
+                if row
+                else []
+            )
+            for i, item in enumerate(row):
+                if i not in indices:
+                    if strict:
+                        _check_export_value(item)
+                    exclude(ordinal, ["field", i], "field-not-allowed")
+        for i, field in enumerate(rows[start]):
+            if i not in indices:
+                if strict:
+                    _check_export_value(field)
+                exclude(None, ["field", i], "field-not-allowed")
         if safe == rows:
             return data
         output = io.StringIO(newline="")
         csv.writer(output).writerows(safe)
         return output.getvalue().encode("utf-8")
-    obj = json.loads(data)
+
+    def unique_fields(pairs):
+        _require(len(dict(pairs)) == len(pairs))
+        return dict(pairs)
+
+    obj = json.loads(data, object_pairs_hook=unique_fields)
     key = {"instagram": "relationships_following", "facebook": "friends_v2", "snapchat": "Friends"}[
         source
     ]
-    entries = obj if source == "instagram" and isinstance(obj, list) else obj[key]
+    _require(isinstance(obj, dict) or (source == "instagram" and isinstance(obj, list)))
+    entries = obj if isinstance(obj, list) else obj[key]
     _require(isinstance(entries, list))
-    allowed = {
-        "facebook": {"name", "timestamp"},
-        "snapchat": {
-            "Username",
-            "Display Name",
-            "Creation Timestamp",
-            "Last Modified Timestamp",
-            "Source",
-        },
-    }
 
-    def fields(entry, keys):
-        return (
-            {
-                k: v
-                for k, v in entry.items()
-                if k in keys and (v is None or isinstance(v, (str, int, float, bool)))
-            }
-            if isinstance(entry, dict)
-            else {}
-        )
+    def unknown(entry, keys, ordinal, path):
+        for i, (k, v) in enumerate(entry.items()):
+            if k not in keys:
+                if strict:
+                    _check_export_value({k: v})
+                # Unknown keys can themselves contain secrets. Identify their
+                # original object-member index, never retain the key's text.
+                exclude(ordinal, path + ["field", i], "field-not-allowed")
+
+    def fields(entry, ordinal, path):
+        if not isinstance(entry, dict):
+            if strict:
+                _check_export_value(entry)
+            exclude(ordinal, path, "invalid-structure")
+            return {}
+        unknown(entry, EXPORT_FIELDS[source], ordinal, path)
+        return {
+            k: value(v, k, ordinal, path + [k])
+            for k, v in entry.items()
+            if k in EXPORT_FIELDS[source]
+        }
 
     safe = []
-    for entry in entries:
+    if isinstance(obj, dict):
+        unknown(obj, {key}, None, [])
+    for ordinal, entry in enumerate(entries):
         if source == "instagram":
-            items = entry.get("string_list_data", []) if isinstance(entry, dict) else []
+            if not isinstance(entry, dict):
+                safe.append(fields(entry, ordinal, []))
+                continue
+            unknown(entry, {"string_list_data"}, ordinal, [])
+            if "string_list_data" not in entry:
+                safe.append({})
+                continue
+            items = entry["string_list_data"]
+            if not isinstance(items, list):
+                if strict:
+                    _check_export_value(items)
+                exclude(ordinal, ["string_list_data"], "invalid-structure")
             safe.append(
                 {
                     "string_list_data": [
-                        fields(item, {"href", "value", "timestamp"}) for item in items
+                        fields(item, ordinal, ["string_list_data", i])
+                        for i, item in enumerate(items)
                     ]
                 }
                 if isinstance(items, list)
                 else {}
             )
         else:
-            safe.append(fields(entry, allowed[source]))
+            safe.append(fields(entry, ordinal, []))
     filtered = safe if isinstance(obj, list) else {key: safe}
     return data if filtered == obj else encode(filtered)
 
@@ -334,10 +460,10 @@ def capture_export(source: str, path) -> dict:
         if source == "instagram"
         else [("export", path)]
     )
-    files = []
+    files, exclusions = [], []
     for role, file in inputs:
         original = file.read_bytes()
-        safe = _filter_export(source, original)
+        safe = _filter_export(source, original, role=role, exclusions=exclusions)
         files.append(
             {
                 "role": role,
@@ -351,11 +477,7 @@ def capture_export(source: str, path) -> dict:
     return build_capture(
         source,
         "export",
-        {"files": files},
+        {"files": files, "field_exclusions": {"version": 1, "entries": exclusions}},
         completeness="privacy-filtered",
-        exclusions=[
-            f"{source}-export-allowlist-v2: only relationship identity, names, timestamps and professional fields; "
-            "other fields, preambles and unrelated lists excluded; contact-like values, ambiguous numbered text "
-            "and URLs with user information, queries or fragments cause rejection without rewriting inputs",
-        ],
+        exclusions=[EXPORT_POLICY],
     )

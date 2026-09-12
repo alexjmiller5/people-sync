@@ -245,7 +245,7 @@ def avatar_url(platform, raw_eval, captured, handle):
     return None
 
 
-def safe_url(value, source):
+def safe_url(value, source, *, canonical=False):
     """Typed canonical profile URLs only; all other URLs keep the strict text boundary."""
     captures._require(isinstance(value, str))
     u = urlsplit(value)
@@ -258,6 +258,7 @@ def safe_url(value, source):
     if u.netloc in _HOSTS.get(source, ()) and re.fullmatch(_PATHS[source], u.path):
         _identity(u.path.rstrip("/").rsplit("/", 1)[-1], source)
     else:
+        captures._require(not canonical)
         captures._check_export_value(value)
     return value
 

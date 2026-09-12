@@ -287,7 +287,7 @@ def test_privacy_filtered_class_supports_collection_boundaries(source):
         "office 123，Example Street",
     ],
 )
-def test_export_rejects_contact_values_without_rewriting_original(tmp_path, column, contact):
+def test_export_filters_contact_values_without_rewriting_original(tmp_path, column, contact):
     from urllib.parse import quote
     from people_sync import captures
 
@@ -311,9 +311,16 @@ def test_export_rejects_contact_values_without_rewriting_original(tmp_path, colu
         writer.writeheader()
         writer.writerow(row)
     original = path.read_bytes()
-    with pytest.raises(ValueError) as exc:
-        captures.capture_export("linkedin", path)
-    assert value not in str(exc.value) and contact not in str(exc.value)
+    capture = captures.capture_export("linkedin", path)
+    from people_sync import replay
+
+    result = replay.replay_capture(capture)
+    assert result["status"] == "ok"
+    assert result["field_exclusions"]["entries"] == [
+        {"role": "export", "ordinal": 0, "path": [column], "reason": "unsafe-or-ambiguous-value"}
+    ]
+    assert value not in json.dumps(result) and contact not in json.dumps(result)
+    assert result["observations"][0]["ordinal"] == 0
     assert path.read_bytes() == original
 
 
@@ -338,8 +345,12 @@ def test_export_checks_whole_urls_before_decoding(tmp_path, column, url):
         writer.writerow(["First Name", "Last Name", column])
         writer.writerow(["Example", "Person", url])
     original = path.read_bytes()
-    with pytest.raises(ValueError, match="^invalid capture envelope or payload checksum$"):
-        captures.capture_export("linkedin", path)
+    capture = captures.capture_export("linkedin", path)
+    from people_sync import replay
+
+    result = replay.replay_capture(capture)
+    assert result["status"] == "ok" and url not in json.dumps(result)
+    assert result["field_exclusions"]["entries"][0]["path"] == [column]
     assert path.read_bytes() == original
 
 
@@ -373,8 +384,13 @@ def test_export_privacy_boundary_covers_json_values_and_urls(tmp_path, source, e
     else:
         path = tmp_path / "friends.json"
         path.write_text(json.dumps({"friends_v2" if source == "facebook" else "Friends": [entry]}))
-    with pytest.raises(ValueError):
-        captures.capture_export(source, path)
+    capture = captures.capture_export(source, path)
+    from people_sync import replay
+
+    result = replay.replay_capture(capture)
+    assert result["status"] == "ok"
+    assert len(result["field_exclusions"]["entries"]) == 1
+    assert result["observations"][0]["ordinal"] == 0
 
 
 def test_retain_rechecks_export_privacy_before_upload(storage, tmp_path):
@@ -412,8 +428,9 @@ def test_format_normalized_url_cannot_cross_export_boundary(storage, tmp_path, c
     capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
     original = copy.deepcopy(capture)
     if stage == "capture":
-        with pytest.raises(ValueError, match="^invalid capture envelope or payload checksum$"):
-            captures.capture_export("linkedin", path)
+        filtered = captures.capture_export("linkedin", path)
+        assert b"synthetic-secret" not in base64.b64decode(filtered["payload"]["files"][0]["data"])
+        assert filtered["payload"]["field_exclusions"]["entries"][0]["path"] == ["Position"]
     else:
         with pytest.raises(photos.ArchiveError, match="^raw archive failed$"):
             captures.retain(capture, state_dir=tmp_path / "state")
