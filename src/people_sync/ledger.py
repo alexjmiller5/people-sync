@@ -19,6 +19,7 @@ class Record:
     raw: dict
     follows_me: int | None = None
     i_follow: int | None = None
+    capture_key: str | None = None
 
     @property
     def row_id(self) -> str:

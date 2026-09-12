@@ -88,6 +88,13 @@ def validate(capture) -> dict:
         if c["kind"] == "profile":
             _require("eval" in p and isinstance(p.get("captured"), list))
             _require(all(isinstance(item, dict) for item in p["captured"]))
+        if c["kind"] == "contacts":
+            from people_sync.sources import CONTACT_POLICY, validate_contacts
+
+            validate_contacts(c["source"], p)
+            _require(c["record_id"] is None)
+            _require(c["exclusions"] == [CONTACT_POLICY])
+            _require(c["completeness"] == ("privacy-filtered" if p["complete"] else "partial"))
         if c["kind"] == "export":
             _require(c["source"] in EXPORT_SOURCES)
             _require(isinstance(p.get("files"), list) and p["files"])

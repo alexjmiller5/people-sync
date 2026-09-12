@@ -138,6 +138,22 @@ def replay_capture(capture) -> dict:
             result.update(_export(c), status="ok")
             result["limitations"].append("skipped ordinals include malformed or superseded rows")
             return result
+        if c["kind"] == "contacts":
+            from people_sync import sources
+
+            with redirect_stdout(io.StringIO()):
+                records = getattr(sources, "parse_" + c["source"].removesuffix("_contacts"))(
+                    c["payload"]
+                )
+            result.update(status="ok", records=[asdict(r) for r in records])
+            result["limitations"].append(
+                "replayed privacy-filtered contact inputs; excluded fields unavailable"
+            )
+            if not c["payload"]["complete"]:
+                result["limitations"].append(
+                    "partial acquisition; records are not a complete inventory"
+                )
+            return result
         if c["kind"] != "profile" or c["source"] not in PROFILE_SOURCES:
             result.update(status="unsupported")
             result["limitations"].append("no offline parser for this source and kind")

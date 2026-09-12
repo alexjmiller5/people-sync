@@ -1,6 +1,19 @@
 import json
 
+import pytest
+
 from people_sync import sources
+
+
+@pytest.fixture(autouse=True)
+def retained_service(monkeypatch, tmp_path):
+    from people_sync import photos
+
+    stored = {}
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
+    monkeypatch.setattr(photos, "get_object", stored.__getitem__)
+
 
 GOOGLE_LIST_PAGE1 = json.dumps(
     {
@@ -153,7 +166,8 @@ APPLE_ROWS_DB1 = json.dumps(
             "nick": None,
             "org": "Test Org",
             "title": None,
-            "birthday": "2000-01-01",
+            "birthday_epoch": -31622400,
+            "birthday_offset_seconds": 0,
             "phone_count": 2,
             "email_count": 0,
         },
@@ -165,7 +179,8 @@ APPLE_ROWS_DB1 = json.dumps(
             "nick": None,
             "org": "Orphan Org",
             "title": None,
-            "birthday": None,
+            "birthday_epoch": None,
+            "birthday_offset_seconds": None,
             "phone_count": 0,
             "email_count": 0,
         },
@@ -181,7 +196,8 @@ APPLE_ROWS_DB2 = json.dumps(
             "nick": "Nicky",
             "org": None,
             "title": None,
-            "birthday": None,
+            "birthday_epoch": None,
+            "birthday_offset_seconds": None,
             "phone_count": 0,
             "email_count": 1,
         }

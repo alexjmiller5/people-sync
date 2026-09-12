@@ -5,10 +5,11 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
-from people_sync import ledger, lifedata, match, notion_people, parsers, photos, sources
+from people_sync import ledger, lifedata, match, notion_people, photos, sources
 from people_sync import captures, replay
 from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
@@ -61,7 +62,10 @@ def cmd_captures(args: argparse.Namespace) -> None:
                 | {"verification": "payload-checksum"}
             )
         except Exception:
-            entries.append({"verification": "invalid"})
+            entries.append(
+                {"verification": "invalid"}
+                | ({"file_id": path.stem} if re.fullmatch(r"[0-9a-f]{32}", path.stem) else {})
+            )
     print(json.dumps({"captures": entries}))
 
 
@@ -105,14 +109,13 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    if args.source == "instagram":
-        records = parsers.parse_instagram(
-            os.path.join(args.path, "followers.json"), os.path.join(args.path, "following.json")
-        )
-    elif args.source in _PARSE_WITH_PATH:
-        records = getattr(parsers, f"parse_{args.source}")(args.path)
-    else:
-        records = getattr(sources, f"fetch_{args.source}")()
+    try:
+        if args.source in captures.EXPORT_SOURCES:
+            records = sources.retained_records(captures.capture_export(args.source, args.path))
+        else:
+            records = getattr(sources, f"fetch_{args.source}")()
+    except Exception:
+        sys.exit("ingest failed; input, retention or replay could not be verified")
     print(json.dumps(ledger.upsert(records)))
 
 
