@@ -342,6 +342,18 @@ _LIST_REASONS = {
 }
 
 
+def spotify_list_id(value):
+    """Validate a wire path segment, retaining encoded # only in this typed list slot."""
+    captures._require(isinstance(value, str) and bool(value))
+    captures._require(not re.search(r"[?#]", value))
+    decoded = unquote(value)
+    captures._require(re.fullmatch(r"[\w .#-]+", decoded) and decoded not in {".", ".."})
+    captures._require(
+        not re.search(r"\b(?:bearer|password|csrf|access.token|session.token)\b", decoded, re.I)
+    )
+    return value
+
+
 def _list_entries(source, entries):
     """Acquire only declared fields, keeping duplicate/malformed row positions."""
     excluded = set()
@@ -365,7 +377,7 @@ def _list_entries(source, entries):
                     captures._require(
                         isinstance(value, str) and re.fullmatch(r"/(user|artist)/[^/]+", value)
                     )
-                    _identity(value.rsplit("/", 1)[-1], source)
+                    spotify_list_id(value.rsplit("/", 1)[-1])
                 elif value is not None and kind == "athlete-id":
                     captures._require(isinstance(value, str) and re.fullmatch(r"\d+", value))
                 elif value is not None and kind == "mutual-text":
@@ -412,7 +424,10 @@ def validate_list(source, payload):
     )
     _value(p["expected_total"], "count", source)
     if p["account_id"] is not None:
-        _identity(p["account_id"], source)
+        if source == "spotify":
+            spotify_list_id(p["account_id"])
+        else:
+            _identity(p["account_id"], source)
     captures._require(isinstance(p["entries"], list) and isinstance(p["entry_ordinals"], list))
     captures._require(len(p["entries"]) == len(p["entry_ordinals"]))
     captures._require(all(type(i) is int and i >= 0 for i in p["entry_ordinals"]))

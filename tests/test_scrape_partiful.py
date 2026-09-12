@@ -90,6 +90,8 @@ class FakeBrowser:
             return self.dialog
         if js == partiful.ROW_COUNT_JS:
             return 2
+        if js.startswith("(function prepareRow(i)"):
+            return True
         if js.startswith("(function(i)"):
             i = int(js.rsplit("(", 1)[-1].rstrip(")"))
             return {

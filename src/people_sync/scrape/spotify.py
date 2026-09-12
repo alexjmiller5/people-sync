@@ -75,7 +75,7 @@ def list_users(browser) -> list[dict]:
     path = browser.eval(ME_JS)
     if not re.fullmatch(r"/user/[^/]+", path or ""):
         raise ExtractError("no-own-profile")
-    owner = snapshot._identity(path.rsplit("/", 1)[-1], "spotify")
+    owner = snapshot.spotify_list_id(path.rsplit("/", 1)[-1])
     browser.navigate("https://open.spotify.com" + path, 12000)
     if not browser.wait_for(READY_JS, 15):
         raise ExtractError("no-own-profile")
