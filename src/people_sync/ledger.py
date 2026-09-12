@@ -21,6 +21,7 @@ class Record:
     i_follow: int | None = None
     capture_key: str | None = None
     capture_refs: tuple[dict, ...] = ()
+    hold_existing: bool = False  # In-memory only: permitted export fields were excluded.
 
     @property
     def row_id(self) -> str:
@@ -55,8 +56,18 @@ def upsert(records: list[Record]) -> dict:
     now = lifedata.now_iso()
     new_rows = []
     updated = 0
+    held = []
     for r in records:
         if r.row_id in existing:
+            if r.hold_existing:
+                held.append(
+                    {
+                        "record_id": r.row_id,
+                        "capture_key": r.capture_key,
+                        "reason": "permitted-field-exclusions",
+                    }
+                )
+                continue
             lifedata.sql(
                 "UPDATE people_sync_records SET "
                 f"handle = {lifedata.sq(r.handle)}, name = {lifedata.sq(r.name)}, "
@@ -86,4 +97,4 @@ def upsert(records: list[Record]) -> dict:
             )
     if new_rows:
         lifedata.insert("people_sync_records", new_rows)
-    return {"new": len(new_rows), "updated": updated}
+    return {"new": len(new_rows), "updated": updated} | ({"held": held} if held else {})

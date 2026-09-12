@@ -2,6 +2,7 @@
 
 import json
 import re
+import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from people_sync import captures
@@ -165,7 +166,7 @@ _LINKEDIN_PROFILE = {
 }
 _PATHS = {
     "instagram": r"/[A-Za-z0-9._]+/?",
-    "linkedin": r"/in/[A-Za-z0-9_-]+/?",
+    "linkedin": r"/in/[^/]+/?",
     "facebook": r"/(?:[A-Za-z0-9.]+)/?",
     "partiful": r"/u/[A-Za-z0-9_-]+/?",
     "spotify": r"/user/[^/]+",
@@ -185,6 +186,27 @@ _HOSTS = {
 
 def _identity(value, source):
     captures._require(isinstance(value, str) and bool(value))
+    if source == "linkedin":
+        # Decode one UTF-8 segment for inspection only. Remaining percent escapes,
+        # delimiters, controls and other punctuation cannot enter this alphabet.
+        decoded = unquote(value, errors="strict")
+        captures._require(decoded not in {".", ".."})
+        captures._require(
+            all(
+                c in "._-"
+                or unicodedata.category(c).startswith(("L", "M", "N"))
+                or unicodedata.category(c) in {"Pi", "Pf"}
+                for c in decoded
+            )
+        )
+        captures._require(
+            not re.search(
+                r"\b(?:bearer|password|csrf|access.token|session.token)\b",
+                unicodedata.normalize("NFKC", decoded),
+                re.I,
+            )
+        )
+        return value
     decoded = unquote(value)
     pattern = r"[\w .-]+" if source == "spotify" else r"[A-Za-z0-9._-]+"
     captures._require(re.fullmatch(pattern, decoded) and decoded not in {".", ".."})

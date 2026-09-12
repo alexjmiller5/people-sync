@@ -30,6 +30,7 @@ def normalized(result: dict) -> dict:
     for record in out.get("records", []):
         record.pop("capture_key", None)
         record.pop("capture_refs", None)
+        record.pop("hold_existing", None)
     return out
 
 
@@ -84,6 +85,18 @@ def _export(capture: dict) -> dict:
                     "record_ids": ids,
                 }
             )
+    affected = {
+        (entry["role"], captures.encode(originals[entry["role"]][entry["ordinal"]]))
+        for entry in capture["payload"].get("field_exclusions", {}).get("entries", [])
+        if entry["reason"] in {"unsafe-or-ambiguous-value", "invalid-structure"}
+        and entry["ordinal"] is not None
+    }
+    for record in records:
+        record.hold_existing = any(
+            (role, captures.encode(record.raw.get(role) if source == "instagram" else record.raw))
+            in affected
+            for role in originals
+        )
     return {"records": [asdict(r) for r in records], "observations": observations}
 
 

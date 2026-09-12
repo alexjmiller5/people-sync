@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import sqlite3
 
 import pytest
 
@@ -14,6 +15,187 @@ def retained(monkeypatch, tmp_path):
     monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
     monkeypatch.setattr(photos, "get_object", stored.__getitem__)
     return stored
+
+
+@pytest.fixture
+def synthetic_ledger(monkeypatch):
+    """Run real ledger SQL against isolated synthetic rows, never a life database."""
+    with sqlite3.connect(":memory:") as db:
+        db.row_factory = sqlite3.Row
+        db.execute("""CREATE TABLE people_sync_records (
+            id TEXT PRIMARY KEY, source TEXT, source_id TEXT, handle TEXT, name TEXT,
+            raw TEXT, follows_me INTEGER, i_follow INTEGER, status TEXT,
+            person_id TEXT, suggested_person_id TEXT, first_seen TEXT, last_seen TEXT,
+            deleted_at TEXT, updated_at TEXT
+        )""")
+
+        def sql(query):
+            cursor = db.execute(query)
+            return [dict(row) for row in cursor.fetchall()] if cursor.description else []
+
+        def insert(table, rows):
+            assert table == "people_sync_records"
+            for row in rows:
+                columns = ",".join(row)
+                placeholders = ",".join("?" for _ in row)
+                db.execute(
+                    f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(row.values())
+                )
+
+        monkeypatch.setattr(ledger.lifedata, "sql", sql)
+        monkeypatch.setattr(ledger.lifedata, "insert", insert)
+        monkeypatch.setattr(ledger.lifedata, "now_iso", lambda: "2026-09-12T00:00:00.000Z")
+        yield db
+
+
+@pytest.mark.parametrize(
+    "status,deleted_at", [("matched", None), ("ignored", None), ("matched", "2026-01-02")]
+)
+@pytest.mark.parametrize("field", ["Company", "First Name"])
+def test_real_ingest_holds_existing_excluded_rows_and_continues_eligible_rows(
+    monkeypatch, tmp_path, retained, synthetic_ledger, capsys, status, deleted_at, field
+):
+    import csv
+
+    db = synthetic_ledger
+    db.execute(
+        """INSERT INTO people_sync_records
+        (id, source, source_id, handle, name, raw, status, person_id,
+         suggested_person_id, first_seen, last_seen, deleted_at, updated_at)
+        VALUES (?, 'linkedin', 'existing', 'existing', 'Preserved Name', ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            "linkedin:existing",
+            '{"Company":"Established Studio","Position":"Senior Engineer"}',
+            status,
+            "a" * 32,
+            "b" * 32,
+            "2026-01-01",
+            "2026-01-02",
+            deleted_at,
+            "2026-01-02",
+        ),
+    )
+    db.execute("""INSERT INTO people_sync_records (id, source, source_id, raw, status)
+        VALUES ('linkedin:safe', 'linkedin', 'safe', '{}', 'ignored')""")
+    before = dict(
+        db.execute("SELECT * FROM people_sync_records WHERE id='linkedin:existing'").fetchone()
+    )
+    path = tmp_path / "Connections.csv"
+    rows = []
+    for sid in ["existing", "safe", "new-safe", "new-filtered"]:
+        row = {
+            "First Name": "Example",
+            "Last Name": "Person",
+            "URL": f"https://linkedin.com/in/{sid}",
+            "Company": "Refreshed Studio",
+            "Position": "Engineer",
+            "Email Address": "synthetic@example.test",
+        }
+        if sid in {"existing", "new-filtered"}:
+            row[field] = "3D Studio"
+        rows.append(row)
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    original = path.read_bytes()
+    cli.main(["ingest", "linkedin", "--path", str(path)])
+    result = json.loads(capsys.readouterr().out)
+    key = next(iter(retained))
+    assert (
+        dict(
+            db.execute("SELECT * FROM people_sync_records WHERE id='linkedin:existing'").fetchone()
+        )
+        == before
+    )
+    assert result == {
+        "new": 2,
+        "updated": 1,
+        "held": [
+            {
+                "record_id": "linkedin:existing",
+                "capture_key": key,
+                "reason": "permitted-field-exclusions",
+            }
+        ],
+    }
+    safe = dict(db.execute("SELECT * FROM people_sync_records WHERE id='linkedin:safe'").fetchone())
+    assert json.loads(safe["raw"])["Company"] == "Refreshed Studio"
+    assert safe["status"] == "ignored"
+    new = dict(
+        db.execute("SELECT * FROM people_sync_records WHERE id='linkedin:new-filtered'").fetchone()
+    )
+    assert json.loads(new["raw"])[field] == "" and new["status"] == "pending"
+    assert "hold_existing" not in new and "hold_existing" not in json.loads(new["raw"])
+    assert path.read_bytes() == original
+
+
+def test_replay_hold_marker_follows_exact_role_and_ordinal(monkeypatch, tmp_path, retained):
+    # Following has an excluded value at ordinal 0; followers' ordinal 0 belongs
+    # to a different safe identity. Superseded input must not hold a safe proposal.
+    (tmp_path / "followers.json").write_text(
+        json.dumps(
+            [
+                {"string_list_data": [{"value": "safe"}]},
+                {"string_list_data": [{"value": "superseded", "href": "https://foreign.test/"}]},
+                {
+                    "string_list_data": [
+                        {"value": "superseded", "href": "https://instagram.com/superseded"}
+                    ]
+                },
+            ]
+        )
+    )
+    (tmp_path / "following.json").write_text(
+        json.dumps(
+            {
+                "relationships_following": [
+                    {"string_list_data": [{"value": "affected", "timestamp": -1}]},
+                ]
+            }
+        )
+    )
+    capture = captures.capture_export("instagram", tmp_path)
+    records = sources.retained_records(capture)
+    assert {r.source_id: r.hold_existing for r in records} == {
+        "safe": False,
+        "superseded": False,
+        "affected": True,
+    }
+    result = replay.replay_capture(capture)
+    assert all("hold_existing" not in r for r in replay.normalized(result)["records"])
+
+
+@pytest.mark.parametrize("last_excluded", [False, True])
+def test_duplicate_linkedin_hold_tracks_winning_proposal(
+    tmp_path, retained, synthetic_ledger, last_excluded
+):
+    db = synthetic_ledger
+    db.execute("""INSERT INTO people_sync_records (id, source, source_id, name, raw, status)
+        VALUES ('linkedin:example', 'linkedin', 'example', 'Preserved Name', '{"Company":"Prior Studio"}', 'matched')""")
+    before = dict(db.execute("SELECT * FROM people_sync_records").fetchone())
+    companies = (
+        ["Refreshed Studio", "3D Studio"] if last_excluded else ["3D Studio", "Refreshed Studio"]
+    )
+    path = tmp_path / "Connections.csv"
+    path.write_text(
+        "First Name,Last Name,URL,Company\n"
+        + "".join(
+            f"Example,Person,https://linkedin.com/in/example,{company}\n" for company in companies
+        )
+    )
+    records = sources.retained_records(captures.capture_export("linkedin", path))
+    assert [r.hold_existing for r in records] == [not last_excluded, last_excluded]
+    result = ledger.upsert(records)
+    after = dict(db.execute("SELECT * FROM people_sync_records").fetchone())
+    if last_excluded:
+        assert after == before and result["new"] == result["updated"] == 0
+        assert result["held"][0]["capture_key"] in retained
+    else:
+        assert result == {"new": 0, "updated": 1}
+        assert json.loads(after["raw"])["Company"] == "Refreshed Studio"
+        assert after["status"] == "matched"
 
 
 @pytest.mark.parametrize("failure", [None, "upload", "readback"])

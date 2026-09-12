@@ -169,6 +169,11 @@ def _require(condition):
 
 def _check_export_value(value, field=""):
     """Reject contact-like or ambiguous values; never redact or rewrite source text."""
+    if field == "timestamp":
+        # Supported export representation: integer Unix seconds, 1970 through 2099.
+        # A fixed bound keeps offline revalidation independent of the current clock.
+        _require(value is None or (type(value) is int and 0 <= value < 4102444800))
+        return
     if isinstance(value, dict):
         for key, item in value.items():
             _check_export_value(key)
@@ -180,8 +185,6 @@ def _check_export_value(value, field=""):
         return
     if value is None or isinstance(value, bool):
         return
-    if field == "timestamp" and isinstance(value, (int, float)):
-        return  # Export epoch timestamps are typed metadata, not contact numbers.
     text = str(value)
     if field in {"Connected On", "Creation Timestamp", "Last Modified Timestamp"}:
         for fmt in ("%d %b %Y", "%Y-%m-%d %H:%M:%S UTC", "%Y-%m-%d"):
@@ -232,6 +235,9 @@ def _check_export_privacy(source: str, data: bytes, *, filtered=False) -> None:
 def _check_export_field(source, value, field):
     from people_sync.scrape import snapshot
 
+    if field == "timestamp":
+        _check_export_value(value, field)
+        return
     if value is None or value == "":
         return
     if field != "timestamp":
