@@ -677,10 +677,14 @@ def test_link_any_source_writes_platform_account_and_renames_losslessly(env):
     sql, insert = _generic_env(env, person, record)
     reconcile.main(["link", "p1", "instagram:andrea.garcia2", "--name", "Andrea Garcia", "--apply"])
     writes = _writes(sql)
-    assert any(
-        "UPDATE people SET" in w and "name = 'Andrea Garcia'" in w and "nickname = 'Andrea'" in w
-        for w in writes
-    )
+    [update] = [w for w in writes if w.startswith("UPDATE people SET")]
+    for part in (
+        "name = 'Andrea Garcia'",
+        "nickname = 'Andrea'",
+        "first_name = 'Andrea'",
+        "last_name = 'Garcia'",
+    ):
+        assert part in update
     assert any(
         "UPDATE people_sync_records SET status = 'matched', person_id = 'p1'" in w for w in writes
     )
