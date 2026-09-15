@@ -237,3 +237,12 @@ def test_event_going_partiful_mutual_keeps_a_box():
     assert "excluded" not in out and "went to RIP Derek" in out["clusters"][0][
         "reason"
     ].lower().replace("rip derek", "RIP Derek")
+
+
+def test_social_profile_spelling_wins_the_label():
+    group = _group(
+        google=[("Anabelle Broadsky", None)],
+        profiles=[("linkedin", "anabellebrodsky", "Anabelle Brodsky", None, None)],
+    )
+    [only] = propose.propose_group(group)["clusters"]
+    assert only["label"].startswith("Anabelle Brodsky")

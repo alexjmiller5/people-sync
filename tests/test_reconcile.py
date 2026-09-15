@@ -727,3 +727,27 @@ def test_create_from_any_source_requires_a_name(env, monkeypatch):
         and row["middle_name"] == "Mufson"
     )
     assert insert.call_args_list[1].args[1][0]["platform"] == "instagram"
+
+
+def test_corrected_spelling_is_a_note_not_a_nickname(env):
+    person = _person(
+        id="p1", name="Amanda Fercheck", last_name="Fercheck", nickname=None, notes=None
+    )
+    record = {
+        "id": "linkedin:af",
+        "source": "linkedin",
+        "source_id": "af",
+        "handle": "af",
+        "name": "Amanda Ferchak",
+        "raw": "{}",
+        "status": "pending",
+        "person_id": None,
+    }
+    sql, insert = _generic_env(env, person, record)
+    reconcile.main(["link", "p1", "linkedin:af", "--name", "Amanda Ferchak", "--apply"])
+    [update] = [w for w in _writes(sql) if w.startswith("UPDATE people SET")]
+    assert "name = 'Amanda Ferchak'" in update and "last_name = 'Ferchak'" in update
+    assert "spelling: Amanda Fercheck" in update and "nickname" not in update
+    assert reconcile._spelling_variant("Anabelle Broadsky", "Anabelle Brodsky")
+    assert not reconcile._spelling_variant("Andrea", "Andrea Garcia")
+    assert not reconcile._spelling_variant("Amanda Klein", "Amanda Booth")

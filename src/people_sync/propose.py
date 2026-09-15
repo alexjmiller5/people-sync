@@ -266,9 +266,33 @@ def cluster(
     return [(members, reasons[root], fuzzy[root]) for root, members in groups.items()]
 
 
+SPELLING_RANK = {
+    "linkedin": 0,
+    "instagram": 1,
+    "facebook": 2,
+    "venmo": 3,
+    "strava": 4,
+    "spotify": 5,
+}
+
+
+def best_name(members: list[Item]) -> str | None:
+    """The spelling to adopt: a social profile's own display name first (the person
+    typed it), then the address book, then the existing row."""
+    ranked = sorted(
+        (i for i in members if len(i.tokens) > 1),
+        key=lambda i: (
+            0 if i.kind == "profile" else 1 if i.kind == "google" else 2,
+            SPELLING_RANK.get(i.platform, 9),
+            -len(i.full),
+        ),
+    )
+    return ranked[0].name if ranked else None
+
+
 def label_for(members: list[Item]) -> str:
     named = sorted(members, key=lambda i: (i.kind != "google", i.kind != "person", -len(i.full)))
-    base = next((i.name for i in named if len(i.tokens) > 1), None) or named[0].label
+    base = best_name(members) or named[0].label
     cues = set().union(*(i.cues for i in members))
     return base + (f" - {', '.join(sorted(cues))}" if cues else "")
 
