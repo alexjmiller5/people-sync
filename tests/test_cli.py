@@ -9,6 +9,12 @@ from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 
 
+@pytest.fixture(autouse=True)
+def _notion_configured(monkeypatch):
+    """These tests exercise the Notion-anchored id path; local ids are covered elsewhere."""
+    monkeypatch.setenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", "ds-synthetic")
+
+
 @pytest.mark.parametrize("source", ["instagram", "facebook", "snapchat", "linkedin"])
 def test_ingest_exports_replay_verified_bytes(source, monkeypatch, tmp_path, capsys):
     from people_sync import photos, ledger

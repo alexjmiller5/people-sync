@@ -1,12 +1,13 @@
-"""Notion People stub-page creation - the row-id invariant made executable.
+"""New person ids, with Notion as an optional anchor.
 
-Every life-data person id IS their Notion People page id (dash-stripped),
-which is what keeps Notion-side Gifts/Quotes/Trips relations resolvable.
-Callers create the stub page here, then insert the matching people row with
-the dash-stripped id.
+When a Notion People data source is configured, a new person's life-data id
+IS their Notion page id (dash-stripped): that keeps Notion-side relations
+(gifts, quotes, trips) resolvable. Without one, the id is minted locally in
+the same 32-hex shape and Notion is never contacted.
 """
 
 import os
+import uuid
 
 import httpx
 
@@ -35,3 +36,11 @@ def create_stub(name: str) -> str:
     resp = httpx.post(_API, headers=headers, json=body, timeout=30)
     resp.raise_for_status()
     return resp.json()["id"]
+
+
+def new_person_id(name: str) -> tuple[str, str | None]:
+    """(life-data person id, Notion page id or None). Notion only when configured."""
+    if not os.environ.get(DATA_SOURCE_ENV):
+        return uuid.uuid4().hex, None
+    page_id = create_stub(name)
+    return page_id.replace("-", ""), page_id

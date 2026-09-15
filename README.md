@@ -56,7 +56,7 @@ uv run python -m people_sync <command>
 | `replay --input <capture.json> [--compare <prev>] [--output <p>]` | Parses a retained capture offline into a proposal, with no network and no estate writes |
 | `match` | Auto-links unambiguous pending records to existing people and writes their `person_accounts` rows |
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
-| `new-person --name <name>` | Creates a Notion People stub page, then the life-data `people` row using that page id |
+| `new-person --name <name>` | Creates the life-data `people` row; with a Notion People data source configured, a Notion stub page comes first and its id becomes the row id |
 | `photos store --person <id> --platform <p> --file <path>` | Stores a profile photo in R2 and appends a `person_photos` row, deduped by sha256 |
 | `login <platform>` | Signs the browser's profile into a platform at human pace (TOTP / SMS / mailed codes via the wired commands); idempotent |
 | `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (paced, without a daily cap by default) and writes `people_sync_profiles` rows + pictures |

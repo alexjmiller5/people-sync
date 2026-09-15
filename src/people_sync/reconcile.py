@@ -560,17 +560,18 @@ def create(record_id: str, ops: Ops, name: str | None = None) -> None:
         _mark_matched(ops, record_id, "<new-person-id>")
         return
 
-    # The Notion page id IS the row id (dash-stripped) - the stub comes first.
-    page_id = notion_people.create_stub(name)
-    person_id = page_id.replace("-", "")
+    # With Notion configured the page id IS the row id (dash-stripped), so the
+    # stub comes first; otherwise the id is minted locally.
+    person_id, page_id = notion_people.new_person_id(name)
     try:
         ops.insert("people", [{"id": person_id, **row}])
     except Exception:
-        print(
-            f"orphaned notion page {page_id}: created but life-data insert failed; "
-            "re-run with this id or delete the page",
-            file=sys.stderr,
-        )
+        if page_id:
+            print(
+                f"orphaned notion page {page_id}: created but life-data insert failed; "
+                "re-run with this id or delete the page",
+                file=sys.stderr,
+            )
         raise
     _link_account(ops, person_id, record, name)
     _mark_matched(ops, record_id, person_id)

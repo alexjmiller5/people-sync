@@ -18,7 +18,7 @@ src/people_sync/
   sources.py       google (via gog) and apple (local AddressBook sqlite) ingests
   match.py         conservative auto-linker
   photos.py        Life Data profile-photo storage, sha256-deduped, plus per-platform fetchers
-  notion_people.py Notion People stub-page creation (the row-id invariant)
+  notion_people.py new person ids: a Notion stub page when configured, else local
   scrape/          CDP harness (cdp.py), human pacing (pace.py), the scrape loop
                    (run.py), per-platform extractors, and the login flow
                    (login.py) with its selector table (login_specs.py)
