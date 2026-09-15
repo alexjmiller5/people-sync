@@ -23,14 +23,27 @@ src/people_sync/
                    (run.py), per-platform extractors, and the login flow
                    (login.py) with its selector table (login_specs.py)
 tests/             pytest, synthetic fixtures only
-scripts/           reconcile.py (triage link/merge/create), one-off migrations,
-                   the Google write-back cleanup
+  reconcile.py     triage link/merge/create (`people-sync reconcile`)
+  google_cleanup.py Google write-back cleanup (`people-sync google-cleanup`)
+  review.py + review.html  the private review page (`people-sync review`)
+  whatsapp.py      metadata-snapshot ingest
+skills/people-sync/ the generic agent runbook, shipped with the package
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
 flake.nix          packages.default (the CLI)
 ```
 
 ## Installing on a Mac
+
+`flake.nix` also exports `homeModules.default` (`programs.people-sync`): it
+installs the CLI wrapped with the operator's settings (CDP endpoint,
+credential/code commands, Notion data-source ids) and exposes
+`skills/people-sync` at `$XDG_DATA_HOME/people-sync/skills/people-sync`. Those
+settings are the only things a user's config supplies; anything else an
+operator has to hand-write in their config is a missing option here. The
+Notion People data-source id and the People-related databases are user facts
+and come from `PEOPLE_SYNC_NOTION_PEOPLE_DS` / `PEOPLE_SYNC_NOTION_RELATIONS`,
+never from code.
 
 `flake.nix` exposes `packages.<system>.default`: the `people-sync` CLI,
 built with plain `buildPythonApplication` (all three runtime deps ship as
@@ -318,7 +331,7 @@ people therefore get their Notion stub page first and the row second, which is
 exactly what `new-person` does - never insert a `people` row with an invented
 id.
 
-## Triage reconcile (`scripts/reconcile.py`)
+## Triage reconcile (`people-sync reconcile`)
 
 The three moves a `people-review` triage session repeats: `link` a pending
 Google record onto an existing person, `merge` two people rows, `create` a
@@ -496,8 +509,8 @@ operators re-point relations and handle deletions.
 
 ## Private review page
 
-`scripts/build_review.py` renders prepared review-context JSON into an offline
-HTML page using `scripts/review.html`. Pass repeated `--batch LABEL JSON`, a
+`people-sync review` (`review.py`) renders prepared review-context JSON into an
+offline HTML page using the packaged `review.html`. Pass repeated `--batch LABEL JSON`, a
 `--photos` manifest mapping retained photo keys to local `photos/<filename>`
 paths, and `--output` outside the repository. Download and verify retained
 photos through the file service before rendering. No credentials enter the

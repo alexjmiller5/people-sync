@@ -127,7 +127,7 @@ only and no plaintext:
   a dedicated client token with read/write grants for `photos/people/`,
   `photos/records/`, and `profiles/`.
 - `NOTION_API_TOKEN` - dedicated Notion connection token for People stub insertion
-  and the relation reads performed by `scripts/reconcile.py`.
+  and the relation reads performed by `reconcile merge`.
 
 Run anything that needs them through 1Password:
 
@@ -171,21 +171,26 @@ Every command has 60 s; a non-zero exit or a timeout halts the login with a
 screenshot and a reason that names only the variable. Command output is used
 and dropped, never logged.
 
-## Scripts
+## Installing for a user
 
-One-offs in `scripts/`, run directly with `uv run python scripts/<name>.py`:
+`flake.nix` exports `homeModules.default`. A home-manager configuration
+enables it and supplies only the facts no vendor could know:
 
-- `google_cleanup.py` - clears labels and org fields from Google Contacts
-  once life-data demonstrably holds the replacement (every label already a
-  circle, every org already a `person_employments` row). Dry run by default;
-  `--apply` writes, `--selftest` checks the decision logic offline.
-- `migrate_accounts.py` - migrates the flat handle columns on `people` into
-  `person_accounts` rows, keeping source values verbatim.
-- `migrate_circles.py` - migrates `tags`, `company`, and `when_we_met` values
-  into the `circles` vocabulary. Modes: `worksheet` (propose), `apply`,
-  `sideeffects`, `reconcile` (prove zero loss).
-- `notion_people_pull.py` - snapshots the Notion People database to
-  `data/notion_people_snapshot.json`.
+```nix
+programs.people-sync = {
+  enable = true;
+  endpoint = "127.0.0.1:9222";            # the Chrome the browser commands attach to
+  credentialCommand = "my-login-secrets"; # optional: `login` types; unset = verify only
+  notion.peopleDataSource = "<data_source_id>";
+  notion.relations.Gifts = [ "<data_source_id>" "<relation property id>" ];
+};
+```
+
+That installs `people-sync` wrapped with those settings and exposes the
+agent runbook at `$XDG_DATA_HOME/people-sync/skills/people-sync`, ready to be
+linked into an agent's skill catalog (`~/.claude/skills`, `~/.agents/skills`).
+Operator commands (`reconcile`, `google-cleanup`, `review`, `promote`) are
+subcommands of the installed CLI; nothing is run from a checkout.
 
 ## Development
 

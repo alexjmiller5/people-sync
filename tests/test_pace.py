@@ -146,7 +146,7 @@ def test_record_loads_existing_state_file(tmp_path, mocker):
 
 def test_default_state_path_is_data_scrape_state_json():
     p = pace.Pacer("instagram")
-    assert p.state_path == "data/scrape-state.json"
+    assert p.state_path.endswith("/people-sync/scrape-state.json")
 
 
 def test_two_pacer_instances_see_each_others_writes(tmp_path, mocker):
