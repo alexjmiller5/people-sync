@@ -51,6 +51,8 @@ BREAK_EVERY = 25
 # buttons) and halted whole runs.
 LOGIN_MARKERS = (
     "log in to continue",
+    "join linkedin",  # LinkedIn's authwall: the session was dropped mid-run
+    "already on linkedin",
     "login to continue",
     "please log in",
     "login required",
