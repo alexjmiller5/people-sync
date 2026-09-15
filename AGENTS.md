@@ -158,6 +158,24 @@ deduplication and block status handling apply; HTTP error details omit signed
 URLs. Facebook ledger IDs follow the export's normalized-name contract (including
 Unicode/apostrophes), independently of profile handles and safe storage keys.
 
+## WhatsApp snapshot evidence
+
+`people-sync ingest whatsapp --snapshot PATH --media-dir PATH --self-id JID` reads
+an operator-prepared, WAL-consistent metadata-only copy of the desktop app's
+store (`whatsapp.py`): chat sessions, push names and cached-picture metadata,
+never message bodies, opened `mode=ro&immutable=1`. Only active direct chats
+become evidence; self (by the explicit native JID), group, status, broadcast and
+community rows are counted under `excluded`. Identity is the native opaque
+`@lid`; a phone-only chat gets a random id from the 0600 `whatsapp-ids.json`
+map in the state dir, so phone-form JIDs and media paths (which embed numbers)
+never enter a capture. Names go through the shared export value check, so a
+number saved as a name is excluded, not retained. Pictures are read only from
+inside the media root (traversal and symlink escapes are refused unread),
+signature-checked, and embedded in the `contacts` capture so it replays offline;
+the capture and every picture are retained before any estate write. Records stay
+`pending`: `match.py` skips the source entirely, and there is no profile URL
+(none exists for a native chat, and usernames are not in this schema).
+
 ## Logins
 
 `people-sync login <platform>` signs that platform's dedicated Chrome

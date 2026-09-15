@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
-from people_sync import captures, replay
+from people_sync import captures, replay, whatsapp
 from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
@@ -110,6 +110,12 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
 def cmd_ingest(args: argparse.Namespace) -> None:
     try:
+        if args.source == "whatsapp":
+            report = whatsapp.ingest(
+                args.snapshot, args.media_dir, self_id=args.self_id, state_dir=args.state_dir
+            )
+            print(json.dumps(report))
+            return
         if args.source in captures.EXPORT_SOURCES:
             records = sources.retained_records(captures.capture_export(args.source, args.path))
         else:
@@ -331,6 +337,12 @@ def build_parser() -> argparse.ArgumentParser:
     for name in _FETCH_NO_PATH:
         p = ingest_sub.add_parser(name)
         p.set_defaults(func=cmd_ingest)
+    wa = ingest_sub.add_parser("whatsapp", help="operator-supplied metadata snapshot, read-only")
+    wa.add_argument("--snapshot", required=True, help="WAL-consistent metadata-only sqlite copy")
+    wa.add_argument("--media-dir", required=True, help="root holding the cached profile pictures")
+    wa.add_argument("--self-id", required=True, help="the account's own native JID (excluded)")
+    wa.add_argument("--state-dir", help="private local state root (default: XDG state)")
+    wa.set_defaults(func=cmd_ingest)
 
     match_p = sub.add_parser("match", help="auto-link pending ledger records to people")
     match_p.set_defaults(func=cmd_match)

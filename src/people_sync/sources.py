@@ -161,6 +161,9 @@ def _shape(value, schema, *, filtering=False):
             "group-id": r"contactGroups/[0-9A-Za-z_-]+",
             "opaque-id": r"[0-9A-Za-z_-]+",
             "apple-id": r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}:ABPerson",
+            "whatsapp-id": r"(?:lid|local)-[0-9a-z]+",
+            "sha256": r"[0-9a-f]{64}",
+            "base64": r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
         }
         if schema in patterns:
             captures._require(re.fullmatch(patterns[schema], value))

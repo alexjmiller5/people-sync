@@ -278,3 +278,29 @@ def test_partiful_records_match_by_instagram_handle_never_by_name(mocker):
     assert any("person_id = 'p1'" in u for u in updates)  # the handle owner, not the name-alike
     row = insert.call_args.args[1][0]
     assert row["platform"] == "partiful" and row["url"] == "https://partiful.com/u/u1"
+
+
+def test_whatsapp_records_never_automatch_by_name(mocker):
+    # a unique two-word name would auto-link for any other source; WhatsApp
+    # evidence stays pending for the user's review, with no suggestion either
+    people = [
+        {"id": "p1", "name": "Ada Example", "first_name": None, "last_name": None, "nickname": None}
+    ]
+    pending = [
+        {
+            "id": "whatsapp:lid-1",
+            "source": "whatsapp",
+            "source_id": "lid-1",
+            "handle": None,
+            "name": "Ada Example",
+            "raw": "{}",
+        }
+    ]
+    sql = mocker.patch("people_sync.lifedata.sql", side_effect=_sql_router(people, pending))
+    ins = mocker.patch("people_sync.lifedata.insert")
+
+    out = run_match()
+
+    ins.assert_not_called()
+    assert not [c for c in sql.call_args_list if c.args[0].startswith("UPDATE")]
+    assert out == {"auto": 0, "suggested": 0, "left_pending": 1}
