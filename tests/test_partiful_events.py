@@ -39,7 +39,6 @@ def test_event_and_guest_captures_validate_and_refuse_unknown_fields(retained):
         ordinal=0,
         scope="events",
         expected_total=1,
-        complete=True,
     )
     assert page["entries"] == [
         {
