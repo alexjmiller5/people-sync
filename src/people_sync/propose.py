@@ -17,6 +17,7 @@ import unicodedata
 from pathlib import Path
 
 LINK_SCORE = 3  # a full-name or handle match on its own
+JUNK_NAMES = {"mutuals", "join linkedin", "unnamed account"}  # page headings scraped as names
 WEAK_LINK_SCORE = 2  # a fuzzy surname or a cue match, only when unambiguous
 
 # Era / community circles that imply a place or school the profiles may name.
@@ -148,11 +149,14 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
             )
         )
     for p in group.get("profiles", []):
+        display = p.get("display_name")
+        if not display or display.casefold() in JUNK_NAMES:
+            display = p.get("source_name")
         out.append(
             Item(
                 "profile",
                 p["record_id"],
-                p.get("display_name") or p.get("source_name"),
+                display,
                 handle=p.get("handle"),
                 platform=p.get("platform"),
                 texts=(
@@ -168,9 +172,11 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
     return out
 
 
-def signal(a: Item, b: Item) -> tuple[int, list[str]]:
+def signal(a: Item, b: Item, links: dict | None = None) -> tuple[int, list[str]]:
     """Score and reasons for treating a and b as one person."""
     score, why = 0, []
+    if links and (b.id in links.get(a.id, ()) or a.id in links.get(b.id, ())):
+        score, why = score + 5, why + ["same phone number in the address book"]
     if a.full and a.full == b.full:
         score, why = score + 3, why + ["same full name"]
     elif a.first and a.first == b.first and a.last and b.last:
@@ -200,7 +206,9 @@ def signal(a: Item, b: Item) -> tuple[int, list[str]]:
     return score, why
 
 
-def cluster(items: list[Item]) -> list[tuple[list[Item], list[str], bool]]:
+def cluster(
+    items: list[Item], links: dict | None = None
+) -> list[tuple[list[Item], list[str], bool]]:
     """Greedy union of the strongest signals first; returns (members, reasons, fuzzy)."""
     parent = {i.id: i.id for i in items}
     reasons: dict[str, list[str]] = {i.id: [] for i in items}
@@ -214,7 +222,7 @@ def cluster(items: list[Item]) -> list[tuple[list[Item], list[str], bool]]:
 
     pairs = []
     for a, b in itertools.combinations(items, 2):
-        s, why = signal(a, b)
+        s, why = signal(a, b, links)
         if s:
             pairs.append((s, a, b, why))
     pairs.sort(key=lambda p: -p[0])
@@ -261,10 +269,10 @@ def label_for(members: list[Item]) -> str:
     return base + (f" - {', '.join(sorted(cues))}" if cues else "")
 
 
-def propose_group(group: dict, google_groups=None, cues=None) -> dict:
+def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dict:
     items = items_for(group, google_groups, cues)
     clusters = []
-    for members, why, fuzzy in cluster(items):
+    for members, why, fuzzy in cluster(items, links):
         entry = {
             "label": label_for(members),
             "reason": (
@@ -281,12 +289,12 @@ def propose_group(group: dict, google_groups=None, cues=None) -> dict:
     return {"clusters": clusters}
 
 
-def propose(batches, google_groups=None, cues=None) -> dict:
+def propose(batches, google_groups=None, cues=None, links=None) -> dict:
     out = {}
     for batch, path in batches:
         for name, group in json.loads(Path(path).read_text()).items():
             out[json.dumps([batch, name], ensure_ascii=False)] = propose_group(
-                group, google_groups, cues
+                group, google_groups, cues, links
             )
     return out
 
@@ -298,12 +306,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--google-groups", type=Path, help="{contactGroups/<id>: label} JSON")
     parser.add_argument("--cues", type=Path, help="{person or record id: [cue text, ...]} JSON")
+    parser.add_argument(
+        "--links", type=Path, help="{record id: [record ids sharing its phone number]} JSON"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     result = propose(
         args.batch,
         json.loads(args.google_groups.read_text()) if args.google_groups else None,
         json.loads(args.cues.read_text()) if args.cues else None,
+        json.loads(args.links.read_text()) if args.links else None,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=1))

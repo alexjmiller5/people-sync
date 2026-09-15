@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import structlog
 
-from people_sync import captures
+from people_sync import captures, lifedata
 from people_sync.ledger import Record
 
 log = structlog.get_logger(__name__)
@@ -162,6 +162,7 @@ def _shape(value, schema, *, filtering=False):
             "opaque-id": r"[0-9A-Za-z_-]+",
             "apple-id": r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}:ABPerson",
             "whatsapp-id": r"(?:lid|local)-[0-9a-z]+",
+            "contact-ref": r"(?:google_contacts:people/c[0-9A-Za-z_-]+|apple_contacts:[0-9A-Fa-f-]{36}:ABPerson)",
             "sha256": r"[0-9a-f]{64}",
             "base64": r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
         }
@@ -443,3 +444,57 @@ def fetch_google() -> list[Record]:
 
 def fetch_apple() -> list[Record]:
     return retained_records(contacts_capture("apple", collect_apple()))
+
+
+_PHONE_QUERY = """
+SELECT r.ZUNIQUEID AS id, r.ZEXTERNALUUID AS external, p.ZFULLNUMBER AS number
+FROM ZABCDPHONENUMBER p JOIN ZABCDRECORD r ON r.Z_PK = p.ZOWNER
+"""
+
+
+def phone_index() -> dict[str, list[dict]]:
+    """Local lookup only, never persisted: last ten digits -> [{apple id, external id}].
+    The external id of a CardDAV-synced contact is the Google contact's own id."""
+    index: dict[str, list[dict]] = {}
+    for path in _db_paths():
+        try:
+            out = _run(["sqlite3", "-json", f"file:{path}?mode=ro", _PHONE_QUERY]).strip()
+            rows = json.loads(out) if out else []
+        except (RuntimeError, ValueError, TypeError, OSError):
+            continue
+        for row in rows:
+            digits = re.sub(r"\D", "", str(row.get("number") or ""))[-10:]
+            if len(digits) >= 7 and row.get("id"):
+                index.setdefault(digits, []).append(
+                    {"apple": row["id"], "external": row.get("external") or None}
+                )
+    return index
+
+
+def google_contact_ids() -> dict[str, str]:
+    """{Google contact source id (the hex id inside each field's metadata): ledger record id}."""
+
+    def ids(node):
+        found = set()
+        if isinstance(node, dict):
+            source = node.get("metadata", {}).get("source", {})
+            if source.get("type") == "CONTACT" and source.get("id"):
+                found.add(source["id"])
+            for value in node.values():
+                found |= ids(value)
+        elif isinstance(node, list):
+            for value in node:
+                found |= ids(value)
+        return found
+
+    out = {}
+    for row in lifedata.sql(
+        "SELECT id, raw FROM people_sync_records WHERE source = 'google_contacts' AND deleted_at IS NULL"
+    ):
+        try:
+            raw = json.loads(row["raw"]) if row.get("raw") else {}
+        except json.JSONDecodeError:
+            continue
+        for source_id in ids(raw):
+            out[source_id] = row["id"]
+    return out
