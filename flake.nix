@@ -20,7 +20,7 @@
           src = ./.;
           build-system = [ pkgs.python313Packages.hatchling ];
           dependencies = with pkgs.python313Packages; [ httpx structlog websockets ];
-          doCheck = false; # `just test` / `nix flake check` cover the suite
+          doCheck = false; # the suite runs through `just test`; `nix flake check` only builds the package
         };
 
     in
