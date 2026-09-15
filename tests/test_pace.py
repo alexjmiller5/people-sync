@@ -316,3 +316,11 @@ def test_recaptcha_badge_is_not_a_challenge():
     assert not pace.is_challenge(
         "This site is protected by reCAPTCHA and the Google Privacy Policy apply."
     )
+
+
+def test_linkedin_authwall_is_a_signed_out_page():
+    from people_sync.scrape.pace import challenge_marker
+
+    page = "Skip to main content\nLinkedIn\nJoin LinkedIn\nEmail\nPassword\nAlready on Linkedin? Sign in"
+    assert challenge_marker(page) == "join linkedin"
+    assert challenge_marker("Marketing lead at Join Ventures") is None
