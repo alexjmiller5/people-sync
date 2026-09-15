@@ -36,6 +36,11 @@ CUE_ALIASES = {
     "new york city": "nyc",
     "madrid": "madrid",
     "primavera": "madrid",
+    "apogee": "apogee",
+    "fidelity": "fidelity",
+    "sae": "sae",
+    "sigma alpha epsilon": "sae",
+    "capital one": "capital one",
 }
 CIRCLE_CUES = {
     "primavera 2024": {"madrid", "bu"},
@@ -138,8 +143,8 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
                 "google",
                 c["id"],
                 c.get("name"),
-                texts=(*orgs, *[l for l in labels if l], *cues.get(c["id"], [])),
-                circles=[l for l in labels if l] + [o for o in orgs if o],
+                texts=(*orgs, *[name for name in labels if name], *cues.get(c["id"], [])),
+                circles=[name for name in labels if name] + [o for o in orgs if o],
             )
         )
     for p in group.get("profiles", []):
