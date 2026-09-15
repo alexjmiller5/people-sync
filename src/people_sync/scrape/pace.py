@@ -25,7 +25,14 @@ log = structlog.get_logger(__name__)
 # Optional operator limits. No platform has a daily cap by default.
 DAILY_CAPS_ENV = "PEOPLE_SYNC_DAILY_CAPS"
 
-DEFAULT_STATE_PATH = "data/scrape-state.json"
+
+def _default_state_path() -> str:
+    from people_sync.captures import state_directory
+
+    return str(state_directory() / "scrape-state.json")
+
+
+DEFAULT_STATE_PATH = _default_state_path()
 
 BREAK_EVERY = 25
 
