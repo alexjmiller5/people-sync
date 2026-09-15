@@ -227,3 +227,83 @@ def test_replay_preserves_original_observation_without_importing(mocker):
     assert result["capture_id"] == original["capture_id"]
     assert result["captured_at"] == "2026-01-02T03:04:05.006Z"
     assert result["input_sha256"] == original["payload_sha256"]
+
+
+def _counting(monkeypatch, estate):
+    calls = []
+    real_sql, real_insert = ledger.lifedata.sql, ledger.lifedata.insert
+    monkeypatch.setattr(
+        ledger.lifedata, "sql", lambda q: (calls.append(q.split()[0]), real_sql(q))[1]
+    )
+    monkeypatch.setattr(
+        ledger.lifedata, "insert", lambda t, r: (calls.append("INSERT:" + t), real_insert(t, r))[1]
+    )
+    return calls
+
+
+def test_ledger_upsert_batches_updates_and_evidence(monkeypatch, estate):
+    records = [
+        ledger.Record(
+            "spotify",
+            f"u{i}",
+            None,
+            f"Name {i}",
+            {"i": i},
+            capture_key="profiles/spotify/captures/one.json",
+        )
+        for i in range(3)
+    ]
+    ledger.upsert(records)
+    calls = _counting(monkeypatch, estate)
+    for r in records:
+        r.raw = {"i": r.raw["i"], "again": True}
+        r.handle = f"h{r.raw['i']}"
+    ledger.upsert(records)
+    assert calls.count("UPDATE") == 1
+    assert calls.count("INSERT:provenance") == 0  # edges already present, one SELECT found them all
+    assert calls.count("SELECT") == 2  # existing ids, existing edges
+    rows = estate.execute(
+        "SELECT handle, name, raw, follows_me, last_seen FROM people_sync_records ORDER BY id"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [
+        (
+            f"h{i}",
+            f"Name {i}",
+            json.dumps({"i": i, "again": True}),
+            None,
+            "2026-09-12T00:00:00.000Z",
+        )
+        for i in range(3)
+    ]
+    assert estate.execute("SELECT count(*) FROM provenance").fetchone()[0] == 3
+
+
+def test_upsert_profiles_batches_all_writes(monkeypatch, estate):
+    from people_sync.scrape.profile import upsert_profiles
+
+    key = "profiles/spotify/captures/two.json"
+    existing = Profile(record_id="spotify:u0", platform="spotify", display_name="Old")
+    upsert_profile(existing, None, None, "profiles/spotify/captures/one.json")
+    calls = _counting(monkeypatch, estate)
+    items = [
+        (
+            Profile(record_id=f"spotify:u{i}", platform="spotify", display_name=f"New {i}"),
+            None,
+            None,
+            key,
+        )
+        for i in range(3)
+    ]
+    upsert_profiles(items)
+    assert calls.count("UPDATE") == 1 and calls.count("INSERT:people_sync_profiles") == 1
+    assert calls.count("INSERT:provenance") == 1 and calls.count("SELECT") == 2
+    rows = estate.execute(
+        "SELECT platform, display_name, raw_r2_key FROM people_sync_profiles ORDER BY id"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [("spotify", f"New {i}", key) for i in range(3)]
+    edges = estate.execute("SELECT count(*) FROM provenance WHERE from_ref = ?", (key,)).fetchone()[
+        0
+    ]
+    assert edges == 3
+    upsert_profiles(items)  # idempotent: no new edges
+    assert estate.execute("SELECT count(*) FROM provenance").fetchone()[0] == 4

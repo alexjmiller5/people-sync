@@ -285,6 +285,14 @@ the next sync.
 `lifedata.sq()` quotes every value interpolated into SQL. Use it; do not
 f-string a raw value into a query.
 
+Every `life sql` write costs seconds (a read is instant), so estate writes
+are batched: `ledger.batch_update` turns a set of row updates into one
+`UPDATE ... CASE <key>` statement per 200 rows, `ledger.imported_from_many`
+checks and inserts evidence for a whole ingest in two round trips, and
+`profile.upsert_profiles` does the same for profile rows (`upsert_profile`
+is the one-item form). A source that writes rows one at a time in a loop
+is the bug to fix, not a reason to add a scheduler or a daemon.
+
 `ledger.imported_from(table, row_id, capture_key=None, capture_refs=())` attaches
 whole-row `imported_from` evidence to each distinct retained key after successful
 record/profile writes. IDs hash the capture key, destination table/row, relation

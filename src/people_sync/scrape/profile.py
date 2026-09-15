@@ -9,7 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 from people_sync import lifedata
-from people_sync.ledger import imported_from
+from people_sync.ledger import batch_update, imported_from_many
 
 _JSON_COLUMNS = ("education", "work", "links")
 _BOOL_COLUMNS = ("is_private", "is_verified")
@@ -94,21 +94,37 @@ def upsert_profile(
     avatar_sha256: str | None = None,
     raw_r2_key: str | None = None,
 ) -> None:
-    row = _row(p, avatar_r2_key, avatar_sha256, raw_r2_key, lifedata.now_iso())
-    existing = lifedata.sql(
-        f"SELECT id, deleted_at FROM people_sync_profiles WHERE record_id = {lifedata.sq(p.record_id)}"
-    )
-    if existing:
-        if existing[0].get("deleted_at"):
-            return
-        set_clause = ", ".join(f"{col} = {_sql_value(val)}" for col, val in row.items())
-        lifedata.sql(
-            f"UPDATE people_sync_profiles SET {set_clause} WHERE record_id = {lifedata.sq(p.record_id)}"
+    upsert_profiles([(p, avatar_r2_key, avatar_sha256, raw_r2_key)])
+
+
+def upsert_profiles(items) -> None:
+    """Batched: one SELECT, one UPDATE, one insert, one evidence round trip for
+    every (Profile, avatar_r2_key, avatar_sha256, raw_r2_key). Tombstoned rows
+    are left alone; evidence points at the retained capture, never the row."""
+    now = lifedata.now_iso()
+    record_ids = [p.record_id for p, *_ in items]
+    existing = {}
+    for start in range(0, len(record_ids), 200):
+        ids = ",".join(lifedata.sq(i) for i in record_ids[start : start + 200])
+        existing.update(
+            (row["record_id"], row)
+            for row in lifedata.sql(
+                f"SELECT id, record_id, deleted_at FROM people_sync_profiles WHERE record_id IN ({ids})"
+            )
         )
-    else:
-        lifedata.insert(
-            "people_sync_profiles", [{"id": p.record_id, "record_id": p.record_id, **row}]
-        )
-    imported_from(
-        "people_sync_profiles", existing[0]["id"] if existing else p.record_id, raw_r2_key
-    )
+    updates, inserts, evidence = {}, [], []
+    for p, avatar_r2_key, avatar_sha256, raw_r2_key in items:
+        row = _row(p, avatar_r2_key, avatar_sha256, raw_r2_key, now)
+        prior = existing.get(p.record_id)
+        if prior:
+            if prior.get("deleted_at"):
+                continue
+            updates[p.record_id] = {col: _sql_value(val) for col, val in row.items()}
+        else:
+            inserts.append({"id": p.record_id, "record_id": p.record_id, **row})
+        evidence.append((prior["id"] if prior else p.record_id, raw_r2_key, ()))
+    if updates:
+        batch_update("people_sync_profiles", "record_id", updates)
+    if inserts:
+        lifedata.insert("people_sync_profiles", inserts)
+    imported_from_many("people_sync_profiles", evidence)
