@@ -163,12 +163,15 @@ def replay_capture(capture) -> dict:
             result["limitations"].append("skipped ordinals include malformed or superseded rows")
             return result
         if c["kind"] == "contacts":
-            from people_sync import sources
+            from people_sync import sources, whatsapp
 
             with redirect_stdout(io.StringIO()):
-                records = getattr(sources, "parse_" + c["source"].removesuffix("_contacts"))(
-                    c["payload"]
-                )
+                if c["source"] == "whatsapp":
+                    records = whatsapp.parse_records(c["payload"])
+                else:
+                    records = getattr(sources, "parse_" + c["source"].removesuffix("_contacts"))(
+                        c["payload"]
+                    )
             result.update(status="ok", records=[asdict(r) for r in records])
             result["limitations"].append(
                 "replayed privacy-filtered contact inputs; excluded fields unavailable"

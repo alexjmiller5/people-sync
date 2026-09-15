@@ -119,11 +119,18 @@ def validate(capture) -> dict:
             _require(c["exclusions"] == snapshot.LIST_EXCLUSIONS)
             _require(c["completeness"] == ("privacy-filtered" if p["complete"] else "partial"))
         if c["kind"] == "contacts":
-            from people_sync.sources import CONTACT_POLICY, validate_contacts
+            if c["source"] == "whatsapp":
+                from people_sync import whatsapp
 
-            validate_contacts(c["source"], p)
+                whatsapp.validate_payload(p)
+                policy = whatsapp.POLICY
+            else:
+                from people_sync.sources import CONTACT_POLICY, validate_contacts
+
+                validate_contacts(c["source"], p)
+                policy = CONTACT_POLICY
             _require(c["record_id"] is None)
-            _require(c["exclusions"] == [CONTACT_POLICY])
+            _require(c["exclusions"] == [policy])
             _require(c["completeness"] == ("privacy-filtered" if p["complete"] else "partial"))
         if c["kind"] == "export":
             _require(c["source"] in EXPORT_SOURCES)

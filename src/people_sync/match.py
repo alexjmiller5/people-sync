@@ -108,6 +108,9 @@ def run_match() -> dict:
     person_matches: dict[tuple[str, str], list[dict]] = defaultdict(list)
     ig_owner = _instagram_owners()
     for r in pending:
+        if r["source"] == "whatsapp":
+            # never by name: WhatsApp evidence waits for the user's explicit review
+            continue
         if r["source"] == "partiful":
             # never by name: only the Instagram handle on the mutual's profile
             candidates = _partiful_candidates(r, ig_owner)

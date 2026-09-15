@@ -26,7 +26,16 @@ from people_sync import lifedata
 from people_sync.ledger import capture_edge_id
 
 FROM_KIND = "people_sync_profiles"
-PLATFORMS = ("facebook", "linkedin", "strava", "instagram", "partiful", "spotify", "venmo")
+PLATFORMS = (
+    "facebook",
+    "linkedin",
+    "strava",
+    "instagram",
+    "partiful",
+    "spotify",
+    "venmo",
+    "whatsapp",
+)
 
 
 @dataclass
