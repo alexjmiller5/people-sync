@@ -26,7 +26,7 @@ import sys
 import httpx
 import structlog
 
-from people_sync import lifedata, notion_people
+from people_sync import lifedata, match, notion_people
 from people_sync.google_cleanup import user_groups
 
 log = structlog.get_logger(__name__)
@@ -186,12 +186,17 @@ def parse_record(record: dict, groups: dict[str, str]) -> dict:
 
 def account_row(person_id: str, record: dict, display_name: str | None) -> dict:
     """person_accounts row, id per match.py's <platform>:<person>:<handle-or-source_id>."""
+    platform = record["source"]
+    try:
+        raw = json.loads(record["raw"]) if record.get("raw") else {}
+    except json.JSONDecodeError:
+        raw = {}
     return {
-        "id": f"{SOURCE}:{person_id}:{record.get('handle') or record['source_id']}",
+        "id": f"{platform}:{person_id}:{record.get('handle') or record['source_id']}",
         "person_id": person_id,
-        "platform": SOURCE,
+        "platform": platform,
         "handle": record.get("handle"),
-        "url": None,
+        "url": match._url_from_raw(platform, raw),
         "source_id": record["source_id"],
         "display_name": display_name,
         "active": 1,
@@ -199,13 +204,38 @@ def account_row(person_id: str, record: dict, display_name: str | None) -> dict:
     }
 
 
-def _google_record(record_id: str) -> dict:
+def _record(record_id: str) -> dict:
     record = _one(f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)}")
     if not record:
         sys.exit(f"no contact record {record_id}")
-    if record["source"] != SOURCE:
-        sys.exit(f"record {record_id} is a {record['source']} record, expected {SOURCE}")
+    if record["status"] not in ("pending", "matched"):
+        sys.exit(f"record {record_id} is {record['status']}, expected pending")
     return record
+
+
+def _split_name(name: str) -> dict:
+    parts = name.split()
+    return {
+        "first_name": parts[0] if parts else None,
+        "middle_name": " ".join(parts[1:-1]) or None if len(parts) > 2 else None,
+        "last_name": parts[-1] if len(parts) > 1 else None,
+    }
+
+
+def _rename(person: dict, new_name: str | None, updates: dict, notes):
+    """Adopt a name losslessly: the old one survives as nickname or an aka note."""
+    if not new_name or new_name == person["name"]:
+        return notes
+    updates["name"] = new_name
+    print(f"  name: {person['name']!r} -> {new_name!r}")
+    old = person["name"]
+    if old and _empty(person["nickname"]):
+        updates["nickname"] = old
+        print(f"  nickname: -> {old!r} (previous name preserved)")
+    elif old:
+        notes = _append(notes, f"aka: {old}")
+        print(f"  notes: + aka: {old}")
+    return notes
 
 
 def _mark_matched(ops: Ops, record_id: str, person_id: str) -> None:
@@ -218,7 +248,7 @@ def _mark_matched(ops: Ops, record_id: str, person_id: str) -> None:
 def _link_account(ops: Ops, person_id: str, record: dict, display_name: str | None) -> None:
     existing = lifedata.sql(
         f"SELECT id, source_id FROM person_accounts WHERE person_id = {lifedata.sq(person_id)} "
-        f"AND platform = {lifedata.sq(SOURCE)} AND active = 1 AND deleted_at IS NULL"
+        f"AND platform = {lifedata.sq(record['source'])} AND active = 1 AND deleted_at IS NULL"
     )
     # A row with no source_id predates the backfill: it cannot be compared, and
     # inserting alongside it would give the person two google rows. Leave both alone.
@@ -242,35 +272,34 @@ def _link_account(ops: Ops, person_id: str, record: dict, display_name: str | No
 # --- link ---------------------------------------------------------------------
 
 
-def link(person_id: str, record_id: str, rename: bool, ops: Ops) -> None:
+def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | None = None) -> None:
     person = _one(
         f"SELECT * FROM people WHERE id = {lifedata.sq(person_id)} AND deleted_at IS NULL"
     )
     if not person:
         sys.exit(f"no live person {person_id}")
-    record = _google_record(record_id)
+    record = _record(record_id)
     if record["status"] == "matched":
         print(f"{record_id} is already matched to {record['person_id']} - nothing to do")
         return
-    if record["status"] != "pending":
-        sys.exit(f"record {record_id} is {record['status']}, expected pending")
-
-    google = parse_record(record, user_groups())
     updates: dict = {}
     notes = person["notes"]
     print(f"link {record_id} -> {person_id}")
 
-    new_name = google["display_name"]
-    if rename and new_name and new_name != person["name"]:
-        updates["name"] = new_name
-        print(f"  name: {person['name']!r} -> {new_name!r}")
-        old = person["name"]
-        if old and _empty(person["nickname"]):
-            updates["nickname"] = old
-            print(f"  nickname: -> {old!r} (previous name preserved)")
-        elif old:
-            notes = _append(notes, f"aka: {old}")
-            print(f"  notes: + aka: {old}")
+    if record["source"] != SOURCE:
+        # Any other source: the account row and, if asked, a lossless rename.
+        # Scraped facts reach the person through `promote`, not here.
+        notes = _rename(person, name, updates, notes)
+        if notes != person["notes"]:
+            updates["notes"] = notes
+        if updates:
+            ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {lifedata.sq(person_id)}")
+        _link_account(ops, person_id, record, name or record.get("name"))
+        _mark_matched(ops, record_id, person_id)
+        return
+
+    google = parse_record(record, user_groups())
+    notes = _rename(person, name or (google["display_name"] if rename else None), updates, notes)
 
     for field in ("first_name", "middle_name", "last_name"):
         value = google[field]
@@ -498,26 +527,28 @@ def _merge_relations(survivor_id: str, loser_id: str, ops: Ops) -> None:
 # --- create -------------------------------------------------------------------
 
 
-def create(record_id: str, ops: Ops) -> None:
-    record = _google_record(record_id)
+def create(record_id: str, ops: Ops, name: str | None = None) -> None:
+    record = _record(record_id)
     if record["status"] == "matched":
         print(f"{record_id} is already matched to {record['person_id']} - nothing to do")
         return
-    if record["status"] != "pending":
-        sys.exit(f"record {record_id} is {record['status']}, expected pending")
-    google = parse_record(record, user_groups())
-    name = google["display_name"]
+    if record["source"] == SOURCE:
+        google = parse_record(record, user_groups())
+        name = name or google["display_name"]
+        row = {
+            "name": name,
+            "first_name": google["first_name"],
+            "middle_name": google["middle_name"],
+            "last_name": google["last_name"],
+            "birthday": google["birthday"],
+            "circles": json.dumps(google["circles"]) if google["circles"] else None,
+        }
+        if name and name != google["display_name"]:
+            row.update(_split_name(name))
+    else:
+        row = {"name": name, **_split_name(name or "")}
     if not name:
-        sys.exit(f"record {record_id} has no display name to create a person from")
-
-    row = {
-        "name": name,
-        "first_name": google["first_name"],
-        "middle_name": google["middle_name"],
-        "last_name": google["last_name"],
-        "birthday": google["birthday"],
-        "circles": json.dumps(google["circles"]) if google["circles"] else None,
-    }
+        sys.exit(f"record {record_id} has no display name to create a person from; pass --name")
     if not ops.apply:
         print(f"DRY-RUN would create a Notion People stub for {name!r}, then insert people row:")
         print("DRY-RUN " + json.dumps(row))
@@ -557,11 +588,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     link_p = sub.add_parser(
-        "link", parents=[flags], help="attach a google contact record to an existing person"
+        "link", parents=[flags], help="attach a pending record to an existing person"
     )
     link_p.add_argument("person_id")
     link_p.add_argument("record_id")
     link_p.add_argument("--rename", action="store_true", help="adopt the google display name")
+    link_p.add_argument("--name", help="adopt this full name (the old one is kept as nickname/aka)")
 
     merge_p = sub.add_parser(
         "merge", parents=[flags], help="fold the loser person into the survivor"
@@ -570,9 +602,10 @@ def build_parser() -> argparse.ArgumentParser:
     merge_p.add_argument("loser_id")
 
     create_p = sub.add_parser(
-        "create", parents=[flags], help="promote a google contact record to a new person"
+        "create", parents=[flags], help="promote a pending record to a new person"
     )
     create_p.add_argument("record_id")
+    create_p.add_argument("--name", help="full name (required for non-Google records)")
     return parser
 
 
@@ -580,11 +613,11 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     ops = Ops(args.apply and not args.dry_run)
     if args.command == "link":
-        link(args.person_id, args.record_id, args.rename, ops)
+        link(args.person_id, args.record_id, args.rename, ops, args.name)
     elif args.command == "merge":
         merge(args.survivor_id, args.loser_id, ops)
     else:
-        create(args.record_id, ops)
+        create(args.record_id, ops, args.name)
 
 
 if __name__ == "__main__":
