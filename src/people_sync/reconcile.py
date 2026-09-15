@@ -290,6 +290,10 @@ def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | Non
         # Any other source: the account row and, if asked, a lossless rename.
         # Scraped facts reach the person through `promote`, not here.
         notes = _rename(person, name, updates, notes)
+        if name:
+            for field, value in _split_name(name).items():
+                if value and _empty(person[field]):
+                    updates[field] = value
         if notes != person["notes"]:
             updates["notes"] = notes
         if updates:
