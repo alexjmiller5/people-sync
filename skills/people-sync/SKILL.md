@@ -242,7 +242,14 @@ the user what moved.
 `list facebook` (friends page -> handles for name-only records, unique exact
 name only), `list partiful` (walks `/mutuals` profile by profile; matches a
 person only through an Instagram handle; built-in avatars are placeholders),
-`list strava` and `list spotify` (followers + following, totals checked).
+`list strava` and `list spotify` (followers + following, totals checked),
+`list partiful-events [--event-id ID ...]` (the signed-in user's past events
+they went to or hosted; each event's guest list is click-walked so every
+guest resolves to a profile id, retained per event, and attendance lands on
+the Partiful records as `raw.events` with the capture key; `promote` turns it
+into `person_events` rows once a record is linked to a person). Pass the
+chosen events to `propose --events` (`{record id: [titles]}`) so a lone
+Partiful mutual who was at one of them earns a box.
 Venmo's friend inventory comes from its authenticated `/v1/users/<id>/friends`
 API with the session's bearer token held in memory only; payment
 counterparties are a separate, explicit request, deduplicated by account id

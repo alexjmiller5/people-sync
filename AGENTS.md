@@ -104,7 +104,14 @@ so the list is walked click-by-click and profiles are written as it goes;
 `strava`: followers + following of the signed-in athlete; `spotify`: followers
 and followed users, excluding artist pages and checking the displayed totals). Partiful
 records match a person only through the Instagram handle on their profile
-(`match.py`), never by name. The mutual-list importer archives the original
+(`match.py`), never by name. `partiful-events` walks the user's past events
+(`harvest_events`, scope `events`) and each guest list (`harvest_event_guests`,
+scope `event_guests`: click each row, read `/u/<uid>`, back); `ingest_guest`
+merges the event into the record's `raw.events` (id, title, starts_at, role,
+capture_key) without touching its other fields, and `promote.event_ops` writes
+`person_events` rows for matched records with `evidence_of` edges to that
+capture. Guest sections come from the dialog's counts (`assign_sections`),
+not per-row labels. The mutual-list importer archives the original
 profile extractor result and mutual-row context before parsing or navigating
 back, and passes its file key to `upsert_profile` without uploading it again.
 An archive failure halts the import and leaves the existing ledger/cache intact.
