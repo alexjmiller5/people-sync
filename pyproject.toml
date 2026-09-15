@@ -30,8 +30,8 @@ packages = ["src/people_sync"]
 testpaths = ["tests"]
 # iCloud intermittently hides the venv's editable .pth (Python 3.13+ ignores
 # hidden .pth), which makes people_sync unimportable; this makes tests immune.
-pythonpath = ["src", "scripts"]
+pythonpath = ["src"]
 
 [tool.ruff]
-src = ["src", "scripts", "tests"]
+src = ["src", "tests"]
 line-length = 100

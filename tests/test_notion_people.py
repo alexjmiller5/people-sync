@@ -18,6 +18,7 @@ class _Resp:
 
 def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
     monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
+    monkeypatch.setenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", "ds-synthetic")
     post = mocker.patch(
         "people_sync.notion_people.httpx.post",
         return_value=_Resp(json_data={"id": "1a80-3953-a8af-80ab-000bfe407316"}),
@@ -34,12 +35,24 @@ def test_create_stub_posts_title_only_to_data_source(mocker, monkeypatch):
     body = kwargs["json"]
     assert body["parent"] == {
         "type": "data_source_id",
-        "data_source_id": notion_people.DATA_SOURCE_ID,
+        "data_source_id": "ds-synthetic",
     }
     assert body["properties"] == {"title": {"title": [{"text": {"content": "Test Person"}}]}}
 
 
+def test_create_stub_raises_clear_error_when_data_source_missing(monkeypatch, mocker):
+    monkeypatch.setenv("NOTION_API_TOKEN", "test-token")
+    monkeypatch.delenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", raising=False)
+    post = mocker.patch("people_sync.notion_people.httpx.post")
+
+    with pytest.raises(RuntimeError, match=notion_people.MISSING_DS_MSG):
+        notion_people.create_stub("Test Person")
+
+    post.assert_not_called()
+
+
 def test_create_stub_raises_clear_error_when_token_missing(monkeypatch, mocker):
+    monkeypatch.setenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", "ds-synthetic")
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
     post = mocker.patch("people_sync.notion_people.httpx.post")
 

@@ -232,13 +232,17 @@ def selftest() -> None:
     print("selftest ok")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="people-sync google-cleanup", description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print the plan only (the default)")
     parser.add_argument("--apply", action="store_true", help="actually write to Google")
     parser.add_argument("--selftest", action="store_true", help="offline decision check")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.selftest:
         selftest()
         sys.exit(0)
     main(args.apply and not args.dry_run)
+
+
+if __name__ == "__main__":
+    cli()

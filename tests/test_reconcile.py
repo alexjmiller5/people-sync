@@ -4,7 +4,7 @@ import re
 import httpx
 import pytest
 
-import reconcile
+from people_sync import reconcile
 
 GROUPS = {"contactGroups/1": "Family", "contactGroups/2": "ΣAE"}
 NOW = "2026-01-01T00:00:00.000Z"
@@ -90,7 +90,18 @@ def _router(people=(), records=(), **children):
 def env(mocker, monkeypatch):
     """Everything external mocked: no life-data, no gog, no Notion, no clock drift."""
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
-    mocker.patch("reconcile.user_groups", return_value=GROUPS)
+    monkeypatch.setenv(
+        reconcile.RELATIONS_ENV,
+        json.dumps(
+            {
+                "Gifts": ["ds-gifts", "%3FT%40U"],
+                "Quotes": ["ds-quotes", "Y%5B%3E%7B"],
+                "Trips": ["ds-trips", "t%3DJH"],
+                "Calendar": ["ds-calendar", "%3DS%60m"],
+            }
+        ),
+    )
+    mocker.patch("people_sync.reconcile.user_groups", return_value=GROUPS)
     mocker.patch("people_sync.lifedata.now_iso", return_value=NOW)
     return mocker
 
@@ -250,7 +261,7 @@ def test_link_refuses_to_insert_beside_a_legacy_account_without_source_id(env, c
         side_effect=_router(people=[_person()], records=[_record()], person_accounts=accounts),
     )
     insert = env.patch("people_sync.lifedata.insert")
-    warn = env.patch("reconcile.log.warning")
+    warn = env.patch("people_sync.reconcile.log.warning")
 
     reconcile.main(["link", "p1", "google_contacts:people/c1", "--apply"])
 
@@ -511,10 +522,10 @@ def test_merge_reports_notion_relations(env, monkeypatch, capsys):
     # filtered by property ID, never by name - a rename in Notion must not silence this
     assert [f["property"] for f in filters] == ["%3FT%40U", "Y%5B%3E%7B", "t%3DJH", "%3DS%60m"]
     assert [c.args[0].rsplit("/", 2)[-2] for c in post.call_args_list] == [
-        "0c39fffe-c8c2-43a5-af03-0a378c682c1c",
-        "18f03953-a8af-802f-8950-000b03428f8e",
-        "19603953-a8af-80af-8803-000be09834a6",
-        "24c03953-a8af-8036-8b1b-000bb8d77b03",
+        "ds-gifts",
+        "ds-quotes",
+        "ds-trips",
+        "ds-calendar",
     ]
 
 
@@ -523,7 +534,7 @@ def test_merge_survives_a_notion_api_failure(env, monkeypatch, capsys):
     sql = _merge_env(env, _person(id="s1"), _person(id="l1"))
     ok = env.Mock()
     ok.json.return_value = {"results": [{"url": "https://app.notion.com/p/page1"}]}
-    warn = env.patch("reconcile.log.warning")
+    warn = env.patch("people_sync.reconcile.log.warning")
     env.patch("httpx.post", side_effect=[httpx.ConnectError("boom"), ok, ok, ok])
 
     reconcile.main(["merge", "s1", "l1", "--apply"])
@@ -610,3 +621,21 @@ def test_create_dry_run_writes_nothing(env):
     stub.assert_not_called()
     insert.assert_not_called()
     assert _writes(sql) == []
+
+
+def test_notion_relations_come_from_config(monkeypatch):
+    monkeypatch.delenv(reconcile.RELATIONS_ENV, raising=False)
+    assert reconcile.notion_relations() == {}
+    monkeypatch.setenv(reconcile.RELATIONS_ENV, json.dumps({"Gifts": ["ds-1", "%3FT%40U"]}))
+    assert reconcile.notion_relations() == {"Gifts": ("ds-1", "%3FT%40U")}
+    monkeypatch.setenv(reconcile.RELATIONS_ENV, json.dumps({"Gifts": "ds-1"}))
+    with pytest.raises(ValueError):
+        reconcile.notion_relations()
+
+
+def test_merge_skips_relation_check_without_config(mocker, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "t")
+    monkeypatch.delenv(reconcile.RELATIONS_ENV, raising=False)
+    get = mocker.patch("people_sync.reconcile.httpx.post")
+    reconcile.report_notion_relations("0" * 32)
+    get.assert_not_called()

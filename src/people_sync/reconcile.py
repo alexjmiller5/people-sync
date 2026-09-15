@@ -27,7 +27,7 @@ import httpx
 import structlog
 
 from people_sync import lifedata, notion_people
-from google_cleanup import user_groups
+from people_sync.google_cleanup import user_groups
 
 log = structlog.get_logger(__name__)
 
@@ -38,16 +38,25 @@ SOURCE = "google_contacts"
 CIRCLE_ALIASES = {"ΣAE": "SAE"}
 
 # Notion DBs holding a relation to a People page. `merge` never writes to Notion,
-# so it reports the loser's pages for a manual re-point instead.
-# {db: (data_source_id, relation property id)} - property IDs, not names, so a
-# rename in Notion cannot silently turn the check into a no-op. The ids are the
-# percent-encoded form the API returns; the human name is in the comment.
-NOTION_PEOPLE_RELATIONS = {
-    "Gifts": ("0c39fffe-c8c2-43a5-af03-0a378c682c1c", "%3FT%40U"),  # Recipient(s)
-    "Quotes": ("18f03953-a8af-802f-8950-000b03428f8e", "Y%5B%3E%7B"),  # Person
-    "Trips": ("19603953-a8af-80af-8803-000be09834a6", "t%3DJH"),  # Travel Companions
-    "Calendar": ("24c03953-a8af-8036-8b1b-000bb8d77b03", "%3DS%60m"),  # Attendees
-}
+# so it reports the loser's pages for a manual re-point instead. The user
+# supplies them as PEOPLE_SYNC_NOTION_RELATIONS, a JSON object of
+# {"<label>": ["<data_source_id>", "<relation property id>"]} - property IDs,
+# not names, so a rename in Notion cannot silently turn the check into a no-op.
+RELATIONS_ENV = "PEOPLE_SYNC_NOTION_RELATIONS"
+
+
+def notion_relations() -> dict[str, tuple[str, str]]:
+    raw = os.environ.get(RELATIONS_ENV)
+    if not raw:
+        return {}
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict) or not all(
+        isinstance(v, list) and len(v) == 2 and all(isinstance(x, str) for x in v)
+        for v in parsed.values()
+    ):
+        raise ValueError(f"{RELATIONS_ENV} must map labels to [data_source_id, property_id]")
+    return {k: (v[0], v[1]) for k, v in parsed.items()}
+
 
 # {table: the columns that make two child rows the same fact}. A loser row whose
 # key an ACTIVE survivor row already holds is soft-deleted instead of re-pointed.
@@ -336,8 +345,17 @@ def report_notion_relations(loser_id: str) -> None:
             reason="NOTION_API_TOKEN is not set",
         )
         return
+    relations = notion_relations()
+    if not relations:
+        log.warning(
+            "skipping notion relation check",
+            source="notion",
+            index=-1,
+            reason=f"{RELATIONS_ENV} is not set",
+        )
+        return
     page_id = _dashed(loser_id)
-    for db, (data_source_id, prop) in NOTION_PEOPLE_RELATIONS.items():
+    for db, (data_source_id, prop) in relations.items():
         # advisory only: one DB failing must not block the merge or the other DBs
         try:
             hits = _notion_hits(data_source_id, prop, page_id, token)
