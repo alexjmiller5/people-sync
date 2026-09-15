@@ -119,3 +119,18 @@ def test_cli_writes_keyed_proposals(tmp_path, capsys):
     data = json.loads(out.read_text())
     assert list(data) == ['["Batch 2", "Ava"]'] and data['["Batch 2", "Ava"]']["clusters"]
     assert oct(out.stat().st_mode & 0o777) == "0o600"
+
+
+def test_handle_abbreviating_a_surname_outranks_a_bare_place_cue():
+    group = _group(
+        google=[("Annabelle McGregor", "Boston")],
+        profiles=[
+            ("instagram", "annabelle_mcg", "Annabelle", None, None),
+            ("instagram", "annabellesanok", "annabelle", "boston", None),
+        ],
+    )
+    clusters = _clusters(group)
+    joined = next(c for c in clusters if "google_contacts:people/c0" in c[0])
+    assert joined[0] == ["google_contacts:people/c0", "instagram:annabelle_mcg"]
+    assert "abbreviates" in joined[1] and joined[2]
+    assert len(clusters) == 2

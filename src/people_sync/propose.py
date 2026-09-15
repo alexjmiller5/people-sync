@@ -185,6 +185,12 @@ def signal(a: Item, b: Item) -> tuple[int, list[str]]:
             if edit_distance(x.handle_letters, y.full) <= 2:
                 score, why = score + 2, why + [f"handle {x.handle!r} nearly spells {y.name!r}"]
                 break
+            if (
+                y.full.startswith(x.handle_letters)
+                and len(x.handle_letters) >= len(letters(y.first)) + 2
+            ):
+                score, why = score + 2, why + [f"handle {x.handle!r} abbreviates {y.name!r}"]
+                break
     if a.handle_letters and b.handle_letters and a.handle_letters == b.handle_letters:
         score, why = score + 3, why + ["same handle letters"]
     if a.first and a.first == b.first:
