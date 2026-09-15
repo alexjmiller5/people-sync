@@ -279,8 +279,11 @@ def label_for(members: list[Item]) -> str:
 QUIET_SOURCES = {"partiful"}
 
 
-def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dict:
+def propose_group(group: dict, google_groups=None, cues=None, links=None, events=None) -> dict:
+    """`events`: {record id: [event titles]} - a quiet-source record that went to one of
+    the user's chosen events earns its own box, labelled with the event."""
     items = items_for(group, google_groups, cues)
+    events = events or {}
     clusters, excluded = [], []
     for members, why, fuzzy in cluster(items, links):
         if (
@@ -288,8 +291,11 @@ def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dic
             and members[0].kind == "profile"
             and members[0].platform in QUIET_SOURCES
         ):
-            excluded.append(members[0].id)
-            continue
+            if events.get(members[0].id):
+                why = why + ["went to " + ", ".join(events[members[0].id][:3])]
+            else:
+                excluded.append(members[0].id)
+                continue
         if (
             fuzzy
             and all(
@@ -304,7 +310,7 @@ def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dic
         entry = {
             "label": label_for(members),
             "reason": (
-                "; ".join(dict.fromkeys(why)).capitalize() + "."
+                (lambda r: r[0].upper() + r[1:] + ".")("; ".join(dict.fromkeys(why)))
                 if why
                 else "No shared name, handle or cue with any other entry; proposed as a separate person."
             ),
@@ -317,12 +323,12 @@ def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dic
     return {"clusters": clusters, **({"excluded": excluded} if excluded else {})}
 
 
-def propose(batches, google_groups=None, cues=None, links=None) -> dict:
+def propose(batches, google_groups=None, cues=None, links=None, events=None) -> dict:
     out = {}
     for batch, path in batches:
         for name, group in json.loads(Path(path).read_text()).items():
             out[json.dumps([batch, name], ensure_ascii=False)] = propose_group(
-                group, google_groups, cues, links
+                group, google_groups, cues, links, events
             )
     return out
 
@@ -337,6 +343,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--links", type=Path, help="{record id: [record ids sharing its phone number]} JSON"
     )
+    parser.add_argument(
+        "--events", type=Path, help="{record id: [event titles]}: quiet-source records worth a box"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     result = propose(
@@ -344,6 +353,7 @@ def main(argv: list[str] | None = None) -> None:
         json.loads(args.google_groups.read_text()) if args.google_groups else None,
         json.loads(args.cues.read_text()) if args.cues else None,
         json.loads(args.links.read_text()) if args.links else None,
+        json.loads(args.events.read_text()) if args.events else None,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=1))

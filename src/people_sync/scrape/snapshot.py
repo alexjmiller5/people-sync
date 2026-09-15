@@ -343,8 +343,21 @@ LIST_SCOPES = {
     "facebook": {"friends": "[role=main] a[href] (visible profile links outside tablist)"},
     "spotify": {k: "main [data-encore-id=card] a" for k in ("followers", "following")},
     "strava": {k: 'ul.list-athletes a[href*="/athletes/"]' for k in ("followers", "following")},
-    "partiful": {"mutuals": "[class^=mutuals_row]"},
+    "partiful": {
+        "mutuals": "[class^=mutuals_row]",
+        "events": 'a[href*="/e/"] (the signed-in user\'s past events)',
+        "event_guests": "[role=dialog] guest rows (opened with View all)",
+    },
 }
+_EVENT = {"id": "partiful-id", "title": "text", "when": "event-when", "status": "text"}
+_GUEST = {
+    "event_id": "partiful-id",
+    "name": "text",
+    "section": "text",
+    "plus_ones": "count",
+    "uid": "partiful-id",
+}
+_LIST_SCOPE_FIELDS = {("partiful", "events"): _EVENT, ("partiful", "event_guests"): _GUEST}
 _LIST_FIELDS = {
     "facebook": {"handle": "facebook-handle", "name": "text", "mutual_text": "mutual-text"},
     "spotify": {"href": "spotify-href", "name": "text", "avatar": "url"},
@@ -377,10 +390,11 @@ def spotify_list_id(value):
     return value
 
 
-def _list_entries(source, entries):
+def _list_entries(source, entries, scope=None):
     """Acquire only declared fields, keeping duplicate/malformed row positions."""
     excluded = set()
     out = []
+    fields = _LIST_SCOPE_FIELDS.get((source, scope), _LIST_FIELDS[source])
     for row in entries:
         safe = {}
         if not isinstance(row, dict):
@@ -388,7 +402,7 @@ def _list_entries(source, entries):
             out.append(safe)
             continue
         for key, value in row.items():
-            kind = _LIST_FIELDS[source].get(key)
+            kind = fields.get(key)
             if kind is None:
                 excluded.add("unknown-fields")
                 continue
@@ -403,6 +417,18 @@ def _list_entries(source, entries):
                     spotify_list_id(value.rsplit("/", 1)[-1])
                 elif value is not None and kind == "athlete-id":
                     captures._require(isinstance(value, str) and re.fullmatch(r"\d+", value))
+                elif value is not None and kind == "event-when":
+                    captures._require(
+                        isinstance(value, str)
+                        and re.fullmatch(
+                            r"[A-Za-z' ]{2,24}?(?: \d{1,2}/\d{1,2})? at \d{1,2}(?::\d{2})? ?(?:am|pm)",
+                            value,
+                        )
+                    )
+                elif value is not None and kind == "partiful-id":
+                    captures._require(
+                        isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{6,40}", value)
+                    )
                 elif value is not None and kind == "mutual-text":
                     captures._require(
                         isinstance(value, str) and re.fullmatch(r"[\d,]+ mutual friends?", value)
@@ -457,7 +483,7 @@ def validate_list(source, payload):
     if p["entry_ordinals"]:
         start = p["entry_ordinals"][0]
         captures._require(p["entry_ordinals"] == list(range(start, start + len(p["entries"]))))
-    safe, excluded = _list_entries(source, p["entries"])
+    safe, excluded = _list_entries(source, p["entries"], p["scope"])
     captures._require(safe == p["entries"] and not excluded)
     captures._require(
         isinstance(p["exclusions"], list) and p["exclusions"] == sorted(set(p["exclusions"]))
@@ -487,7 +513,7 @@ def retain_list(
         captures._require(isinstance(entries, list))
     except (ValueError, TypeError):
         entries, reason, complete = [], "invalid-source", False
-    entries, excluded = _list_entries(source, entries)
+    entries, excluded = _list_entries(source, entries, scope)
     payload = {
         "format": LIST_POLICY,
         "scope": scope,

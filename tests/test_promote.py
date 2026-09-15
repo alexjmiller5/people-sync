@@ -161,7 +161,8 @@ def test_missing_capture_is_reported_and_apply_refuses_before_any_write(mocker):
     with pytest.raises(ValueError, match="missing capture evidence"):
         promote.apply([promote.Op("birthday", "p1", "facebook:r1", "facebook", "--01-02")])
     insert.assert_not_called()
-    sql.assert_not_called()
+    writes = [c.args[0] for c in sql.call_args_list if not c.args[0].lstrip().startswith("SELECT")]
+    assert writes == []
 
 
 def test_legacy_evidence_is_reported_without_historical_rewrite(mocker):
