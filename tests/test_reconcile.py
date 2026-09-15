@@ -727,3 +727,27 @@ def test_create_from_any_source_requires_a_name(env, monkeypatch):
         and row["middle_name"] == "Quinn"
     )
     assert insert.call_args_list[1].args[1][0]["platform"] == "instagram"
+
+
+def test_corrected_spelling_is_a_note_not_a_nickname(env):
+    person = _person(
+        id="p1", name="Mara Testerly", last_name="Testerly", nickname=None, notes=None
+    )
+    record = {
+        "id": "linkedin:af",
+        "source": "linkedin",
+        "source_id": "af",
+        "handle": "af",
+        "name": "Mara Testerley",
+        "raw": "{}",
+        "status": "pending",
+        "person_id": None,
+    }
+    sql, insert = _generic_env(env, person, record)
+    reconcile.main(["link", "p1", "linkedin:af", "--name", "Mara Testerley", "--apply"])
+    [update] = [w for w in _writes(sql) if w.startswith("UPDATE people SET")]
+    assert "name = 'Mara Testerley'" in update and "last_name = 'Testerley'" in update
+    assert "spelling: Mara Testerly" in update and "nickname" not in update
+    assert reconcile._spelling_variant("Nora Fakeington", "Nora Fakington")
+    assert not reconcile._spelling_variant("Dana", "Dana Example")
+    assert not reconcile._spelling_variant("Mara Stone", "Mara Field")

@@ -222,14 +222,40 @@ def _split_name(name: str) -> dict:
     }
 
 
+def _spelling_variant(old: str, new: str) -> bool:
+    """Same name, differently spelled: same first word, the rest within two edits."""
+    a, b = old.casefold().split(), new.casefold().split()
+    if not a or not b or a[0] != b[0] or len(a) != len(b) or len(a) < 2:
+        return False
+    rest_a, rest_b = "".join(a[1:]), "".join(b[1:])
+    return rest_a != rest_b and _edit_distance(rest_a, rest_b) <= 2
+
+
+def _edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
 def _rename(person: dict, new_name: str | None, updates: dict, notes):
-    """Adopt a name losslessly: the old one survives as nickname or an aka note."""
+    """Adopt a name losslessly. A corrected spelling keeps the old one as a
+    `spelling:` note; a different name survives as nickname or an aka note."""
     if not new_name or new_name == person["name"]:
         return notes
     updates["name"] = new_name
     print(f"  name: {person['name']!r} -> {new_name!r}")
     old = person["name"]
-    if old and _empty(person["nickname"]):
+    if old and _spelling_variant(old, new_name):
+        notes = _append(notes, f"spelling: {old}")
+        print(f"  notes: + spelling: {old} (corrected)")
+        for field in ("first_name", "middle_name", "last_name"):
+            if person.get(field) and person[field] not in new_name:
+                updates[field] = _split_name(new_name)[field]
+    elif old and _empty(person["nickname"]):
         updates["nickname"] = old
         print(f"  nickname: -> {old!r} (previous name preserved)")
     elif old:
