@@ -13,6 +13,7 @@ A mutual is matched to a person by the Instagram handle on their profile
 
 import json
 import random
+import re
 import time
 
 from people_sync import photos
@@ -21,6 +22,8 @@ from people_sync.scrape.profile import ExtractError, Profile
 
 URL = "https://partiful.com/u/{handle}"
 LIST_URL = "https://partiful.com/mutuals"
+EVENTS_URL = "https://partiful.com/events?category=all_past_events"
+EVENT_URL = "https://partiful.com/e/{event_id}"
 CAPTURE: list[str] = []
 ROW_SELECTOR = "[class^=mutuals_row]"
 ONBOARDING_DISMISS = "text[button]=Sounds good"
@@ -287,3 +290,161 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
         )
     upsert_profile(profile, avatar_r2_key=key, avatar_sha256=sha, raw_r2_key=raw_key)
     return record.row_id
+
+
+# --- events ---------------------------------------------------------------------
+
+EVENTS_JS = (
+    "(function(){var seen={};var out=[];"
+    "document.querySelectorAll('a[href*=\"/e/\"]').forEach(function(a){"
+    "var m=(a.getAttribute('href')||'').match(/\\/e\\/([A-Za-z0-9_-]+)/);if(!m||seen[m[1]])return;seen[m[1]]=1;"
+    "var lines=(a.innerText||'').split('\\n').map(function(t){return t.trim()}).filter(Boolean);"
+    "var status=null,when=null,title=null;lines.forEach(function(t){"
+    "if(/WENT|HOSTING|DIDN'T GO|MAYBE|INTERESTED|CANCELED|CAN'T GO|FOLLOWING/.test(t))status=t.replace(/^[^A-Z]*/,'');"
+    "else if(!when&&/\\bat\\s*\\d/.test(t))when=t;else if(!title&&!/^Hosted by/.test(t))title=t;});"
+    "out.push({id:m[1],title:title,when:when,status:status});});return out;})()"
+)
+GUEST_ROWS_JS = (
+    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
+    "var rows=[];var section=null;"
+    "d.querySelectorAll('*').forEach(function(e){if(e.children.length)return;var t=(e.innerText||'').trim();"
+    "if(!t)return;if(/^(Going|Went|Maybe|Can't Go|Invited)$/.test(t)){section=t;return;}"
+    "if(/^\\d+$/.test(t)||t==='Guest List'||/^[A-Z]{1,2}$/.test(t))return;"
+    "var m=t.match(/^and (\\d+) more$/);if(m){if(rows.length)rows[rows.length-1].plus_ones=parseInt(m[1]);return;}"
+    "rows.push({name:t,section:section,plus_ones:0,el:e});});"
+    "rows.forEach(function(r,i){r.el.id=r.el.id||('ps_guest_'+i);r.selector='#'+r.el.id;delete r.el;});return rows;})()"
+)
+GUEST_PAUSE_S = (2.0, 4.0)
+ROLES = {"Went": "went", "Going": "went", "Maybe": "maybe", "Invited": "invited"}
+
+
+def parse_event_when(text: str | None, year: int | None = None) -> str | None:
+    """'Sat 9/5 at 8:30pm' -> '2026-09-05T20:30' when a year is known; else the text."""
+    if not text:
+        return None
+    m = re.search(r"(\d{1,2})/(\d{1,2}) at (\d{1,2})(?::(\d{2}))?(am|pm)", text)
+    if not m or not year:
+        return text
+    month, day, hour, minute, ampm = m.groups()
+    hour = int(hour) % 12 + (12 if ampm == "pm" else 0)
+    return f"{year:04d}-{int(month):02d}-{int(day):02d}T{hour:02d}:{int(minute or 0):02d}"
+
+
+def harvest_events(browser):
+    """The signed-in user's past events, retained as one list observation."""
+    browser.navigate(EVENTS_URL, 12000)
+    time.sleep(3)
+    for _ in range(8):
+        browser.eval("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(1.5)
+    events = browser.eval(EVENTS_JS) or []
+    # No platform-verified total exists for the events page, so the observation
+    # stays "partial" like every other scrolled list.
+    page, key = snapshot.retain_list(
+        "partiful", events, ordinal=0, scope="events", expected_total=len(events)
+    )
+    return page["entries"], key
+
+
+def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
+    """Yield (guest entry, capture ref) per guest of one event, click-walking each
+    row to its /u/<uid>. Guests without a profile keep their name only."""
+    browser.navigate(EVENT_URL.format(event_id=event_id), 12000)
+    time.sleep(3)
+    header = {
+        "title": browser.eval("(document.querySelector('h1')||{}).innerText||null"),
+        "when": browser.eval(
+            "([...document.querySelectorAll('h1 ~ *, main *')].map(e=>e.innerText||'')"
+            ".find(t=>/^[A-Z][a-z]+, [A-Z][a-z]{2} \\d{1,2}, \\d{4}/.test(t.trim()))||null)"
+        ),
+    }
+    if not browser.eval("!!document.querySelector('[role=dialog]')"):
+        browser.click("text=View all")
+        time.sleep(2)
+    rows = browser.eval(GUEST_ROWS_JS) or []
+    ordinal = 0
+    for index, row in enumerate(rows):
+        entry = {
+            "event_id": event_id,
+            "name": row.get("name"),
+            "section": row.get("section"),
+            "plus_ones": row.get("plus_ones") or 0,
+            "uid": None,
+        }
+        try:
+            browser.eval(
+                "(function(){var e=document.querySelector(%s);if(e)e.scrollIntoView({block:'center'});"
+                "return !!e})()" % json.dumps(row["selector"])
+            )
+            browser.click(row["selector"])
+            if browser.wait_for("location.pathname.startsWith('/u/')", 8):
+                entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
+                browser.eval("history.back()")
+                browser.wait_for("location.pathname.startsWith('/e/')", 8)
+                time.sleep(1.0)
+                if not browser.eval("!!document.querySelector('[role=dialog]')"):
+                    browser.click("text=View all")
+                    time.sleep(1.5)
+                browser.eval(GUEST_ROWS_JS)  # re-tag rows after the dialog reopened
+        except Exception:
+            snapshot.retain_list(
+                "partiful", [], ordinal=ordinal, scope="event_guests", reason="acquisition-failed"
+            )
+            raise ExtractError("list-acquisition-failed") from None
+        page, key = snapshot.retain_list(
+            "partiful",
+            [entry],
+            ordinal=ordinal,
+            scope="event_guests",
+            expected_total=len(rows),
+            entry_start=index,
+        )
+        ordinal += 1
+        yield header, page["entries"][0], snapshot.list_ref(page, key, 0)
+        time.sleep(random.uniform(*pause_s))
+
+
+def ingest_guest(header: dict, event: dict, guest: dict, ref: dict) -> str | None:
+    """Add this event to the guest's Partiful record (created if new), keeping the
+    record's other raw fields. Returns the record id, or None without a uid."""
+    from people_sync import ledger, lifedata
+
+    uid = guest.get("uid")
+    if not uid:
+        return None
+    row_id = f"partiful:{uid}"
+    existing = lifedata.sql(
+        f"SELECT raw, name FROM people_sync_records WHERE id = {lifedata.sq(row_id)}"
+    )
+    raw = {}
+    if existing:
+        try:
+            raw = json.loads(existing[0]["raw"] or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+    raw.setdefault("url", URL.format(handle=uid))
+    role = "hosted" if (event.get("status") or "").upper().startswith("HOSTING") else None
+    role = role or ROLES.get(guest.get("section") or "", "invited")
+    year = None
+    if header.get("when"):
+        m = re.search(r"(\d{4})", header["when"])
+        year = int(m.group(1)) if m else None
+    item = {
+        "id": event["id"],
+        "title": event.get("title") or header.get("title"),
+        "starts_at": parse_event_when(event.get("when"), year) or header.get("when"),
+        "role": role,
+        "capture_key": ref["capture_key"],
+    }
+    events = [e for e in raw.get("events", []) if e.get("id") != event["id"]] + [item]
+    raw["events"] = sorted(events, key=lambda e: str(e.get("starts_at") or ""))
+    record = ledger.Record(
+        "partiful",
+        uid,
+        uid,
+        (existing[0]["name"] if existing else None) or guest.get("name"),
+        raw,
+        capture_refs=(ref,),
+    )
+    ledger.upsert([record])
+    return row_id

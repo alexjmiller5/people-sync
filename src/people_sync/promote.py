@@ -192,6 +192,50 @@ def plan(
     return ops
 
 
+def event_ops(edges: set[str]) -> list[Op]:
+    """One op per (matched Partiful record, event) not yet promoted."""
+    ops = []
+    rows = lifedata.sql(
+        "SELECT r.id AS record_id, r.person_id, r.raw FROM people_sync_records r "
+        "WHERE r.source = 'partiful' AND r.status = 'matched' AND r.person_id IS NOT NULL "
+        "AND r.deleted_at IS NULL"
+    )
+    existing = {
+        (e["person_id"], e["event_id"])
+        for e in lifedata.sql(
+            "SELECT person_id, event_id FROM person_events WHERE platform = 'partiful'"
+        )
+    }
+    for r in rows:
+        try:
+            events = json.loads(r["raw"] or "{}").get("events") or []
+        except json.JSONDecodeError:
+            continue
+        for e in events:
+            if not e.get("id") or not e.get("capture_key"):
+                continue
+            if (r["person_id"], e["id"]) in existing:
+                continue
+            op = Op(
+                "event",
+                r["person_id"],
+                r["record_id"],
+                "partiful",
+                e["id"],
+                {
+                    "cue": e.get("title") or e["id"],
+                    "title": e.get("title"),
+                    "starts_at": e.get("starts_at"),
+                    "role": e.get("role") or "went",
+                },
+                raw_r2_key=e["capture_key"],
+            )
+            row_id = f"partiful:{e['id']}:{r['person_id']}"
+            if _edge(op, "person_events", row_id, None, False)["id"] not in edges:
+                ops.append(op)
+    return ops
+
+
 def load_state(
     platforms=PLATFORMS,
 ) -> tuple[list[dict], dict[str, dict], list[dict], list[dict], list[dict], set[str]]:
@@ -304,6 +348,24 @@ def apply(ops: list[Op]) -> dict:
                 f"UPDATE people SET slightly_known_birthday = {lifedata.sq(op.value)} WHERE id = {lifedata.sq(op.person_id)}"
             )
             edges.append(_edge(op, "people", op.person_id, "slightly_known_birthday", False))
+        elif op.kind == "event":
+            row_id = f"partiful:{op.value}:{op.person_id}"
+            lifedata.insert(
+                "person_events",
+                [
+                    {
+                        "id": row_id,
+                        "person_id": op.person_id,
+                        "platform": op.platform,
+                        "event_id": op.value,
+                        "title": op.detail.get("title") or op.value,
+                        "starts_at": op.detail.get("starts_at"),
+                        "role": op.detail.get("role") or "went",
+                        "url": f"https://partiful.com/e/{op.value}",
+                    }
+                ],
+            )
+            edges.append(_edge(op, "person_events", row_id, None, True))
         elif op.kind == "photo":
             row_id = f"photo:{op.person_id}:{op.record_id}"
             lifedata.insert(
@@ -329,7 +391,7 @@ def apply(ops: list[Op]) -> dict:
 
 def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
     state = load_state(platforms)
-    ops = plan(*state)
+    ops = plan(*state) + event_ops(state[-1])
     summary = {"planned": {}, "conflicts": [], "applied": {}}
     summary["legacy"] = sorted(
         {

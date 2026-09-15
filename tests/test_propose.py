@@ -214,3 +214,26 @@ def test_lone_partiful_mutuals_are_excluded_but_confident_joins_stay():
     assert ["google_contacts:people/c0", "partiful:a"] in ids
     assert out["excluded"] == ["partiful:b"]
     assert any(c["label"].startswith("Carla Right") for c in out["clusters"])
+
+
+def test_event_going_partiful_mutual_keeps_a_box():
+    group = _group()
+    group["profiles"] = [
+        {
+            "record_id": "partiful:b",
+            "platform": "partiful",
+            "handle": "b",
+            "display_name": "Carla Sample",
+            "source_name": "Carla Sample",
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+    ]
+    assert propose.propose_group(group)["excluded"] == ["partiful:b"]
+    out = propose.propose_group(group, events={"partiful:b": ["Synthetic Gala"]})
+    assert "excluded" not in out and "went to Synthetic Gala" in out["clusters"][0][
+        "reason"
+    ].lower().replace("synthetic gala", "Synthetic Gala")

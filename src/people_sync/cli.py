@@ -7,14 +7,19 @@ import json
 import os
 import re
 import sys
+
+import structlog
 from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
 from people_sync import captures, google_cleanup, propose, reconcile, replay, review, whatsapp
 from people_sync.scrape import cdp
+
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
 from people_sync.scrape.pace import DEFAULT_STATE_PATH
+
+log = structlog.get_logger(__name__)
 
 QUEUE_QUERY = """
     SELECT c.id, c.source, c.handle, c.name,
@@ -249,6 +254,28 @@ def cmd_list(args: argparse.Namespace) -> None:
 
             entries = spotify.list_users(browser)
             print(json.dumps({"entries": len(entries), **spotify.ingest_entries(entries)}))
+        elif args.platform == "partiful-events":
+            from people_sync.scrape import partiful
+
+            events, _ = partiful.harvest_events(browser)
+            wanted = set(args.event_id or [])
+            chosen = [
+                e
+                for e in events
+                if (e["id"] in wanted)
+                or (not wanted and (e.get("status") or "").upper().startswith(("WENT", "HOSTING")))
+            ]
+            counts = {"events": len(chosen), "guests": 0, "records": 0}
+            for event in chosen:
+                for header, guest, ref in partiful.harvest_event_guests(browser, event["id"]):
+                    counts["guests"] += 1
+                    if partiful.ingest_guest(header, event, guest, ref):
+                        counts["records"] += 1
+                log.info(
+                    "event walked", platform="partiful", index=counts["events"], reason=event["id"]
+                )
+            print(json.dumps(counts))
+            return
         else:
             from people_sync.scrape import partiful
 
@@ -388,7 +415,14 @@ def build_parser() -> argparse.ArgumentParser:
     list_p = sub.add_parser(
         "list", help="capture a platform's friends list and give name-only records their handles"
     )
-    list_p.add_argument("platform", choices=["facebook", "partiful", "strava", "spotify"])
+    list_p.add_argument(
+        "platform", choices=["facebook", "partiful", "partiful-events", "strava", "spotify"]
+    )
+    list_p.add_argument(
+        "--event-id",
+        action="append",
+        help="partiful-events: only these event ids (default: every past event went/hosted)",
+    )
     list_p.add_argument("--start", type=int, default=0, help="partiful: first row index")
     list_p.add_argument("--max", type=int, default=None, help="partiful: rows to process")
     _add_browser_options(list_p)
