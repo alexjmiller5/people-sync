@@ -639,3 +639,81 @@ def test_merge_skips_relation_check_without_config(mocker, monkeypatch, capsys):
     get = mocker.patch("people_sync.reconcile.httpx.post")
     reconcile.report_notion_relations("0" * 32)
     get.assert_not_called()
+
+
+def _generic_env(env, person, record):
+    def sql(query):
+        if query.startswith("SELECT * FROM people ") and person["id"] in query:
+            return [person]
+        if query.startswith("SELECT * FROM people_sync_records") and record["id"] in query:
+            return [record]
+        if query.startswith("SELECT id, source_id FROM person_accounts"):
+            return []
+        return []
+
+    return env.patch("people_sync.lifedata.sql", side_effect=sql), env.patch(
+        "people_sync.lifedata.insert"
+    )
+
+
+def test_link_any_source_writes_platform_account_and_renames_losslessly(env):
+    person = _person(id="p1", name="Andrea", nickname=None, notes=None)
+    record = {
+        "id": "instagram:andrea.garcia2",
+        "source": "instagram",
+        "source_id": "andrea.garcia2",
+        "handle": "andrea.garcia2",
+        "name": "Andrea Garcia",
+        "raw": json.dumps(
+            {
+                "followers": {
+                    "string_list_data": [{"href": "https://www.instagram.com/andrea.garcia2"}]
+                }
+            }
+        ),
+        "status": "pending",
+        "person_id": None,
+    }
+    sql, insert = _generic_env(env, person, record)
+    reconcile.main(["link", "p1", "instagram:andrea.garcia2", "--name", "Andrea Garcia", "--apply"])
+    writes = _writes(sql)
+    assert any(
+        "UPDATE people SET" in w and "name = 'Andrea Garcia'" in w and "nickname = 'Andrea'" in w
+        for w in writes
+    )
+    assert any(
+        "UPDATE people_sync_records SET status = 'matched', person_id = 'p1'" in w for w in writes
+    )
+    [(table, rows)] = [c.args for c in insert.call_args_list]
+    assert table == "person_accounts"
+    assert rows[0]["id"] == "instagram:p1:andrea.garcia2" and rows[0]["platform"] == "instagram"
+    assert rows[0]["url"] == "https://www.instagram.com/andrea.garcia2"
+    assert rows[0]["display_name"] == "Andrea Garcia"
+
+
+def test_create_from_any_source_requires_a_name(env, monkeypatch):
+    record = {
+        "id": "instagram:ana.harr",
+        "source": "instagram",
+        "source_id": "ana.harr",
+        "handle": "ana.harr",
+        "name": None,
+        "raw": "{}",
+        "status": "pending",
+        "person_id": None,
+    }
+    sql, insert = _generic_env(env, _person(id="x"), record)
+    with pytest.raises(SystemExit):
+        reconcile.main(["create", "instagram:ana.harr", "--apply"])
+    env.patch("people_sync.reconcile.notion_people.create_stub", return_value="aaaa-bbbb")
+    reconcile.main(["create", "instagram:ana.harr", "--name", "Anabelle Mufson Harr", "--apply"])
+    tables = [c.args[0] for c in insert.call_args_list]
+    assert tables == ["people", "person_accounts"]
+    row = insert.call_args_list[0].args[1][0]
+    assert row["id"] == "aaaabbbb" and row["name"] == "Anabelle Mufson Harr"
+    assert (
+        row["first_name"] == "Anabelle"
+        and row["last_name"] == "Harr"
+        and row["middle_name"] == "Mufson"
+    )
+    assert insert.call_args_list[1].args[1][0]["platform"] == "instagram"
