@@ -50,6 +50,10 @@ uv run python -m people_sync <command>
 | `ingest linkedin --path <file>` | Parses a LinkedIn `Connections.csv` from the full-archive export |
 | `ingest google` | Enumerates Google Contacts via `gog` and pulls each contact's full People API record |
 | `ingest apple` | Reads the local Apple Contacts databases |
+| `ingest whatsapp --snapshot <sqlite> --media-dir <dir> --self-id <jid>` | Reads an operator-prepared, metadata-only WhatsApp snapshot read-only: active direct chats become pending records with their cached profile pictures; self, groups, status and broadcast rows are excluded, phone numbers never leave the machine |
+| `capture <source> --path <p>` | Retains a privacy-filtered export as an immutable capture without ingesting it |
+| `captures [--state-dir <d>]` | Lists the locally cached captures and verifies each against the file service |
+| `replay --input <capture.json> [--compare <prev>] [--output <p>]` | Parses a retained capture offline into a proposal, with no network and no estate writes |
 | `match` | Auto-links unambiguous pending records to existing people and writes their `person_accounts` rows |
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
 | `new-person --name <name>` | Creates a Notion People stub page, then the life-data `people` row using that page id |
@@ -60,6 +64,15 @@ uv run python -m people_sync <command>
 | `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
+
+Every ingest retains its input first: the export, contact page or WhatsApp
+snapshot is validated, uploaded as a capture under `profiles/<source>/captures/`,
+read back and cached under the state dir before any parsing or ledger write, and
+every record and profile row written from it carries an `imported_from`
+provenance edge to that exact file. A capture that cannot be retained stops the
+ingest. `replay` re-parses a capture offline so a parser fix can be checked
+against the retained input without visiting the source again; its output is a
+proposal, never an automatic change to the ledger, the cache or a person.
 
 Every ingest prints `{"new": N, "updated": N}`; `match` prints
 `{"auto": N, "suggested": N, "left_pending": N}`. Re-running an ingest on the
