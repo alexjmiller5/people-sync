@@ -44,7 +44,9 @@ _COUNTERPART = {
     "partner_name": "text",
     "push_name": "text",
     "last_message_epoch": "epoch",
+    "contact_refs": ["contact-ref"],  # optional: ledger ids of contacts sharing the number
 }
+_REQUIRED = set(_COUNTERPART) - {"contact_refs"}
 _PHOTO = {
     "picture_id": "opaque-id",
     "request_epoch": "epoch",
@@ -71,8 +73,9 @@ def validate_payload(payload: dict) -> None:
     r(isinstance(payload["counterparts"], list))
     seen = set()
     for index, c in enumerate(payload["counterparts"]):
-        r(set(c) == set(_COUNTERPART) | {"photo"})
+        r(_REQUIRED | {"photo"} <= set(c) <= set(_COUNTERPART) | {"photo"})
         sources._shape({k: v for k, v in c.items() if k != "photo"}, _COUNTERPART)
+        r(len(c.get("contact_refs", [])) == len(set(c.get("contact_refs", []))))
         r(c["ordinal"] == index and c["id_kind"] in {"lid", "local"})
         r(c["source_id"].startswith(c["id_kind"] + "-") and c["source_id"] not in seen)
         seen.add(c["source_id"])
@@ -136,8 +139,32 @@ def _photo(items, media_root: Path) -> dict | None:
     return photo
 
 
-def collect(snapshot_path, media_dir, *, state_dir=None, self_id=None) -> dict:
-    """Read the snapshot and build a validated, privacy-filtered capture (no writes)."""
+def contact_lookup():
+    """digits -> ledger record ids of the address-book contacts holding that number.
+    Reads the local address book and the Google ledger; the number itself is used
+    in memory only."""
+    index = sources.phone_index()
+    google = sources.google_contact_ids()
+
+    def lookup(digits: str) -> list[str]:
+        refs = set()
+        for hit in index.get(digits, []):
+            refs.add(f"apple_contacts:{hit['apple']}")
+            if hit.get("external") in google:
+                refs.add(google[hit["external"]])
+        return sorted(refs)
+
+    return lookup
+
+
+def _digits(jid: str) -> str:
+    return re.sub(r"\D", "", jid.split("@")[0])[-10:]
+
+
+def collect(snapshot_path, media_dir, *, state_dir=None, self_id=None, contacts=None) -> dict:
+    """Read the snapshot and build a validated, privacy-filtered capture (no writes).
+    `contacts(digits)` may return ledger record ids of contacts sharing a phone
+    number; those pointers are retained, the number never is."""
     if not self_id:
         raise ValueError("self identity required: pass the native own JID explicitly")
     media_root = Path(media_dir).resolve()
@@ -195,6 +222,10 @@ def collect(snapshot_path, media_dir, *, state_dir=None, self_id=None) -> dict:
         else:
             excluded["other"] += 1
             continue
+        phones = [_digits(j) for j in jids if j.endswith("@s.whatsapp.net")]
+        refs = (
+            sorted({ref for d in phones if len(d) >= 7 for ref in contacts(d)}) if contacts else []
+        )
         counterparts.append(
             {
                 "ordinal": len(counterparts),
@@ -203,6 +234,7 @@ def collect(snapshot_path, media_dir, *, state_dir=None, self_id=None) -> dict:
                 "partner_name": safe_name(name),
                 "push_name": safe_name(next((push[j] for j in jids if j in push), None)),
                 "last_message_epoch": last,
+                "contact_refs": refs,
                 "photo": _photo([i for j in jids for i in pictures.get(j, [])], media_root),
             }
         )
@@ -238,6 +270,7 @@ def parse_records(payload: dict) -> list[ledger.Record]:
                 "push_name": c["push_name"],
                 "last_message_at": _iso(c["last_message_epoch"]),
                 "id_kind": c["id_kind"],
+                "contact_refs": c.get("contact_refs", []),
             },
         )
         for c in payload["counterparts"]
@@ -255,9 +288,11 @@ def _profiles(payload: dict):
         yield profile, c["photo"]
 
 
-def ingest(snapshot_path, media_dir, *, self_id=None, state_dir=None) -> dict:
+def ingest(snapshot_path, media_dir, *, self_id=None, state_dir=None, contacts=None) -> dict:
     """Retain the capture and every picture, then write pending evidence."""
-    capture = collect(snapshot_path, media_dir, state_dir=state_dir, self_id=self_id)
+    capture = collect(
+        snapshot_path, media_dir, state_dir=state_dir, self_id=self_id, contacts=contacts
+    )
     key = captures.retain(capture, state_dir=state_dir)
     payload = capture["payload"]
     records = parse_records(payload)

@@ -112,7 +112,11 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     try:
         if args.source == "whatsapp":
             report = whatsapp.ingest(
-                args.snapshot, args.media_dir, self_id=args.self_id, state_dir=args.state_dir
+                args.snapshot,
+                args.media_dir,
+                self_id=args.self_id,
+                state_dir=args.state_dir,
+                contacts=None if args.no_contacts else whatsapp.contact_lookup(),
             )
             print(json.dumps(report))
             return
@@ -342,6 +346,11 @@ def build_parser() -> argparse.ArgumentParser:
     wa.add_argument("--media-dir", required=True, help="root holding the cached profile pictures")
     wa.add_argument("--self-id", required=True, help="the account's own native JID (excluded)")
     wa.add_argument("--state-dir", help="private local state root (default: XDG state)")
+    wa.add_argument(
+        "--no-contacts",
+        action="store_true",
+        help="skip the local address-book lookup that cross-references each chat's number",
+    )
     wa.set_defaults(func=cmd_ingest)
 
     match_p = sub.add_parser("match", help="auto-link pending ledger records to people")

@@ -269,3 +269,41 @@ def test_fetch_apple_no_databases_found(mocker):
     run = mocker.patch("people_sync.sources.subprocess.run")
     assert sources.fetch_apple() == []
     run.assert_not_called()
+
+
+def test_phone_index_and_google_contact_ids(mocker):
+    from people_sync import sources
+
+    rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111:ABPerson",
+            "external": "abc123",
+            "number": "+1 (555) 000-1111",
+        },
+        {
+            "id": "22222222-2222-2222-2222-222222222222:ABPerson",
+            "external": None,
+            "number": "555-0002222",
+        },
+        {"id": None, "external": None, "number": "1"},
+    ]
+    mocker.patch.object(sources, "_db_paths", return_value=["/tmp/x.abcddb"])
+    mocker.patch.object(sources, "_run", return_value=json.dumps(rows))
+    index = sources.phone_index()
+    assert index == {
+        "5550001111": [{"apple": rows[0]["id"], "external": "abc123"}],
+        "5550002222": [{"apple": rows[1]["id"], "external": None}],
+    }
+    mocker.patch.object(
+        sources.lifedata,
+        "sql",
+        return_value=[
+            {
+                "id": "google_contacts:people/c9",
+                "raw": json.dumps(
+                    {"names": [{"metadata": {"source": {"type": "CONTACT", "id": "abc123"}}}]}
+                ),
+            }
+        ],
+    )
+    assert sources.google_contact_ids() == {"abc123": "google_contacts:people/c9"}

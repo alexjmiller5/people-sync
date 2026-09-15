@@ -134,3 +134,36 @@ def test_handle_abbreviating_a_surname_outranks_a_bare_place_cue():
     assert joined[0] == ["google_contacts:people/c0", "instagram:annabelle_mcg"]
     assert "abbreviates" in joined[1] and joined[2]
     assert len(clusters) == 2
+
+
+def test_list_page_heading_is_not_a_name_and_phone_links_join():
+    group = _group(google=[("Caroline Odia", None)])
+    group["profiles"] = [
+        {
+            "record_id": "partiful:abc",
+            "platform": "partiful",
+            "handle": "abc",
+            "display_name": "Mutuals",
+            "source_name": "Caroline Odia",
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+        {
+            "record_id": "whatsapp:lid-1",
+            "platform": "whatsapp",
+            "handle": None,
+            "display_name": "Caro",
+            "source_name": None,
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+    ]
+    [only] = _clusters(group, links={"whatsapp:lid-1": ["google_contacts:people/c0"]})
+    assert only[0] == ["google_contacts:people/c0", "partiful:abc", "whatsapp:lid-1"]
+    assert "same full name" in only[1].lower() and "same phone number" in only[1].lower()

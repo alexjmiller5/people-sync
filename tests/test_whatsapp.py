@@ -180,6 +180,7 @@ def test_replay_is_pure_and_offline(snapshot):
         "push_name": "ada.push",
         "last_message_at": "2026-05-09T06:13:20.500Z",
         "id_kind": "lid",
+        "contact_refs": [],
     }
     assert replay.normalized(result) == replay.normalized(replay.replay_capture(capture))
     assert result["captured_at"] == capture["captured_at"]
@@ -279,10 +280,31 @@ def test_cli_ingest_whatsapp(snapshot, estate, capsys):
             SELF,
             "--state-dir",
             str(snapshot["state"]),
+            "--no-contacts",
         ]
     )
     out = json.loads(capsys.readouterr().out)
     assert out["new"] == 1 and out["excluded"]["self"] == 1
+
+
+def test_cli_ingest_uses_the_address_book_lookup_by_default(snapshot, estate, mocker, capsys):
+    lookup = mocker.patch.object(whatsapp, "contact_lookup", return_value=lambda digits: [])
+    cli.main(
+        [
+            "ingest",
+            "whatsapp",
+            "--snapshot",
+            str(snapshot["path"]),
+            "--media-dir",
+            str(snapshot["media"]),
+            "--self-id",
+            SELF,
+            "--state-dir",
+            str(snapshot["state"]),
+        ]
+    )
+    lookup.assert_called_once()
+    assert json.loads(capsys.readouterr().out)["counterparts"] == 1
 
 
 def test_ingest_same_picture_twice_uploads_once(snapshot, estate):
@@ -293,3 +315,53 @@ def test_ingest_same_picture_twice_uploads_once(snapshot, estate):
     assert report["photos"] == 0
     puts = [key for kind, key in estate["events"] if kind == "put"]
     assert len(puts) == 1 and puts[0].startswith("profiles/whatsapp/captures/")
+
+
+def test_phone_lookup_retains_contact_pointers_never_the_number(snapshot):
+    seen = []
+
+    def contacts(digits):
+        seen.append(digits)
+        return {
+            "5550001111": [
+                "google_contacts:people/c1",
+                "apple_contacts:11111111-1111-1111-1111-111111111111:ABPerson",
+            ]
+        }.get(digits, [])
+
+    capture = _collect(snapshot, contacts=contacts)
+    [a] = capture["payload"]["counterparts"]
+    assert a["contact_refs"] == [
+        "apple_contacts:11111111-1111-1111-1111-111111111111:ABPerson",
+        "google_contacts:people/c1",
+    ]
+    assert seen == ["5550001111"] and "5550001111" not in captures.encode(capture).decode()
+    [record] = replay.replay_capture(capture)["records"]
+    assert record["raw"]["contact_refs"] == a["contact_refs"]
+    # a capture written before cross-references existed still validates
+    del capture["payload"]["counterparts"][0]["contact_refs"]
+    capture["payload_sha256"] = hashlib.sha256(captures.encode(capture["payload"])).hexdigest()
+    assert replay.replay_capture(capture)["status"] == "ok"
+
+
+def test_contact_lookup_bridges_apple_rows_to_google_records(mocker):
+    from people_sync import sources
+
+    mocker.patch.object(
+        sources,
+        "phone_index",
+        return_value={
+            "5550001111": [
+                {"apple": "11111111-1111-1111-1111-111111111111:ABPerson", "external": "abc123"}
+            ]
+        },
+    )
+    mocker.patch.object(
+        sources, "google_contact_ids", return_value={"abc123": "google_contacts:people/c9"}
+    )
+    lookup = whatsapp.contact_lookup()
+    assert lookup("5550001111") == [
+        "apple_contacts:11111111-1111-1111-1111-111111111111:ABPerson",
+        "google_contacts:people/c9",
+    ]
+    assert lookup("0000000000") == []
