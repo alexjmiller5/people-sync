@@ -10,6 +10,12 @@ GROUPS = {"contactGroups/1": "Family", "contactGroups/2": "ΣAE"}
 NOW = "2026-01-01T00:00:00.000Z"
 
 
+@pytest.fixture(autouse=True)
+def _notion_configured(monkeypatch):
+    """These tests exercise the Notion-anchored id path; local ids are covered elsewhere."""
+    monkeypatch.setenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", "ds-synthetic")
+
+
 def _raw(**over):
     raw = {
         "names": [{"displayName": "Nova Quill", "givenName": "Nova", "familyName": "Quill"}],

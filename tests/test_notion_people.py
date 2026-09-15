@@ -60,3 +60,20 @@ def test_create_stub_raises_clear_error_when_token_missing(monkeypatch, mocker):
         notion_people.create_stub("Test Person")
 
     post.assert_not_called()
+
+
+def test_new_person_id_is_local_without_a_notion_data_source(monkeypatch, mocker):
+    monkeypatch.delenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", raising=False)
+    post = mocker.patch("people_sync.notion_people.httpx.post")
+    person_id, page_id = notion_people.new_person_id("Test Person")
+    assert len(person_id) == 32 and int(person_id, 16) and page_id is None
+    post.assert_not_called()
+
+
+def test_new_person_id_uses_the_notion_stub_when_configured(monkeypatch, mocker):
+    monkeypatch.setenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", "ds-synthetic")
+    monkeypatch.setenv("NOTION_API_TOKEN", "t")
+    mocker.patch(
+        "people_sync.notion_people.httpx.post", return_value=_Resp(json_data={"id": "aaaa-bbbb"})
+    )
+    assert notion_people.new_person_id("Test Person") == ("aaaabbbb", "aaaa-bbbb")

@@ -135,18 +135,18 @@ def cmd_queue(args: argparse.Namespace) -> None:
 
 def cmd_new_person(args: argparse.Namespace) -> None:
     try:
-        page_id = notion_people.create_stub(args.name)
+        person_id, page_id = notion_people.new_person_id(args.name)
     except RuntimeError as e:
         sys.exit(str(e))
-    person_id = page_id.replace("-", "")
     try:
         lifedata.insert("people", [{"id": person_id, "name": args.name}])
     except Exception:
-        print(
-            f"orphaned notion page {page_id}: created but life-data insert failed; "
-            "re-run with this id or delete the page",
-            file=sys.stderr,
-        )
+        if page_id:
+            print(
+                f"orphaned notion page {page_id}: created but life-data insert failed; "
+                "re-run with this id or delete the page",
+                file=sys.stderr,
+            )
         raise
     print(person_id)
 

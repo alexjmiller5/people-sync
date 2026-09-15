@@ -34,8 +34,11 @@ development. Life-data is the estate it writes into (`life-map` /
 - **Nothing links an account to a person without the user's word**, except
   the exact-name auto-matcher (Step 2), whose links are recorded and
   reversible.
-- **`people.id` is a Notion People page id** (dash-stripped). New people get
-  their Notion stub first; `new-person` does both halves.
+- **Notion is optional.** With `PEOPLE_SYNC_NOTION_PEOPLE_DS` set, a new
+  person's `people.id` is their Notion People page id (dash-stripped) and
+  `new-person` creates the stub page first, which keeps Notion relations
+  resolvable. Without it, ids are minted locally in the same shape and
+  Notion is never contacted; `reconcile merge` then skips its relation check.
 
 ## Configuration the operator supplies
 
