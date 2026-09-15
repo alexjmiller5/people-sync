@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
-from people_sync import captures, google_cleanup, reconcile, replay, review, whatsapp
+from people_sync import captures, google_cleanup, propose, reconcile, replay, review, whatsapp
 from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
@@ -415,6 +415,7 @@ DELEGATES = {
     "reconcile": (reconcile.main, "triage moves: link / merge / create (dry run by default)"),
     "google-cleanup": (google_cleanup.cli, "clear Google labels/org fields already consolidated"),
     "review": (review.main, "render a private photo-assisted review page"),
+    "propose": (propose.main, "propose identity clusters for the review page"),
 }
 
 
