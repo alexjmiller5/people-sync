@@ -485,3 +485,11 @@ def test_capture_and_offline_output_preserve_good_names_and_context(monkeypatch,
     assert result["records"][0]["raw"]["Company"] == "Studio 54 & 3M"
     assert result["records"][0]["raw"]["Position"] == "Engineer II (.NET)"
     assert result["records"][0]["raw"]["Connected On"] == "01 Jan 2026"
+
+
+@pytest.mark.parametrize("name", ["reconcile", "google-cleanup", "review"])
+def test_operator_commands_are_installed_subcommands(name, capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main([name, "--help"])
+    assert e.value.code == 0
+    assert f"people-sync {name}" in capsys.readouterr().out or name == "reconcile"

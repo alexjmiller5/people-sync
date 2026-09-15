@@ -10,12 +10,16 @@ import os
 
 import httpx
 
-DATA_SOURCE_ID = "1a803953-a8af-80ab-824d-000bfe407316"
+DATA_SOURCE_ENV = "PEOPLE_SYNC_NOTION_PEOPLE_DS"
+MISSING_DS_MSG = f"{DATA_SOURCE_ENV} is not set - which Notion data source holds People?"
 _API = "https://api.notion.com/v1/pages"
 MISSING_TOKEN_MSG = "NOTION_API_TOKEN is not set - cannot create a Notion People stub page"
 
 
 def create_stub(name: str) -> str:
+    data_source = os.environ.get(DATA_SOURCE_ENV)
+    if not data_source:
+        raise RuntimeError(MISSING_DS_MSG)
     token = os.environ.get("NOTION_API_TOKEN")
     if not token:
         raise RuntimeError(MISSING_TOKEN_MSG)
@@ -25,7 +29,7 @@ def create_stub(name: str) -> str:
         "Content-Type": "application/json",
     }
     body = {
-        "parent": {"type": "data_source_id", "data_source_id": DATA_SOURCE_ID},
+        "parent": {"type": "data_source_id", "data_source_id": data_source},
         "properties": {"title": {"title": [{"text": {"content": name}}]}},
     }
     resp = httpx.post(_API, headers=headers, json=body, timeout=30)

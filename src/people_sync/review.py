@@ -100,15 +100,15 @@ def build_page(
     return Path(__file__).with_name("review.html").read_text().replace("__REVIEW_DATA__", encoded)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="people-sync review", description=__doc__)
     parser.add_argument(
         "--batch", nargs=2, action="append", required=True, metavar=("LABEL", "JSON")
     )
     parser.add_argument("--photos", type=Path, required=True)
     parser.add_argument("--proposals", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     page = build_page(
         args.batch,
         json.loads(args.photos.read_text()),

@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from build_review import build_page
+from people_sync.review import build_page
 
 
 def page_data(page):
@@ -148,7 +148,7 @@ def test_question_without_clusters(proposal_input):
 
 
 def test_cli_proposals(proposal_input, tmp_path, monkeypatch):
-    from build_review import main
+    from people_sync.review import main
 
     batches, key, proposal = proposal_input
     photos, proposals, output = (

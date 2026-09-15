@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
-from people_sync import captures, replay, whatsapp
+from people_sync import captures, google_cleanup, reconcile, replay, review, whatsapp
 from people_sync.scrape import cdp
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
@@ -395,6 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
     promote_p.add_argument("--platform", action="append", help="limit to a platform (repeatable)")
     promote_p.set_defaults(func=cmd_promote)
 
+    for name, (target, help_text) in DELEGATES.items():
+        sub.add_parser(name, help=help_text, add_help=False)
+
     photos_p = sub.add_parser("photos", help="profile-photo storage")
     photos_sub = photos_p.add_subparsers(dest="photos_command", required=True)
     store = photos_sub.add_parser("store", help="store a scraped profile photo")
@@ -406,6 +409,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Operator tools with their own argparse surface: their argv is handed over
+# whole (argparse's REMAINDER cannot carry a leading `--help`).
+DELEGATES = {
+    "reconcile": (reconcile.main, "triage moves: link / merge / create (dry run by default)"),
+    "google-cleanup": (google_cleanup.cli, "clear Google labels/org fields already consolidated"),
+    "review": (review.main, "render a private photo-assisted review page"),
+}
+
+
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in DELEGATES:
+        DELEGATES[argv[0]][0](argv[1:])
+        return
     args = build_parser().parse_args(argv)
     args.func(args)
