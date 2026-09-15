@@ -187,7 +187,12 @@ inside the media root (traversal and symlink escapes are refused unread),
 signature-checked, and embedded in the `contacts` capture so it replays offline;
 the capture and every picture are retained before any estate write. Records stay
 `pending`: `match.py` skips the source entirely, and there is no profile URL
-(none exists for a native chat, and usernames are not in this schema).
+(none exists for a native chat, and usernames are not in this schema). At
+ingest each phone-form JID's digits are looked up in the local address book
+(`sources.phone_index`, joined to Google records through the CardDAV external
+id, `sources.google_contact_ids`); the matching contacts' ledger ids are kept
+as `contact_refs` (typed `contact-ref`, optional in older captures) and the
+number is used in memory only. `--no-contacts` skips the lookup.
 
 ## Logins
 

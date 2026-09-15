@@ -104,7 +104,11 @@ it. The media dir is the app's Group Container; pictures are read in place
 and only from inside that root. Every active direct chat becomes a pending
 record (opaque `lid-...` id, session or push name, cached picture); a phone
 number saved as a name is dropped by the privacy check, so some rows arrive
-nameless with only a picture. `match` never links WhatsApp.
+nameless with only a picture. `match` never links WhatsApp. Each chat's
+number is looked up in the local address book at ingest (skip with
+`--no-contacts`) and the matching contacts' ledger ids are kept as
+`contact_refs` on the record; the number itself is never retained. Those
+pointers are what lets the proposer join a WhatsApp row to its Google contact.
 
 ### Retained captures and offline replay
 
@@ -253,16 +257,29 @@ come from their APIs (`photos store`).
 ## The review page
 
 ```bash
-people-sync review --batch "<label>" <context.json> [--batch ...] --photos <manifest.json> [--proposals <proposals.json>] --output <dir>/index.html
+people-sync propose --batch "<label>" <context.json> [--batch ...] [--google-groups <labels.json>] [--cues <cues.json>] [--links <links.json>] --output <proposals.json>
+people-sync review  --batch "<label>" <context.json> [--batch ...] --photos <manifest.json> --proposals <proposals.json> --output <dir>/index.html
 ```
+
+`propose` clusters each name group on concrete signals only - the same full
+name, a handle that spells or abbreviates a name, a surname with a small typo,
+a shared place/school/era cue (Google label names via `--google-groups`,
+extra cue text per id via `--cues`), or a shared phone number via `--links`
+(`{record id: [record ids]}`, built from WhatsApp `contact_refs`). Anything
+unconnected is its own proposed person. Fuzzy joins carry an uncertainty
+note. Proposals never change the page's evidence, so regenerating them keeps
+the user's saved responses; a group whose proposal changed asks again.
 
 Contexts are prepared JSON per name group (`current_people`,
 `google_candidates`, `profiles`), the photo manifest maps stored keys to
 local `photos/<file>` paths you downloaded and hash-verified through the
 file service, and proposals are your suggested identity clusters with a
 reason each. The page is offline, private (0600, outside any checkout),
-makes no requests, and gives the user one "Looks right" or one free-text
-correction per group; export the choices and apply only what was approved.
+makes no requests, and shows each proposed person as a box: the user drags
+cards between boxes, drags a box onto another to combine them, or drops a
+card on "separate person" / "ignore", then "Looks right" approves that
+arrangement (the export carries it); the text box is for anything drag
+cannot say. Apply only what was approved, box by box.
 Photos are for the user to inspect, never automatic face matching.
 
 ## Step 7 - quality sweep
