@@ -51,6 +51,7 @@ uv run python -m people_sync <command>
 | `ingest google` | Enumerates Google Contacts via `gog` and pulls each contact's full People API record |
 | `ingest apple` | Reads the local Apple Contacts databases |
 | `ingest whatsapp --snapshot <sqlite> --media-dir <dir> --self-id <jid>` | Reads an operator-prepared, metadata-only WhatsApp snapshot read-only: active direct chats become pending records with their cached profile pictures; self, groups, status and broadcast rows are excluded, phone numbers never leave the machine |
+| `propose --batch <label> <context.json> ... --output <proposals.json>` | Proposes identity clusters for the review page from names, handles, spellings, place/school/era cues, iMessage cues and shared phone numbers; unconnected entries become separate proposed people |
 | `capture <source> --path <p>` | Retains a privacy-filtered export as an immutable capture without ingesting it |
 | `captures [--state-dir <d>]` | Lists the locally cached captures and verifies each against the file service |
 | `replay --input <capture.json> [--compare <prev>] [--output <p>]` | Parses a retained capture offline into a proposal, with no network and no estate writes |
