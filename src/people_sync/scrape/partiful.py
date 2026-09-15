@@ -314,7 +314,33 @@ GUEST_ROWS_JS = (
     "rows.push({name:t,section:section,plus_ones:0,el:e});});"
     "rows.forEach(function(r,i){r.el.id=r.el.id||('ps_guest_'+i);r.selector='#'+r.el.id;delete r.el;});return rows;})()"
 )
+GUEST_COUNTS_JS = (
+    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
+    "var t=(d.innerText||'').split('\\n').map(function(s){return s.trim()}).filter(Boolean);"
+    "var out={};for(var i=0;i+1<t.length;i++){if(/^(Going|Went|Maybe|Can't Go|Invited)$/.test(t[i])&&/^\\d+$/.test(t[i+1]))out[t[i]]=parseInt(t[i+1]);}return out;})()"
+)
 GUEST_PAUSE_S = (2.0, 4.0)
+
+
+def assign_sections(rows: list[dict], counts: dict) -> list[dict]:
+    """The dialog lists section names with their counts once at the top, then
+    every guest in that order; a guest's section is where its cumulative
+    position (counting plus-ones) falls."""
+    order = [s for s in ("Going", "Went", "Maybe", "Invited", "Can't Go") if s in counts]
+    if not order:
+        return rows
+    remaining = {s: counts[s] for s in order}
+    current = 0
+    out = []
+    for row in rows:
+        while current < len(order) - 1 and remaining[order[current]] <= 0:
+            current += 1
+        section = order[current]
+        remaining[section] -= 1 + int(row.get("plus_ones") or 0)
+        out.append({**row, "section": section})
+    return out
+
+
 ROLES = {"Went": "went", "Going": "went", "Maybe": "maybe", "Invited": "invited"}
 
 
@@ -361,7 +387,7 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
     if not browser.eval("!!document.querySelector('[role=dialog]')"):
         browser.click("text=View all")
         time.sleep(2)
-    rows = browser.eval(GUEST_ROWS_JS) or []
+    rows = assign_sections(browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {})
     ordinal = 0
     for index, row in enumerate(rows):
         entry = {

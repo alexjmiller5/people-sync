@@ -163,3 +163,15 @@ def test_event_ops_promote_once_with_evidence(mocker):
     )
     # already promoted: nothing planned
     assert promote.event_ops({edge["id"]}) == []
+
+
+def test_guest_sections_follow_the_dialog_counts():
+    rows = [
+        {"name": "A", "plus_ones": 1},
+        {"name": "B", "plus_ones": 0},
+        {"name": "C", "plus_ones": 0},
+        {"name": "D", "plus_ones": 0},
+    ]
+    out = partiful.assign_sections(rows, {"Going": 3, "Maybe": 1})
+    assert [r["section"] for r in out] == ["Going", "Going", "Maybe", "Maybe"]
+    assert partiful.assign_sections(rows, {}) == rows
