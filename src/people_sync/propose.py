@@ -244,7 +244,9 @@ def cluster(items: list[Item]) -> list[tuple[list[Item], list[str], bool]]:
             continue  # one person rarely holds two accounts on the same platform
         parent[rb] = ra
         reasons[ra] = reasons[ra] + reasons[rb] + why
-        weak = s < LINK_SCORE or any("nearly" in w or w.startswith("surname spelled") for w in why)
+        weak = s < LINK_SCORE or any(
+            "nearly" in w or "abbreviates" in w or w.startswith("surname spelled") for w in why
+        )
         fuzzy[ra] = fuzzy[ra] or fuzzy[rb] or weak
     groups: dict[str, list[Item]] = {}
     for i in items:
