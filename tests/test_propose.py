@@ -167,3 +167,50 @@ def test_list_page_heading_is_not_a_name_and_phone_links_join():
     [only] = _clusters(group, links={"whatsapp:lid-1": ["google_contacts:people/c0"]})
     assert only[0] == ["google_contacts:people/c0", "partiful:abc", "whatsapp:lid-1"]
     assert "same full name" in only[1].lower() and "same phone number" in only[1].lower()
+
+
+def test_lone_partiful_mutuals_are_excluded_but_confident_joins_stay():
+    group = _group(google=[("Carla Testcase", None)])
+    group["profiles"] = [
+        {
+            "record_id": "partiful:a",
+            "platform": "partiful",
+            "handle": "a",
+            "display_name": "Carla Testcase",
+            "source_name": "Carla Testcase",
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+        {
+            "record_id": "partiful:b",
+            "platform": "partiful",
+            "handle": "b",
+            "display_name": "Carla Sample",
+            "source_name": "Carla Sample",
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+        {
+            "record_id": "facebook:c",
+            "platform": "facebook",
+            "handle": "dylan.c",
+            "display_name": "Carla Wrong",
+            "source_name": "Carla Right",
+            "bio": None,
+            "location": None,
+            "hometown": None,
+            "education": None,
+            "work": None,
+        },
+    ]
+    out = propose.propose_group(group)
+    ids = [sorted(c["person_ids"] + c["record_ids"]) for c in out["clusters"]]
+    assert ["google_contacts:people/c0", "partiful:a"] in ids
+    assert out["excluded"] == ["partiful:b"]
+    assert any(c["label"].startswith("Carla Right") for c in out["clusters"])

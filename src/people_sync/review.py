@@ -47,6 +47,13 @@ def attach_proposal(group: dict, proposal: dict | None) -> None:
                     assigned[field].add(ref)
             if not cluster["person_ids"] and not cluster["record_ids"]:
                 raise ValueError("Empty proposal cluster")
+    excluded = set(proposal.get("excluded", [])) if isinstance(proposal, dict) else set()
+    if excluded:
+        group["google_candidates"] = [
+            c for c in group["google_candidates"] if c["id"] not in excluded
+        ]
+        group["profiles"] = [p for p in group["profiles"] if p["record_id"] not in excluded]
+        group["excluded"] = sorted(excluded)
     group["proposal"] = proposal
     group["proposal_id"] = (
         hashlib.sha256(json.dumps(proposal, sort_keys=True).encode()).hexdigest()

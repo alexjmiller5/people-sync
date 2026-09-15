@@ -152,6 +152,10 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
         display = p.get("display_name")
         if not display or display.casefold() in JUNK_NAMES:
             display = p.get("source_name")
+        if p.get("platform") == "facebook" and p.get("source_name"):
+            display = p[
+                "source_name"
+            ]  # the export's name; the page scrape sometimes grabs a friend's
         out.append(
             Item(
                 "profile",
@@ -269,10 +273,34 @@ def label_for(members: list[Item]) -> str:
     return base + (f" - {', '.join(sorted(cues))}" if cues else "")
 
 
+# Sources whose lone records are not worth a box: a Partiful mutual is anyone
+# who shared an event, so on its own it is noise. They join only on a confident
+# signal; otherwise they stay pending, out of the page.
+QUIET_SOURCES = {"partiful"}
+
+
 def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dict:
     items = items_for(group, google_groups, cues)
-    clusters = []
+    clusters, excluded = [], []
     for members, why, fuzzy in cluster(items, links):
+        if (
+            len(members) == 1
+            and members[0].kind == "profile"
+            and members[0].platform in QUIET_SOURCES
+        ):
+            excluded.append(members[0].id)
+            continue
+        if (
+            fuzzy
+            and all(
+                i.kind == "profile" and i.platform in QUIET_SOURCES
+                for i in members
+                if i.kind == "profile"
+            )
+            and not any(i.kind != "profile" for i in members)
+        ):
+            excluded.extend(i.id for i in members)
+            continue
         entry = {
             "label": label_for(members),
             "reason": (
@@ -286,7 +314,7 @@ def propose_group(group: dict, google_groups=None, cues=None, links=None) -> dic
         if fuzzy:
             entry["uncertainty"] = "Joined on a spelling or cue match only; check the photos."
         clusters.append(entry)
-    return {"clusters": clusters}
+    return {"clusters": clusters, **({"excluded": excluded} if excluded else {})}
 
 
 def propose(batches, google_groups=None, cues=None, links=None) -> dict:
