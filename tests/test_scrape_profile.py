@@ -76,35 +76,41 @@ def test_insert_serializes_education_and_work_lists(mocker):
 
 
 def test_update_when_existing_row_emits_update_not_insert(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
+    existing = [{"id": "instagram:alice123", "record_id": "instagram:alice123", "deleted_at": None}]
+    sql = mocker.patch("people_sync.lifedata.sql", return_value=existing)
     mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
     insert = mocker.patch("people_sync.lifedata.insert")
 
     upsert_profile(_profile(display_name="Alice Updated"), None, None, None)
 
     insert.assert_not_called()
-    assert sql.call_count == 2
+    assert sql.call_count == 2  # no raw key: no evidence round trip
     select_stmt = sql.call_args_list[0].args[0]
-    assert "SELECT id, deleted_at FROM people_sync_profiles" in select_stmt
-    assert "record_id = 'instagram:alice123'" in select_stmt
+    assert "SELECT id, record_id, deleted_at FROM people_sync_profiles" in select_stmt
+    assert "record_id IN ('instagram:alice123')" in select_stmt
 
+    # one batched statement: every column is a CASE over record_id
     update_stmt = sql.call_args_list[1].args[0]
     assert update_stmt.startswith("UPDATE people_sync_profiles SET")
-    assert "display_name = 'Alice Updated'" in update_stmt
-    assert "is_private = 0" in update_stmt
-    assert "is_verified = 1" in update_stmt
-    assert "follower_count = 10" in update_stmt
-    assert "avatar_r2_key = NULL" in update_stmt
-    assert "scraped_at = '2026-09-04T00:00:00.000Z'" in update_stmt
-    assert update_stmt.endswith("WHERE record_id = 'instagram:alice123'")
+    when = "WHEN 'instagram:alice123' THEN "
+    for column, literal in [
+        ("display_name", "'Alice Updated'"),
+        ("is_private", "0"),
+        ("is_verified", "1"),
+        ("follower_count", "10"),
+        ("avatar_r2_key", "NULL"),
+        ("scraped_at", "'2026-09-04T00:00:00.000Z'"),
+    ]:
+        assert f"{column} = CASE record_id {when}{literal} END" in update_stmt
+    assert update_stmt.endswith("WHERE record_id IN ('instagram:alice123')")
 
 
 def test_update_quotes_apostrophes_in_text_fields(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
     mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
+    existing = [{"id": "instagram:alice123", "record_id": "instagram:alice123", "deleted_at": None}]
+    sql = mocker.patch("people_sync.lifedata.sql", return_value=existing)
 
     upsert_profile(_profile(bio="it's a test"), None, None, None)
 
     update_stmt = sql.call_args_list[1].args[0]
-    assert "bio = 'it''s a test'" in update_stmt
+    assert "THEN 'it''s a test' END" in update_stmt

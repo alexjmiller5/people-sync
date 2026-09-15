@@ -39,30 +39,62 @@ def capture_edge_id(key: str, table: str, row_id: str, rel: str, field: str | No
     return "takeout:" + hashlib.sha256(identity.encode()).hexdigest()
 
 
+CHUNK = 200  # rows per statement: keeps one `life sql` argument well under the OS limit
+
+
+def batch_update(table: str, key_col: str, rows: dict[str, dict]) -> None:
+    """One UPDATE per chunk of rows (each `life sql` write costs seconds, so per-row
+    statements dominate a large ingest). `rows` maps key -> {column: sql-literal}."""
+    keys = list(rows)
+    for start in range(0, len(keys), CHUNK):
+        chunk = keys[start : start + CHUNK]
+        columns = list(rows[chunk[0]])
+        sets = []
+        for col in columns:
+            whens = " ".join(f"WHEN {lifedata.sq(k)} THEN {rows[k][col]}" for k in chunk)
+            sets.append(f"{col} = CASE {key_col} {whens} END")
+        lifedata.sql(
+            f"UPDATE {table} SET {', '.join(sets)} "
+            f"WHERE {key_col} IN ({','.join(lifedata.sq(k) for k in chunk)})"
+        )
+
+
 def imported_from(table: str, row_id: str, capture_key=None, capture_refs=()) -> None:
-    """Repair missing whole-row observation edges; never resurrect deleted edges."""
-    keys = {ref["capture_key"] for ref in capture_refs}
-    if capture_key:
-        keys.add(capture_key)
-    rows = [
-        {
-            "id": capture_edge_id(key, table, row_id, "imported_from", None),
-            "from_kind": "takeout",
-            "from_ref": key,
-            "to_kind": table,
-            "to_ref": row_id,
-            "rel": "imported_from",
-            "field": None,
-            "detail": None,
-            "asserted_by": os.environ.get("PEOPLE_SYNC_ASSERTED_BY") or "script:people-sync ingest",
-        }
-        for key in sorted(keys)
-    ]
+    imported_from_many(table, [(row_id, capture_key, capture_refs)])
+
+
+def imported_from_many(table: str, items) -> None:
+    """Repair missing whole-row observation edges for every (row_id, capture_key,
+    capture_refs) in one round trip; never resurrect deleted edges."""
+    rows = {}
+    for row_id, capture_key, capture_refs in items:
+        keys = {ref["capture_key"] for ref in capture_refs}
+        if capture_key:
+            keys.add(capture_key)
+        for key in sorted(keys):
+            edge_id = capture_edge_id(key, table, row_id, "imported_from", None)
+            rows[edge_id] = {
+                "id": edge_id,
+                "from_kind": "takeout",
+                "from_ref": key,
+                "to_kind": table,
+                "to_ref": row_id,
+                "rel": "imported_from",
+                "field": None,
+                "detail": None,
+                "asserted_by": os.environ.get("PEOPLE_SYNC_ASSERTED_BY")
+                or "script:people-sync ingest",
+            }
     if not rows:
         return
-    ids = ",".join(lifedata.sq(row["id"]) for row in rows)
-    existing = {r["id"] for r in lifedata.sql(f"SELECT id FROM provenance WHERE id IN ({ids})")}
-    missing = [row for row in rows if row["id"] not in existing]
+    existing = set()
+    ids = list(rows)
+    for start in range(0, len(ids), CHUNK):
+        chunk = ",".join(lifedata.sq(i) for i in ids[start : start + CHUNK])
+        existing |= {
+            r["id"] for r in lifedata.sql(f"SELECT id FROM provenance WHERE id IN ({chunk})")
+        }
+    missing = [row for edge_id, row in rows.items() if edge_id not in existing]
     if missing:
         lifedata.insert("provenance", missing)
 
@@ -94,7 +126,7 @@ def upsert(records: list[Record]) -> dict:
     }
     now = lifedata.now_iso()
     new_rows = []
-    updated = 0
+    updates: dict[str, dict] = {}
     held = []
     for r in records:
         if r.row_id in existing:
@@ -109,15 +141,14 @@ def upsert(records: list[Record]) -> dict:
                     }
                 )
                 continue
-            lifedata.sql(
-                "UPDATE people_sync_records SET "
-                f"handle = {lifedata.sq(r.handle)}, name = {lifedata.sq(r.name)}, "
-                f"raw = {lifedata.sq(json.dumps(r.raw))}, "
-                f"follows_me = {_int_sql(r.follows_me)}, i_follow = {_int_sql(r.i_follow)}, "
-                f"last_seen = {lifedata.sq(now)} "
-                f"WHERE id = {lifedata.sq(r.row_id)}"
-            )
-            updated += 1
+            updates[r.row_id] = {
+                "handle": lifedata.sq(r.handle),
+                "name": lifedata.sq(r.name),
+                "raw": lifedata.sq(json.dumps(r.raw)),
+                "follows_me": _int_sql(r.follows_me),
+                "i_follow": _int_sql(r.i_follow),
+                "last_seen": lifedata.sq(now),
+            }
         else:
             new_rows.append(
                 {
@@ -136,10 +167,17 @@ def upsert(records: list[Record]) -> dict:
                     "last_seen": now,
                 }
             )
+    if updates:
+        batch_update("people_sync_records", "id", updates)
     if new_rows:
         lifedata.insert("people_sync_records", new_rows)
     held_ids = {row["record_id"] for row in held}
-    for r in observations:
-        if r.row_id not in held_ids and not (r.hold_existing and r.row_id in existing):
-            imported_from("people_sync_records", r.row_id, r.capture_key, r.capture_refs)
-    return {"new": len(new_rows), "updated": updated} | ({"held": held} if held else {})
+    imported_from_many(
+        "people_sync_records",
+        [
+            (r.row_id, r.capture_key, r.capture_refs)
+            for r in observations
+            if r.row_id not in held_ids and not (r.hold_existing and r.row_id in existing)
+        ],
+    )
+    return {"new": len(new_rows), "updated": len(updates)} | ({"held": held} if held else {})

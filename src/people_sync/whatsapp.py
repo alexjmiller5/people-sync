@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from people_sync import captures, ledger, lifedata, photos, sources
-from people_sync.scrape.profile import Profile, upsert_profile
+from people_sync.scrape.profile import Profile, upsert_profiles
 
 SOURCE = "whatsapp"
 FORMAT = "whatsapp-snapshot-v1"
@@ -289,9 +289,13 @@ def ingest(snapshot_path, media_dir, *, self_id=None, state_dir=None) -> dict:
 
     report = ledger.upsert(records)
     held = {h["record_id"] for h in report.get("held", [])}
-    for profile, _ in _profiles(payload):
-        if profile.record_id not in held:
-            upsert_profile(profile, *avatars[profile.record_id], key)
+    upsert_profiles(
+        [
+            (profile, *avatars[profile.record_id], key)
+            for profile, _ in _profiles(payload)
+            if profile.record_id not in held
+        ]
+    )
     return report | {
         "counterparts": len(records),
         "photos": uploaded,
