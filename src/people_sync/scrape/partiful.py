@@ -384,9 +384,15 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
             ".find(t=>/^[A-Z][a-z]+, [A-Z][a-z]{2} \\d{1,2}, \\d{4}/.test(t.trim()))||null)"
         ),
     }
+    # Client-rendered; the guest list can take well over the load event to paint,
+    # longer still with several tabs loading at once.
+    view_all = "[...document.querySelectorAll('*')].some(e=>!e.children.length&&(e.innerText||'').trim()==='View all')"
     if not browser.eval("!!document.querySelector('[role=dialog]')"):
+        if not browser.wait_for(view_all, 25):
+            raise ExtractError("guest-list-not-rendered")
         browser.click("text=View all")
-        time.sleep(2)
+        browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
+        time.sleep(1.5)
     rows = assign_sections(browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {})
     ordinal = 0
     for index, row in enumerate(rows):
