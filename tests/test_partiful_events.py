@@ -136,7 +136,7 @@ def test_event_ops_promote_once_with_evidence(mocker):
         return []
 
     mocker.patch("people_sync.lifedata.sql", side_effect=sql)
-    ops = promote.event_ops(set())
+    ops = promote.event_ops(promote.load_event_rows(), set())
     assert [(o.kind, o.person_id, o.value, o.raw_r2_key) for o in ops] == [
         ("event", "p1", "ev1", "profiles/partiful/captures/g.json")
     ]
@@ -162,7 +162,7 @@ def test_event_ops_promote_once_with_evidence(mocker):
         and edge["to_ref"] == "partiful:ev1:p1"
     )
     # already promoted: nothing planned
-    assert promote.event_ops({edge["id"]}) == []
+    assert promote.event_ops(promote.load_event_rows(), {edge["id"]}) == []
 
 
 def test_guest_sections_follow_the_dialog_counts():
@@ -175,3 +175,11 @@ def test_guest_sections_follow_the_dialog_counts():
     out = partiful.assign_sections(rows, {"Going": 3, "Maybe": 1})
     assert [r["section"] for r in out] == ["Going", "Going", "Maybe", "Maybe"]
     assert partiful.assign_sections(rows, {}) == rows
+
+
+def test_host_view_role_mapping_and_js_parse():
+    import subprocess
+
+    for js in (partiful.HOST_ROWS_JS, partiful.HOST_PROFILE_JS):
+        subprocess.run(["node", "-e", "new Function(process.argv[1])", js], check=True)
+    assert partiful.ROLES["Going"] == "went" and partiful.ROLES["Invited"] == "invited"

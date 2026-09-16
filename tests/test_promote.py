@@ -136,6 +136,7 @@ def test_apply_writes_rows_and_one_provenance_edge_per_value(mocker):
 
 
 def test_run_dry_run_prints_the_plan_and_writes_nothing(mocker):
+    mocker.patch("people_sync.promote.load_event_rows", return_value=[])
     mocker.patch(
         "people_sync.promote.load_state", return_value=([_profile()], PEOPLE, [], [], [], set())
     )
@@ -149,6 +150,7 @@ def test_run_dry_run_prints_the_plan_and_writes_nothing(mocker):
 
 
 def test_missing_capture_is_reported_and_apply_refuses_before_any_write(mocker):
+    mocker.patch("people_sync.promote.load_event_rows", return_value=[])
     mocker.patch(
         "people_sync.promote.load_state",
         return_value=([_profile(raw_r2_key=None)], PEOPLE, [], [], [], set()),
@@ -166,6 +168,7 @@ def test_missing_capture_is_reported_and_apply_refuses_before_any_write(mocker):
 
 
 def test_legacy_evidence_is_reported_without_historical_rewrite(mocker):
+    mocker.patch("people_sync.promote.load_event_rows", return_value=[])
     mocker.patch(
         "people_sync.promote.load_state",
         return_value=(
