@@ -180,6 +180,6 @@ def test_guest_sections_follow_the_dialog_counts():
 def test_host_view_role_mapping_and_js_parse():
     import subprocess
 
-    for js in (partiful.HOST_ROWS_JS, partiful.HOST_PROFILE_JS):
+    for js in (partiful.HOST_GUESTS_JS, partiful.HOST_PROFILE_JS, partiful.DIALOG_SCROLL_JS):
         subprocess.run(["node", "-e", "new Function(process.argv[1])", js], check=True)
     assert partiful.ROLES["Going"] == "went" and partiful.ROLES["Invited"] == "invited"

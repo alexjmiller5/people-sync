@@ -322,22 +322,46 @@ GUEST_COUNTS_JS = (
 # Host view ("Manage Guests"): every row is a name leaf followed by a status leaf
 # and a time; a row click opens a detail panel whose "View profile" link holds
 # the guest's /u/<uid>.
-HOST_ROWS_JS = (
-    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
-    "var leaves=[...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()});"
-    "var rows=[];var re=/^(?:\\S+\\s+)?(Going|Maybe|Invited|Can't Go)$/;"
-    "for(var i=0;i+1<leaves.length;i++){var t=leaves[i].innerText.trim(),n=leaves[i+1].innerText.trim();var m=n.match(re);"
-    "if(!m||re.test(t)||/^[A-Z]{1,2}$/.test(t)||/^\\d+$/.test(t))continue;"
-    "var e=leaves[i],row=e;while(e&&e!==d){if(getComputedStyle(e).cursor==='pointer')row=e;else break;e=e.parentElement;}"
-    "row.id=row.id||('ps_hrow_'+rows.length);rows.push({name:t,section:m[1],plus_ones:0,selector:'#'+row.id});}"
-    "return rows;})()"
-)
 HOST_PROFILE_JS = (
-    "(function(){var ds=document.querySelectorAll('[role=dialog]');var d=ds[ds.length-1];if(!d)return null;"
-    "var a=[...d.querySelectorAll('a[href^=\"/u/\"]')].find(function(x){return /view profile/i.test(x.innerText||'')});"
+    "(function(){var a=[...document.querySelectorAll('a[href^=\"/u/\"]')].find(function(x){return /^view\\s+profile$/i.test((x.innerText||'').trim())});"
     "return a?a.getAttribute('href').split('/u/')[1].split(/[?#]/)[0]:null;})()"
 )
+DIALOG_SCROLL_JS = (
+    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return 0;"
+    "var els=[d].concat([...d.querySelectorAll('*')]).filter(function(e){return e.scrollHeight>e.clientHeight+20});"
+    "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight});var s=els[0]||d;s.scrollTop=s.scrollHeight;"
+    "return [...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()}).length;})()"
+)
+# The host dialog is a virtualized list; its React list component holds the
+# complete guest array (name, guest id, RSVP status, plus-ones), so the walk
+# reads that once and opens each guest's detail panel by URL.
+HOST_GUESTS_JS = (
+    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
+    "var leaf=[...d.querySelectorAll('*')].find(function(e){return !e.children.length&&/ago$/.test((e.innerText||'').trim())});"
+    "if(!leaf)return [];var fk=Object.keys(leaf).find(function(k){return k.indexOf('__reactFiber')===0});var f=leaf[fk];"
+    "for(var i=0;i<40&&f;i++){var p=f.memoizedProps;if(p&&Array.isArray(p.itemData)){"
+    "return p.itemData.map(function(g){return {name:g.name||null,guest_id:g.id||null,status:g.status||null,count:g.count||1}});}f=f.return;}"
+    "return [];})()"
+)
+HOST_STATUS = {"GOING": "Going", "MAYBE": "Maybe", "INVITED": "Invited"}
 GUEST_PAUSE_S = (2.0, 4.0)
+
+
+def load_all_rows(browser, settle_s=1.2, max_rounds=40) -> None:
+    """Scroll the guest dialog's list to the bottom until no more rows appear
+    (the list is rendered lazily)."""
+    seen = -1
+    for _ in range(max_rounds):
+        count = browser.eval(DIALOG_SCROLL_JS) or 0
+        time.sleep(settle_s)
+        if count == seen:
+            break
+        seen = count
+    browser.eval(
+        "(function(){var d=document.querySelector('[role=dialog]');if(!d)return;"
+        "var els=[d].concat([...d.querySelectorAll('*')]).filter(function(e){return e.scrollHeight>e.clientHeight+20});"
+        "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight});(els[0]||d).scrollTop=0;})()"
+    )
 
 
 def assign_sections(rows: list[dict], counts: dict) -> list[dict]:
@@ -429,13 +453,23 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
         browser.click("text=View all")
         browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
         time.sleep(1.5)
+    load_all_rows(browser)
     host_view = bool(
         browser.eval(
             "/^\\s*Manage Guests/.test((document.querySelector('[role=dialog]')||{}).innerText||'')"
         )
     )
     if host_view:
-        rows = [r for r in (browser.eval(HOST_ROWS_JS) or []) if r["section"] != "Can't Go"]
+        rows = [
+            {
+                "name": g.get("name"),
+                "section": HOST_STATUS[g["status"]],
+                "plus_ones": max(int(g.get("count") or 1) - 1, 0),
+                "guest_id": g.get("guest_id"),
+            }
+            for g in (browser.eval(HOST_GUESTS_JS) or [])
+            if g.get("status") in HOST_STATUS and g.get("guest_id")
+        ]
     else:
         rows = assign_sections(
             browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {}
@@ -451,23 +485,16 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
                 "plus_ones": 0,
                 "uid": None,
             }
+            entry["plus_ones"] = row.get("plus_ones") or 0
             try:
-                if not browser.eval("!!document.querySelector('[role=dialog]')"):
-                    browser.click("text=View all")
-                    browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
-                    time.sleep(1.0)
-                    browser.eval(HOST_ROWS_JS)
-                browser.eval(
-                    "(function(){var e=document.querySelector(%s);if(e)e.scrollIntoView({block:'center'});"
-                    "return !!e})()" % json.dumps(row["selector"])
-                )
-                browser.click(row["selector"])
-                if browser.wait_for("document.querySelectorAll('[role=dialog]').length>1", 10):
-                    time.sleep(0.8)
+                url = EVENT_URL.format(event_id=event_id) + "?focus=guests&guest=" + row["guest_id"]
+                browser.navigate(url, 12000)
+                if browser.wait_for(
+                    "[...document.querySelectorAll('a[href^=\"/u/\"]')]"
+                    ".some(function(a){return /^view\\s+profile$/i.test((a.innerText||'').trim())})",
+                    15,
+                ):
                     entry["uid"] = browser.eval(HOST_PROFILE_JS)
-                    browser.eval("history.back()")
-                    browser.wait_for("document.querySelectorAll('[role=dialog]').length<=1", 10)
-                    time.sleep(0.8)
                 failures = 0
             except Exception:
                 failures += 1
