@@ -405,6 +405,7 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
         time.sleep(1.5)
     rows = assign_sections(browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {})
     ordinal = 0
+    failures = 0
     for index, row in enumerate(rows):
         entry = {
             "event_id": event_id,
@@ -414,25 +415,35 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
             "uid": None,
         }
         try:
+            if not browser.eval("!!document.querySelector('[role=dialog]')"):
+                browser.click("text=View all")
+                browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
+                time.sleep(1.0)
+                browser.eval(GUEST_ROWS_JS)  # re-tag rows after the dialog reopened
             browser.eval(
                 "(function(){var e=document.querySelector(%s);if(e)e.scrollIntoView({block:'center'});"
                 "return !!e})()" % json.dumps(row["selector"])
             )
             browser.click(row["selector"])
-            if browser.wait_for("location.pathname.startsWith('/u/')", 8):
+            if browser.wait_for("location.pathname.startsWith('/u/')", 15):
                 entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
                 browser.eval("history.back()")
-                browser.wait_for("location.pathname.startsWith('/e/')", 8)
+                browser.wait_for("location.pathname.startsWith('/e/')", 15)
                 time.sleep(1.0)
-                if not browser.eval("!!document.querySelector('[role=dialog]')"):
-                    browser.click("text=View all")
-                    time.sleep(1.5)
-                browser.eval(GUEST_ROWS_JS)  # re-tag rows after the dialog reopened
+            failures = 0
         except Exception:
+            # One guest row failing (a slow paint, a row re-rendered mid-click) is
+            # retained as a failed observation and the walk continues; a run of
+            # three means the page is gone.
+            failures += 1
             snapshot.retain_list(
                 "partiful", [], ordinal=ordinal, scope="event_guests", reason="acquisition-failed"
             )
-            raise ExtractError("list-acquisition-failed") from None
+            ordinal += 1
+            if failures >= 3:
+                raise ExtractError("list-acquisition-failed") from None
+            time.sleep(random.uniform(*pause_s))
+            continue
         page, key = snapshot.retain_list(
             "partiful",
             [entry],
