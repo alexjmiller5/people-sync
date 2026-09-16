@@ -376,7 +376,12 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
     """Yield (guest entry, capture ref) per guest of one event, click-walking each
     row to its /u/<uid>. Guests without a profile keep their name only."""
     browser.navigate(EVENT_URL.format(event_id=event_id), 12000)
-    time.sleep(3)
+    rendered = "!!document.title && document.body.innerText.length > 200"
+    if not browser.wait_for(rendered, 20):
+        browser.eval("location.reload()")  # a blank first paint under load; once
+        if not browser.wait_for(rendered, 25):
+            raise ExtractError("event-page-blank")
+    time.sleep(2)
     header = {
         "title": browser.eval("(document.querySelector('h1')||{}).innerText||null"),
         "when": browser.eval(
@@ -390,6 +395,11 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
     if not browser.eval("!!document.querySelector('[role=dialog]')"):
         if not browser.wait_for(view_all, 25):
             raise ExtractError("guest-list-not-rendered")
+        browser.eval(
+            "(function(){var e=[...document.querySelectorAll('*')].find(function(x){return !x.children.length&&(x.innerText||'').trim()==='View all'});"
+            "if(e)e.scrollIntoView({block:'center'});return !!e})()"
+        )
+        time.sleep(0.8)
         browser.click("text=View all")
         browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
         time.sleep(1.5)
