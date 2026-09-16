@@ -319,6 +319,24 @@ GUEST_COUNTS_JS = (
     "var t=(d.innerText||'').split('\\n').map(function(s){return s.trim()}).filter(Boolean);"
     "var out={};for(var i=0;i+1<t.length;i++){if(/^(Going|Went|Maybe|Can't Go|Invited)$/.test(t[i])&&/^\\d+$/.test(t[i+1]))out[t[i]]=parseInt(t[i+1]);}return out;})()"
 )
+# Host view ("Manage Guests"): every row is a name leaf followed by a status leaf
+# and a time; a row click opens a detail panel whose "View profile" link holds
+# the guest's /u/<uid>.
+HOST_ROWS_JS = (
+    "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
+    "var leaves=[...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()});"
+    "var rows=[];var re=/^(?:\\S+\\s+)?(Going|Maybe|Invited|Can't Go)$/;"
+    "for(var i=0;i+1<leaves.length;i++){var t=leaves[i].innerText.trim(),n=leaves[i+1].innerText.trim();var m=n.match(re);"
+    "if(!m||re.test(t)||/^[A-Z]{1,2}$/.test(t)||/^\\d+$/.test(t))continue;"
+    "var e=leaves[i],row=e;while(e&&e!==d){if(getComputedStyle(e).cursor==='pointer')row=e;else break;e=e.parentElement;}"
+    "row.id=row.id||('ps_hrow_'+rows.length);rows.push({name:t,section:m[1],plus_ones:0,selector:'#'+row.id});}"
+    "return rows;})()"
+)
+HOST_PROFILE_JS = (
+    "(function(){var ds=document.querySelectorAll('[role=dialog]');var d=ds[ds.length-1];if(!d)return null;"
+    "var a=[...d.querySelectorAll('a[href^=\"/u/\"]')].find(function(x){return /view profile/i.test(x.innerText||'')});"
+    "return a?a.getAttribute('href').split('/u/')[1].split(/[?#]/)[0]:null;})()"
+)
 GUEST_PAUSE_S = (2.0, 4.0)
 
 
@@ -394,7 +412,15 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
     view_all = "[...document.querySelectorAll('*')].some(e=>!e.children.length&&(e.innerText||'').trim()==='View all')"
     if not browser.eval("!!document.querySelector('[role=dialog]')"):
         if not browser.wait_for(view_all, 25):
-            raise ExtractError("guest-list-not-rendered")
+            hidden = not browser.eval("document.body.innerText.includes('Guest List')")
+            snapshot.retain_list(
+                "partiful",
+                [],
+                ordinal=0,
+                scope="event_guests",
+                reason="acquisition-failed",
+            )
+            raise ExtractError("guest-list-hidden" if hidden else "guest-list-not-rendered")
         browser.eval(
             "(function(){var e=[...document.querySelectorAll('*')].find(function(x){return !x.children.length&&(x.innerText||'').trim()==='View all'});"
             "if(e)e.scrollIntoView({block:'center'});return !!e})()"
@@ -403,10 +429,72 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
         browser.click("text=View all")
         browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
         time.sleep(1.5)
-    rows = assign_sections(browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {})
+    host_view = bool(
+        browser.eval(
+            "/^\\s*Manage Guests/.test((document.querySelector('[role=dialog]')||{}).innerText||'')"
+        )
+    )
+    if host_view:
+        rows = [r for r in (browser.eval(HOST_ROWS_JS) or []) if r["section"] != "Can't Go"]
+    else:
+        rows = assign_sections(
+            browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {}
+        )
     ordinal = 0
     failures = 0
     for index, row in enumerate(rows):
+        if host_view:
+            entry = {
+                "event_id": event_id,
+                "name": row.get("name"),
+                "section": row.get("section"),
+                "plus_ones": 0,
+                "uid": None,
+            }
+            try:
+                if not browser.eval("!!document.querySelector('[role=dialog]')"):
+                    browser.click("text=View all")
+                    browser.wait_for("!!document.querySelector('[role=dialog]')", 10)
+                    time.sleep(1.0)
+                    browser.eval(HOST_ROWS_JS)
+                browser.eval(
+                    "(function(){var e=document.querySelector(%s);if(e)e.scrollIntoView({block:'center'});"
+                    "return !!e})()" % json.dumps(row["selector"])
+                )
+                browser.click(row["selector"])
+                if browser.wait_for("document.querySelectorAll('[role=dialog]').length>1", 10):
+                    time.sleep(0.8)
+                    entry["uid"] = browser.eval(HOST_PROFILE_JS)
+                    browser.eval("history.back()")
+                    browser.wait_for("document.querySelectorAll('[role=dialog]').length<=1", 10)
+                    time.sleep(0.8)
+                failures = 0
+            except Exception:
+                failures += 1
+                snapshot.retain_list(
+                    "partiful",
+                    [],
+                    ordinal=ordinal,
+                    scope="event_guests",
+                    reason="acquisition-failed",
+                )
+                ordinal += 1
+                if failures >= 3:
+                    raise ExtractError("list-acquisition-failed") from None
+                time.sleep(random.uniform(*pause_s))
+                continue
+            page, key = snapshot.retain_list(
+                "partiful",
+                [entry],
+                ordinal=ordinal,
+                scope="event_guests",
+                expected_total=len(rows),
+                entry_start=index,
+            )
+            ordinal += 1
+            yield header, page["entries"][0], snapshot.list_ref(page, key, 0)
+            time.sleep(random.uniform(*pause_s))
+            continue
         entry = {
             "event_id": event_id,
             "name": row.get("name"),

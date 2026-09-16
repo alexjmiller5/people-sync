@@ -192,9 +192,8 @@ def plan(
     return ops
 
 
-def event_ops(edges: set[str]) -> list[Op]:
-    """One op per (matched Partiful record, event) not yet promoted."""
-    ops = []
+def load_event_rows() -> list[dict]:
+    """Matched Partiful records with attendance, minus events already promoted."""
     rows = lifedata.sql(
         "SELECT r.id AS record_id, r.person_id, r.raw FROM people_sync_records r "
         "WHERE r.source = 'partiful' AND r.status = 'matched' AND r.person_id IS NOT NULL "
@@ -206,7 +205,14 @@ def event_ops(edges: set[str]) -> list[Op]:
             "SELECT person_id, event_id FROM person_events WHERE platform = 'partiful'"
         )
     }
+    return [{**r, "_existing": existing} for r in rows]
+
+
+def event_ops(rows: list[dict], edges: set[str]) -> list[Op]:
+    """One op per (matched Partiful record, event) not yet promoted."""
+    ops = []
     for r in rows:
+        existing = r.get("_existing", set())
         try:
             events = json.loads(r["raw"] or "{}").get("events") or []
         except json.JSONDecodeError:
@@ -391,7 +397,7 @@ def apply(ops: list[Op]) -> dict:
 
 def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
     state = load_state(platforms)
-    ops = plan(*state) + event_ops(state[-1])
+    ops = plan(*state) + event_ops(load_event_rows(), state[-1])
     summary = {"planned": {}, "conflicts": [], "applied": {}}
     summary["legacy"] = sorted(
         {

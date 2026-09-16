@@ -14,6 +14,7 @@ from pathlib import Path
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
 from people_sync import captures, google_cleanup, propose, reconcile, replay, review, whatsapp
 from people_sync.scrape import cdp
+from people_sync.scrape.profile import ExtractError
 
 from people_sync.scrape import login as scrape_login
 from people_sync.scrape import run as scrape_run
@@ -266,11 +267,21 @@ def cmd_list(args: argparse.Namespace) -> None:
                 or (not wanted and (e.get("status") or "").upper().startswith(("WENT", "HOSTING")))
             ]
             counts = {"events": len(chosen), "guests": 0, "records": 0}
+            counts["skipped"] = 0
             for event in chosen:
-                for header, guest, ref in partiful.harvest_event_guests(browser, event["id"]):
-                    counts["guests"] += 1
-                    if partiful.ingest_guest(header, event, guest, ref):
-                        counts["records"] += 1
+                try:
+                    for header, guest, ref in partiful.harvest_event_guests(browser, event["id"]):
+                        counts["guests"] += 1
+                        if partiful.ingest_guest(header, event, guest, ref):
+                            counts["records"] += 1
+                except ExtractError as e:
+                    # A hidden guest list (ticketed / public events) or a page that
+                    # never rendered: record it and walk the next event.
+                    counts["skipped"] += 1
+                    log.warning(
+                        "event skipped", platform="partiful", index=event["id"], reason=str(e)
+                    )
+                    continue
                 log.info(
                     "event walked", platform="partiful", index=counts["events"], reason=event["id"]
                 )
