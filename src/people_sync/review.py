@@ -61,7 +61,7 @@ def attach_proposal(group: dict, proposal: dict | None) -> None:
         else None
     )
     group["unresolved"] = {
-        field: [ref for ref in ids if ref not in assigned[field]]
+        field: [ref for ref in ids if ref not in assigned[field] and ref not in excluded]
         for field, ids in available.items()
     }
 

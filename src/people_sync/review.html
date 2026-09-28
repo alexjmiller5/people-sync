@@ -59,7 +59,9 @@ function defaultArrangement(g){
   for(const id of u.record_ids)clusters.push({label:nameOf(g,'r',id),reason:'Nothing connects this entry to another; proposed as a separate person.',uncertainty:null,person_ids:[],record_ids:[id]});
   return {proposal_id:g.proposal_id,clusters,ignored:[],changed:false};
 }
-function arrangementFor(g){const a=state.arrangements[g.key];return a&&a.proposal_id===g.proposal_id?a:defaultArrangement(g);}
+function arrangementFor(g){const a=state.arrangements[g.key];if(!(a&&a.proposal_id===g.proposal_id))return defaultArrangement(g);
+  const ex=new Set(g.excluded||[]);if(ex.size){a.clusters=a.clusters.map(c=>({...c,record_ids:c.record_ids.filter(id=>!ex.has(id))})).filter(c=>c.person_ids.length||c.record_ids.length);}
+  return a;}
 function saveArrangement(g,a){a.changed=true;a.clusters=a.clusters.filter(c=>c.person_ids.length||c.record_ids.length);state.arrangements[g.key]=a;const r=state.responses[g.key];if(r&&r.submitted&&r.proposal_id===g.proposal_id)(state.previous_responses[g.key]||=[]).push(r);if(r&&r.proposal_id===g.proposal_id)delete state.responses[g.key];save();render();}
 function takeItem(a,kind,id){for(const c of a.clusters){c.person_ids=c.person_ids.filter(x=>!(kind==='p'&&x===id));c.record_ids=c.record_ids.filter(x=>!(kind==='r'&&x===id));}a.ignored=a.ignored.filter(x=>!(x.kind===kind&&x.id===id));}
 function moveItem(kind,id,target){const g=group(),a=arrangementFor(g);takeItem(a,kind,id);
