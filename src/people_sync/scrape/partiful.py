@@ -476,28 +476,33 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
         rows = assign_sections(
             browser.eval(GUEST_ROWS_JS) or [], browser.eval(GUEST_COUNTS_JS) or {}
         )
-    ordinal = 0
-    failures = 0
-    for index, row in enumerate(rows):
-        if host_view:
-            entry = {
+    if host_view:
+        # The whole guest array is one observation: one retained capture per
+        # event (a 1,500-guest party is one upload, not 1,500).
+        entries = [
+            {
                 "event_id": event_id,
                 "name": row.get("name"),
                 "section": row.get("section"),
                 "plus_ones": row.get("plus_ones") or 0,
                 "uid": row.get("uid"),
             }
+            for row in rows
+        ]
+        if entries:
             page, key = snapshot.retain_list(
                 "partiful",
-                [entry],
-                ordinal=ordinal,
+                entries,
+                ordinal=0,
                 scope="event_guests",
                 expected_total=len(rows),
-                entry_start=index,
             )
-            ordinal += 1
-            yield header, page["entries"][0], snapshot.list_ref(page, key, 0)
-            continue
+            for i, entry in enumerate(page["entries"]):
+                yield header, entry, snapshot.list_ref(page, key, i)
+        return
+    ordinal = 0
+    failures = 0
+    for index, row in enumerate(rows):
         entry = {
             "event_id": event_id,
             "name": row.get("name"),
