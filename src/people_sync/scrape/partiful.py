@@ -548,46 +548,63 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
         time.sleep(random.uniform(*pause_s))
 
 
-def ingest_guest(header: dict, event: dict, guest: dict, ref: dict) -> str | None:
-    """Add this event to the guest's Partiful record (created if new), keeping the
-    record's other raw fields. Returns the record id, or None without a uid."""
+def ingest_guests(header: dict, event: dict, guests) -> list[str]:
+    """Add this event to each guest's Partiful record (created if new), keeping the
+    records' other raw fields: one SELECT for the existing rows and one batched
+    upsert (each `life` write costs seconds). `guests` is (guest, capture ref)
+    pairs; guests without a uid have no record. Returns the record ids written."""
     from people_sync import ledger, lifedata
 
-    uid = guest.get("uid")
-    if not uid:
-        return None
-    row_id = f"partiful:{uid}"
-    existing = lifedata.sql(
-        f"SELECT raw, name FROM people_sync_records WHERE id = {lifedata.sq(row_id)}"
-    )
-    raw = {}
-    if existing:
-        try:
-            raw = json.loads(existing[0]["raw"] or "{}")
-        except json.JSONDecodeError:
-            raw = {}
-    raw.setdefault("url", URL.format(handle=uid))
-    role = ROLES.get(guest.get("section") or "", "invited")
+    items = [(g, ref) for g, ref in guests if g.get("uid")]
+    if not items:
+        return []
+    ids = sorted({f"partiful:{g['uid']}" for g, _ in items})
+    existing = {}
+    for start in range(0, len(ids), 200):
+        chunk = ", ".join(lifedata.sq(i) for i in ids[start : start + 200])
+        for row in lifedata.sql(
+            f"SELECT id, raw, name FROM people_sync_records WHERE id IN ({chunk})"
+        ):
+            existing[row["id"]] = row
     year = None
     if header.get("when"):
         m = re.search(r"(\d{4})", header["when"])
         year = int(m.group(1)) if m else None
-    item = {
-        "id": event["id"],
-        "title": event.get("title") or header.get("title"),
-        "starts_at": parse_event_when(event.get("when"), year) or header.get("when"),
-        "role": role,
-        "capture_key": ref["capture_key"],
-    }
-    events = [e for e in raw.get("events", []) if e.get("id") != event["id"]] + [item]
-    raw["events"] = sorted(events, key=lambda e: str(e.get("starts_at") or ""))
-    record = ledger.Record(
-        "partiful",
-        uid,
-        uid,
-        (existing[0]["name"] if existing else None) or guest.get("name"),
-        raw,
-        capture_refs=(ref,),
-    )
-    ledger.upsert([record])
-    return row_id
+    records = []
+    for guest, ref in items:
+        uid = guest["uid"]
+        prior = existing.get(f"partiful:{uid}")
+        raw = {}
+        if prior:
+            try:
+                raw = json.loads(prior["raw"] or "{}")
+            except json.JSONDecodeError:
+                raw = {}
+        raw.setdefault("url", URL.format(handle=uid))
+        item = {
+            "id": event["id"],
+            "title": event.get("title") or header.get("title"),
+            "starts_at": parse_event_when(event.get("when"), year) or header.get("when"),
+            "role": ROLES.get(guest.get("section") or "", "invited"),
+            "capture_key": ref["capture_key"],
+        }
+        events = [e for e in raw.get("events", []) if e.get("id") != event["id"]] + [item]
+        raw["events"] = sorted(events, key=lambda e: str(e.get("starts_at") or ""))
+        records.append(
+            ledger.Record(
+                "partiful",
+                uid,
+                uid,
+                (prior["name"] if prior else None) or guest.get("name"),
+                raw,
+                capture_refs=(ref,),
+            )
+        )
+    ledger.upsert(records)
+    return [r.row_id for r in records]
+
+
+def ingest_guest(header: dict, event: dict, guest: dict, ref: dict) -> str | None:
+    """One-guest form of `ingest_guests`. Returns the record id, or None without a uid."""
+    ids = ingest_guests(header, event, [(guest, ref)])
+    return ids[0] if ids else None

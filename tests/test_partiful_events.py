@@ -80,7 +80,9 @@ def test_ingest_guest_adds_the_event_and_keeps_the_record(mocker):
     }
     sql = mocker.patch(
         "people_sync.lifedata.sql",
-        return_value=[{"raw": json.dumps(existing), "name": "Caroline Odia"}],
+        return_value=[
+            {"id": "partiful:abc123def", "raw": json.dumps(existing), "name": "Caroline Odia"}
+        ],
     )
     upsert = mocker.patch("people_sync.ledger.upsert")
     header = {"title": "💥ALEX 21ST BIRTHDAY RAVE💥", "when": "Saturday, Jan 25, 2025"}
@@ -282,3 +284,26 @@ def test_guest_role_comes_from_the_guest_section_not_the_event(mocker):
     partiful.ingest_guest(header, event, {"uid": "u1", "name": "Ada", "section": "Going"}, ref)
     [record] = upsert.call_args.args[0]
     assert record.raw["events"][0]["role"] == "went"
+
+
+def test_ingest_guests_batches_one_select_and_one_upsert(mocker):
+    sql = mocker.patch("people_sync.lifedata.sql", return_value=[])
+    upsert = mocker.patch("people_sync.ledger.upsert")
+    header = {"title": "Rave", "when": "Sat, Jan 25, 2026"}
+    event = {"id": "EV1", "title": "Rave", "status": "WENT"}
+    ref = {
+        "capture_key": "profiles/partiful/captures/x",
+        "scope": "event_guests",
+        "ordinal": 0,
+        "entry_ordinal": 0,
+    }
+    guests = [
+        ({"uid": "yLZHiv12FGcw23dNGrUvszlCS0o1", "name": "Ada", "section": "Went"}, ref),
+        ({"uid": None, "name": "Bo", "section": "Went"}, ref),
+        ({"uid": "eifKC28usbT7AsVgehxrdldVwB13", "name": "Cy", "section": "Maybe"}, ref),
+    ]
+    ids = partiful.ingest_guests(header, event, guests)
+    assert ids == ["partiful:yLZHiv12FGcw23dNGrUvszlCS0o1", "partiful:eifKC28usbT7AsVgehxrdldVwB13"]
+    assert sql.call_count == 1 and "IN (" in sql.call_args.args[0]
+    [records] = upsert.call_args.args
+    assert [r.raw["events"][0]["role"] for r in records] == ["went", "maybe"]
