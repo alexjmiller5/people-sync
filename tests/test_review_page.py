@@ -238,6 +238,10 @@ run('active=1;DATA.groups[1].proposal_id="changed"');
 assert.equal(run('arrangementFor(group()).clusters.length'), run('group().proposal.clusters.length')+2, 'each unresolved entry is its own proposed person');
 run("moveItem('r','person-1',0)");
 assert.equal(run("arrangementFor(group()).clusters[0].record_ids.includes('person-1')"), true, 'dragging a record into a group adds it there');
+run("group().excluded=['person-1']");
+assert.equal(run("arrangementFor(group()).clusters.some(c=>c.record_ids.includes('person-1'))"), false, 'an excluded record drops out of a saved arrangement');
+run("group().excluded=[]");
+run("moveItem('r','person-1',0)");
 assert.equal(run('arrangementFor(group()).changed'), true);
 run("mergeClusters(arrangementFor(group()).clusters.length-1,0)");
 assert.equal(run("arrangementFor(group()).clusters[0].person_ids.includes('person-2')"), true, 'dragging a group onto another combines them');
@@ -302,3 +306,11 @@ def test_round_trip_and_unsafe_images(tmp_path):
     for unsafe in ("https://remote.example/photo", "../secrets", "data:text/html,bad"):
         with pytest.raises(ValueError, match="photo path"):
             build_page([("Batch 2", source)], {"photos/records/example.jpg": unsafe})
+
+
+def test_excluded_records_never_become_unresolved(proposal_input):
+    batches, key, proposal = proposal_input
+    proposals = {key: {**proposal, "excluded": ["person-1"]}}
+    group = page_data(build_page(batches, {}, proposals))["groups"][0]
+    assert group["unresolved"] == {"person_ids": ["person-2"], "record_ids": []}
+    assert group["excluded"] == ["person-1"]
