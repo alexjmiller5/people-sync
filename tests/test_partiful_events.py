@@ -259,9 +259,15 @@ class _HostBrowser:
 
 def test_host_view_reads_uids_from_the_list_without_visiting_guests(retained, monkeypatch):
     monkeypatch.setattr(partiful.time, "sleep", lambda s: None)
+    real_retain, retains = snapshot.retain_list, []
+    monkeypatch.setattr(
+        snapshot, "retain_list", lambda *a, **k: retains.append(k) or real_retain(*a, **k)
+    )
     browser = _HostBrowser()
     out = list(partiful.harvest_event_guests(browser, "EV1"))
     assert browser.navigations == [partiful.EVENT_URL.format(event_id="EV1")]
+    assert len(retains) == 1 and retains[0]["expected_total"] == 3
+    assert [ref["entry_ordinal"] for _, _, ref in out] == [0, 1, 2]
     assert [(g["name"], g.get("uid"), g["section"], g["plus_ones"]) for _, g, _ in out] == [
         ("Ada", "yLZHiv12FGcw23dNGrUvszlCS0o1", "Going", 1),
         ("Bo", None, "Invited", 0),
