@@ -183,3 +183,25 @@ def test_host_view_role_mapping_and_js_parse():
     for js in (partiful.HOST_GUESTS_JS, partiful.HOST_PROFILE_JS, partiful.DIALOG_SCROLL_JS):
         subprocess.run(["node", "-e", "new Function(process.argv[1])", js], check=True)
     assert partiful.ROLES["Going"] == "went" and partiful.ROLES["Invited"] == "invited"
+
+
+def test_host_guest_array_is_found_without_a_relative_timestamp():
+    """Older events render absolute RSVP dates (4/11/2025), not '3 days ago'; the
+    guest array must still be reached from any leaf in the dialog."""
+    import json
+    import subprocess
+
+    stub = """
+    var fiber = {memoizedProps: {}, return: {memoizedProps: {itemData: [
+      {id: 'g1', name: 'Ada', status: 'GOING', count: 2}]}}};
+    function leaf(t){var e={children: [], innerText: t}; e['__reactFiber$1']=fiber; return e;}
+    var dialog = {innerText: 'Manage Guests', querySelectorAll: function(){return [leaf('Ada'), leaf('4/11/2025')]}};
+    var document = {querySelector: function(){return dialog}};
+    console.log(JSON.stringify(eval(process.argv[1])));
+    """
+    out = subprocess.run(
+        ["node", "-e", stub, partiful.HOST_GUESTS_JS], check=True, capture_output=True, text=True
+    )
+    assert json.loads(out.stdout) == [
+        {"name": "Ada", "guest_id": "g1", "status": "GOING", "count": 2}
+    ]
