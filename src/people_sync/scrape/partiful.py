@@ -319,33 +319,26 @@ GUEST_COUNTS_JS = (
     "var t=(d.innerText||'').split('\\n').map(function(s){return s.trim()}).filter(Boolean);"
     "var out={};for(var i=0;i+1<t.length;i++){if(/^(Going|Went|Maybe|Can't Go|Invited)$/.test(t[i])&&/^\\d+$/.test(t[i+1]))out[t[i]]=parseInt(t[i+1]);}return out;})()"
 )
-# Host view ("Manage Guests"): every row is a name leaf followed by a status leaf
-# and a time; a row click opens a detail panel whose "View profile" link holds
-# the guest's /u/<uid>.
-HOST_PROFILE_JS = (
-    "(function(){var a=[...document.querySelectorAll('a[href^=\"/u/\"]')].find(function(x){return /^view\\s+profile$/i.test((x.innerText||'').trim())});"
-    "return a?a.getAttribute('href').split('/u/')[1].split(/[?#]/)[0]:null;})()"
-)
 DIALOG_SCROLL_JS = (
     "(function(){var d=document.querySelector('[role=dialog]');if(!d)return 0;"
     "var els=[d].concat([...d.querySelectorAll('*')]).filter(function(e){return e.scrollHeight>e.clientHeight+20});"
     "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight});var s=els[0]||d;s.scrollTop=s.scrollHeight;"
     "return [...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()}).length;})()"
 )
-# The host dialog is a virtualized list; its React list component holds the
-# complete guest array (name, guest id, RSVP status, plus-ones), so the walk
-# reads that once and opens each guest's detail panel by URL. The array is
-# reached by walking up from any text leaf in the dialog: anchoring on a
-# "3 days ago" timestamp missed older events, which show absolute dates.
+# The host dialog ("Manage Guests") is a virtualized list; its React list
+# component holds the complete guest array (name, RSVP status, plus-ones and the
+# guest's profile uid), so the walk reads that once and never opens a guest. The
+# array is reached by walking up from any text leaf in the dialog: anchoring on
+# a "3 days ago" timestamp missed older events, which show absolute dates.
 HOST_GUESTS_JS = (
     "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
     "var leaves=[...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()});"
     "for(var j=0;j<leaves.length;j++){var fk=Object.keys(leaves[j]).find(function(k){return k.indexOf('__reactFiber')===0});var f=leaves[j][fk];"
     "for(var i=0;i<40&&f;i++){var p=f.memoizedProps;if(p&&Array.isArray(p.itemData)){"
-    "return p.itemData.map(function(g){return {name:g.name||null,guest_id:g.id||null,status:g.status||null,count:g.count||1}});}f=f.return;}}"
+    "return p.itemData.map(function(g){return {name:g.name||null,guest_id:g.id||null,status:g.status||null,count:g.count||1,uid:g.userId||null}});}f=f.return;}}"
     "return [];})()"
 )
-HOST_STATUS = {"GOING": "Going", "MAYBE": "Maybe", "INVITED": "Invited"}
+HOST_STATUS = {"GOING": "Going", "MAYBE": "Maybe", "INTERESTED": "Interested", "SENT": "Invited"}
 GUEST_PAUSE_S = (2.0, 4.0)
 
 
@@ -385,7 +378,13 @@ def assign_sections(rows: list[dict], counts: dict) -> list[dict]:
     return out
 
 
-ROLES = {"Went": "went", "Going": "went", "Maybe": "maybe", "Invited": "invited"}
+ROLES = {
+    "Went": "went",
+    "Going": "went",
+    "Maybe": "maybe",
+    "Interested": "interested",
+    "Invited": "invited",
+}
 
 
 def parse_event_when(text: str | None, year: int | None = None) -> str | None:
@@ -417,8 +416,9 @@ def harvest_events(browser):
 
 
 def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
-    """Yield (guest entry, capture ref) per guest of one event, click-walking each
-    row to its /u/<uid>. Guests without a profile keep their name only."""
+    """Yield (guest entry, capture ref) per guest of one event. A guest-view list
+    is click-walked row by row to its /u/<uid>; the host view's list data carries
+    the uid directly. Guests without a profile keep their name only."""
     browser.navigate(EVENT_URL.format(event_id=event_id), 12000)
     rendered = "!!document.title && document.body.innerText.length > 200"
     if not browser.wait_for(rendered, 20):
@@ -467,10 +467,10 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
                 "name": g.get("name"),
                 "section": HOST_STATUS[g["status"]],
                 "plus_ones": max(int(g.get("count") or 1) - 1, 0),
-                "guest_id": g.get("guest_id"),
+                "uid": g.get("uid"),
             }
             for g in (browser.eval(HOST_GUESTS_JS) or [])
-            if g.get("status") in HOST_STATUS and g.get("guest_id")
+            if g.get("status") in HOST_STATUS
         ]
     else:
         rows = assign_sections(
@@ -484,34 +484,9 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
                 "event_id": event_id,
                 "name": row.get("name"),
                 "section": row.get("section"),
-                "plus_ones": 0,
-                "uid": None,
+                "plus_ones": row.get("plus_ones") or 0,
+                "uid": row.get("uid"),
             }
-            entry["plus_ones"] = row.get("plus_ones") or 0
-            try:
-                url = EVENT_URL.format(event_id=event_id) + "?focus=guests&guest=" + row["guest_id"]
-                browser.navigate(url, 12000)
-                if browser.wait_for(
-                    "[...document.querySelectorAll('a[href^=\"/u/\"]')]"
-                    ".some(function(a){return /^view\\s+profile$/i.test((a.innerText||'').trim())})",
-                    15,
-                ):
-                    entry["uid"] = browser.eval(HOST_PROFILE_JS)
-                failures = 0
-            except Exception:
-                failures += 1
-                snapshot.retain_list(
-                    "partiful",
-                    [],
-                    ordinal=ordinal,
-                    scope="event_guests",
-                    reason="acquisition-failed",
-                )
-                ordinal += 1
-                if failures >= 3:
-                    raise ExtractError("list-acquisition-failed") from None
-                time.sleep(random.uniform(*pause_s))
-                continue
             page, key = snapshot.retain_list(
                 "partiful",
                 [entry],
@@ -522,7 +497,6 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
             )
             ordinal += 1
             yield header, page["entries"][0], snapshot.list_ref(page, key, 0)
-            time.sleep(random.uniform(*pause_s))
             continue
         entry = {
             "event_id": event_id,
@@ -593,8 +567,7 @@ def ingest_guest(header: dict, event: dict, guest: dict, ref: dict) -> str | Non
         except json.JSONDecodeError:
             raw = {}
     raw.setdefault("url", URL.format(handle=uid))
-    role = "hosted" if (event.get("status") or "").upper().startswith("HOSTING") else None
-    role = role or ROLES.get(guest.get("section") or "", "invited")
+    role = ROLES.get(guest.get("section") or "", "invited")
     year = None
     if header.get("when"):
         m = re.search(r"(\d{4})", header["when"])

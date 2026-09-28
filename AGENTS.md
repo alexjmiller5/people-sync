@@ -106,7 +106,9 @@ and followed users, excluding artist pages and checking the displayed totals). P
 records match a person only through the Instagram handle on their profile
 (`match.py`), never by name. `partiful-events` walks the user's past events
 (`harvest_events`, scope `events`) and each guest list (`harvest_event_guests`,
-scope `event_guests`: click each row, read `/u/<uid>`, back); `ingest_guest`
+scope `event_guests`: a guest-view list is click-walked row by row to `/u/<uid>`;
+the host view's "Manage Guests" list carries each guest's uid in its React
+list data, read once, no visits); `ingest_guest`
 merges the event into the record's `raw.events` (id, title, starts_at, role,
 capture_key) without touching its other fields, and `promote.event_ops` writes
 `person_events` rows for matched records with `evidence_of` edges to that
