@@ -269,22 +269,30 @@ def cmd_list(args: argparse.Namespace) -> None:
             counts = {"events": len(chosen), "guests": 0, "records": 0}
             counts["skipped"] = 0
             for event in chosen:
+                walked = []
                 try:
-                    for header, guest, ref in partiful.harvest_event_guests(browser, event["id"]):
-                        counts["guests"] += 1
-                        if partiful.ingest_guest(header, event, guest, ref):
-                            counts["records"] += 1
+                    for item in partiful.harvest_event_guests(browser, event["id"]):
+                        walked.append(item)
                 except ExtractError as e:
                     # A hidden guest list (ticketed / public events) or a page that
-                    # never rendered: record it and walk the next event.
+                    # never rendered: record it and walk the next event. Guests
+                    # walked before the failure are still ingested.
                     counts["skipped"] += 1
                     log.warning(
                         "event skipped", platform="partiful", index=event["id"], reason=str(e)
                     )
-                    continue
-                log.info(
-                    "event walked", platform="partiful", index=counts["events"], reason=event["id"]
-                )
+                else:
+                    log.info(
+                        "event walked",
+                        platform="partiful",
+                        index=counts["events"],
+                        reason=event["id"],
+                    )
+                counts["guests"] += len(walked)
+                if walked:
+                    header = walked[0][0]
+                    guests = [(guest, ref) for _, guest, ref in walked]
+                    counts["records"] += len(partiful.ingest_guests(header, event, guests))
             print(json.dumps(counts))
             return
         else:
