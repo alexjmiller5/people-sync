@@ -180,7 +180,7 @@ def test_guest_sections_follow_the_dialog_counts():
 def test_host_view_role_mapping_and_js_parse():
     import subprocess
 
-    for js in (partiful.HOST_GUESTS_JS, partiful.HOST_PROFILE_JS, partiful.DIALOG_SCROLL_JS):
+    for js in (partiful.HOST_GUESTS_JS, partiful.DIALOG_SCROLL_JS):
         subprocess.run(["node", "-e", "new Function(process.argv[1])", js], check=True)
     assert partiful.ROLES["Going"] == "went" and partiful.ROLES["Invited"] == "invited"
 
@@ -193,7 +193,7 @@ def test_host_guest_array_is_found_without_a_relative_timestamp():
 
     stub = """
     var fiber = {memoizedProps: {}, return: {memoizedProps: {itemData: [
-      {id: 'g1', name: 'Ada', status: 'GOING', count: 2}]}}};
+      {id: 'g1', name: 'Ada', status: 'GOING', count: 2, userId: 'u1'}]}}};
     function leaf(t){var e={children: [], innerText: t}; e['__reactFiber$1']=fiber; return e;}
     var dialog = {innerText: 'Manage Guests', querySelectorAll: function(){return [leaf('Ada'), leaf('4/11/2025')]}};
     var document = {querySelector: function(){return dialog}};
@@ -203,5 +203,82 @@ def test_host_guest_array_is_found_without_a_relative_timestamp():
         ["node", "-e", stub, partiful.HOST_GUESTS_JS], check=True, capture_output=True, text=True
     )
     assert json.loads(out.stdout) == [
-        {"name": "Ada", "guest_id": "g1", "status": "GOING", "count": 2}
+        {"name": "Ada", "guest_id": "g1", "status": "GOING", "count": 2, "uid": "u1"}
     ]
+
+
+class _HostBrowser:
+    """A host-view event page whose list data already carries each guest's uid."""
+
+    def __init__(self):
+        self.navigations = []
+
+    def navigate(self, url, timeout):
+        self.navigations.append(url)
+
+    def wait_for(self, js, seconds):
+        return True
+
+    def click(self, selector):
+        raise AssertionError("host view never clicks a row")
+
+    def eval(self, js):
+        if js == partiful.HOST_GUESTS_JS:
+            return [
+                {
+                    "name": "Ada",
+                    "guest_id": "g1",
+                    "status": "GOING",
+                    "count": 2,
+                    "uid": "yLZHiv12FGcw23dNGrUvszlCS0o1",
+                },
+                {"name": "Bo", "guest_id": "g2", "status": "SENT", "count": 1, "uid": None},
+                {
+                    "name": "Cy",
+                    "guest_id": "g3",
+                    "status": "INTERESTED",
+                    "count": 1,
+                    "uid": "eifKC28usbT7AsVgehxrdldVwB13",
+                },
+                {
+                    "name": "Di",
+                    "guest_id": "g4",
+                    "status": "DECLINED",
+                    "count": 1,
+                    "uid": "iUvno0JiaLhAWCLEiagA0EjK5VF3",
+                },
+            ]
+        if "Manage Guests" in js or "[role=dialog]" in js:
+            return True
+        if js == partiful.DIALOG_SCROLL_JS:
+            return 0
+        return None
+
+
+def test_host_view_reads_uids_from_the_list_without_visiting_guests(retained, monkeypatch):
+    monkeypatch.setattr(partiful.time, "sleep", lambda s: None)
+    browser = _HostBrowser()
+    out = list(partiful.harvest_event_guests(browser, "EV1"))
+    assert browser.navigations == [partiful.EVENT_URL.format(event_id="EV1")]
+    assert [(g["name"], g.get("uid"), g["section"], g["plus_ones"]) for _, g, _ in out] == [
+        ("Ada", "yLZHiv12FGcw23dNGrUvszlCS0o1", "Going", 1),
+        ("Bo", None, "Invited", 0),
+        ("Cy", "eifKC28usbT7AsVgehxrdldVwB13", "Interested", 0),
+    ]
+    assert partiful.ROLES["Interested"] == "interested"
+
+
+def test_guest_role_comes_from_the_guest_section_not_the_event(mocker):
+    mocker.patch("people_sync.lifedata.sql", return_value=[])
+    upsert = mocker.patch("people_sync.ledger.upsert")
+    header = {"title": "Rave", "when": "Sat, Jan 25, 2026"}
+    event = {"id": "EV1", "title": "Rave", "status": "HOSTING"}
+    ref = {
+        "capture_key": "profiles/partiful/captures/x",
+        "scope": "event_guests",
+        "ordinal": 0,
+        "entry_ordinal": 0,
+    }
+    partiful.ingest_guest(header, event, {"uid": "u1", "name": "Ada", "section": "Going"}, ref)
+    [record] = upsert.call_args.args[0]
+    assert record.raw["events"][0]["role"] == "went"
