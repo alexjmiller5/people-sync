@@ -251,6 +251,9 @@ the Partiful records as `raw.events` with the capture key; `promote` turns it
 into `person_events` rows once a record is linked to a person). Pass the
 chosen events to `propose --events` (`{record id: [titles]}`) so a lone
 Partiful mutual who was at one of them earns a box.
+`whatsapp-links --output PATH` (chat deep links for WhatsApp records whose number
+is in the local address book; pass the file to `review --links` so each WhatsApp
+card opens the chat in the desktop app for context).
 Venmo's friend inventory comes from its authenticated `/v1/users/<id>/friends`
 API with the session's bearer token held in memory only; payment
 counterparties are a separate, explicit request, deduplicated by account id

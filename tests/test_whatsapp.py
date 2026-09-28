@@ -365,3 +365,46 @@ def test_contact_lookup_bridges_apple_rows_to_google_records(mocker):
         "google_contacts:people/c9",
     ]
     assert lookup("0000000000") == []
+
+
+def test_chat_links_resolve_numbers_from_contact_pointers(mocker):
+    from people_sync import sources
+
+    mocker.patch.object(
+        sources,
+        "phone_index",
+        return_value={
+            "5550001111": [{"apple": "A1", "external": None, "number": "5550001111"}],
+            "5550002222": [{"apple": "A2", "external": None, "number": "445550002222"}],
+        },
+    )
+    mocker.patch(
+        "people_sync.lifedata.sql",
+        return_value=[
+            {
+                "id": "whatsapp:lid-1",
+                "raw": json.dumps(
+                    {"contact_refs": ["google_contacts:people/c1", "apple_contacts:A1"]}
+                ),
+            },
+            {"id": "whatsapp:lid-2", "raw": json.dumps({"contact_refs": ["apple_contacts:A2"]})},
+            {"id": "whatsapp:lid-3", "raw": json.dumps({"contact_refs": []})},
+        ],
+    )
+    assert whatsapp.chat_links() == {
+        "whatsapp:lid-1": "whatsapp://send?phone=15550001111",
+        "whatsapp:lid-2": "whatsapp://send?phone=445550002222",
+    }
+
+
+def test_cli_whatsapp_links_writes_a_private_file(tmp_path, mocker, capsys):
+    from people_sync import cli
+
+    mocker.patch.object(
+        whatsapp, "chat_links", return_value={"whatsapp:lid-1": "whatsapp://send?phone=15550001111"}
+    )
+    out = tmp_path / "links" / "whatsapp-links.json"
+    cli.main(["whatsapp-links", "--output", str(out)])
+    assert json.loads(out.read_text()) == {"whatsapp:lid-1": "whatsapp://send?phone=15550001111"}
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    assert "1" in capsys.readouterr().out

@@ -202,6 +202,10 @@ ingest each phone-form JID's digits are looked up in the local address book
 id, `sources.google_contact_ids`); the matching contacts' ledger ids are kept
 as `contact_refs` (typed `contact-ref`, optional in older captures) and the
 number is used in memory only. `--no-contacts` skips the lookup.
+`people-sync whatsapp-links --output PATH` walks those pointers back through the
+local address book and writes `{record id: whatsapp://send?phone=...}` to a 0600
+file for `review --links`; the number is read in memory and lands only in that
+private file and the private page, never in the estate.
 
 ## Logins
 

@@ -291,8 +291,8 @@ def test_phone_index_and_google_contact_ids(mocker):
     mocker.patch.object(sources, "_run", return_value=json.dumps(rows))
     index = sources.phone_index()
     assert index == {
-        "5550001111": [{"apple": rows[0]["id"], "external": "abc123"}],
-        "5550002222": [{"apple": rows[1]["id"], "external": None}],
+        "5550001111": [{"apple": rows[0]["id"], "external": "abc123", "number": "15550001111"}],
+        "5550002222": [{"apple": rows[1]["id"], "external": None, "number": "5550002222"}],
     }
     mocker.patch.object(
         sources.lifedata,

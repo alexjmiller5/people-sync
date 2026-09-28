@@ -191,7 +191,7 @@ const legacyKey = 'people-review:v1:' + JSON.parse(data).snapshot_id;
 const legacy = ' {"decisions":{"pair":{"choice":"unsure"}},"notes":{"old":"Keep text"},"reviewed":{}} ';
 items.set(legacyKey, legacy);
 function boot() {
-  const context = vm.createContext({Date, console, document: {getElementById: id => nodes[id] ||= {value: ''}},
+  const context = vm.createContext({Date, console, URL, document: {getElementById: id => nodes[id] ||= {value: ''}, createElement: () => ({})},
     localStorage: {getItem: k => items.get(k) ?? null, setItem: (k,v) => items.set(k,v)},
     window: {scrollTo() {}}});
   vm.runInContext(code + '\nrender=()=>{};renderGroups=()=>{};updateStatus=()=>{};focusGroup=()=>{};', context);
@@ -238,6 +238,8 @@ run('active=1;DATA.groups[1].proposal_id="changed"');
 assert.equal(run('arrangementFor(group()).clusters.length'), run('group().proposal.clusters.length')+2, 'each unresolved entry is its own proposed person');
 run("moveItem('r','person-1',0)");
 assert.equal(run("arrangementFor(group()).clusters[0].record_ids.includes('person-1')"), true, 'dragging a record into a group adds it there');
+assert.equal(run("link('x','whatsapp://send?phone=15550001111')!==null"), true, 'a WhatsApp deep link is allowed');
+assert.equal(run("link('x','javascript:alert(1)')"), null, 'other schemes stay blocked');
 run("group().excluded=['person-1']");
 assert.equal(run("arrangementFor(group()).clusters.some(c=>c.record_ids.includes('person-1'))"), false, 'an excluded record drops out of a saved arrangement');
 run("group().excluded=[]");
@@ -314,3 +316,18 @@ def test_excluded_records_never_become_unresolved(proposal_input):
     group = page_data(build_page(batches, {}, proposals))["groups"][0]
     assert group["unresolved"] == {"person_ids": ["person-2"], "record_ids": []}
     assert group["excluded"] == ["person-1"]
+
+
+def test_links_set_profile_urls_without_touching_the_snapshot(proposal_input):
+    batches, key, proposal = proposal_input
+    plain = page_data(build_page(batches, {}))
+    linked = page_data(
+        build_page(batches, {}, links={"instagram:1": "whatsapp://send?phone=15550001111"})
+    )
+    assert linked["snapshot_id"] == plain["snapshot_id"]
+    urls = [
+        p["profile_url"] for p in linked["groups"][0]["profiles"] if p["record_id"] == "instagram:1"
+    ]
+    assert urls == ["whatsapp://send?phone=15550001111"] * 2
+    with pytest.raises(ValueError):
+        build_page(batches, {}, links={"instagram:1": "javascript:alert(1)"})

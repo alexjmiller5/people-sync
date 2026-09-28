@@ -453,8 +453,9 @@ FROM ZABCDPHONENUMBER p JOIN ZABCDRECORD r ON r.Z_PK = p.ZOWNER
 
 
 def phone_index() -> dict[str, list[dict]]:
-    """Local lookup only, never persisted: last ten digits -> [{apple id, external id}].
-    The external id of a CardDAV-synced contact is the Google contact's own id."""
+    """Local lookup only, never persisted: last ten digits -> [{apple id, external id,
+    number (all digits)}]. The external id of a CardDAV-synced contact is the Google
+    contact's own id."""
     index: dict[str, list[dict]] = {}
     for path in _db_paths():
         try:
@@ -463,10 +464,11 @@ def phone_index() -> dict[str, list[dict]]:
         except (RuntimeError, ValueError, TypeError, OSError):
             continue
         for row in rows:
-            digits = re.sub(r"\D", "", str(row.get("number") or ""))[-10:]
+            number = re.sub(r"\D", "", str(row.get("number") or ""))
+            digits = number[-10:]
             if len(digits) >= 7 and row.get("id"):
                 index.setdefault(digits, []).append(
-                    {"apple": row["id"], "external": row.get("external") or None}
+                    {"apple": row["id"], "external": row.get("external") or None, "number": number}
                 )
     return index
 
