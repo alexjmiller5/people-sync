@@ -66,9 +66,18 @@ def attach_proposal(group: dict, proposal: dict | None) -> None:
     }
 
 
+_LINK_SCHEMES = ("http://", "https://", "whatsapp://")
+
+
 def build_page(
-    batches: list[tuple[str, Path]], photos: dict[str, str], proposals: dict | None = None
+    batches: list[tuple[str, Path]],
+    photos: dict[str, str],
+    proposals: dict | None = None,
+    links: dict | None = None,
 ) -> str:
+    """`links`: {record id: url} opened from that record's card (a WhatsApp chat deep
+    link, for instance). Applied after the snapshot digest, like proposals, so saved
+    answers survive."""
     groups = []
     for batch, path in batches:
         for name, group in json.loads(Path(path).read_text()).items():
@@ -97,6 +106,13 @@ def build_page(
         if group["key"] in proposals and not isinstance(proposals[group["key"]], dict):
             raise ValueError("Proposal must be an object")
         attach_proposal(group, proposals.get(group["key"]))
+        for profile in group["profiles"]:
+            url = (links or {}).get(profile.get("record_id"))
+            if url is None:
+                continue
+            if not isinstance(url, str) or not url.startswith(_LINK_SCHEMES):
+                raise ValueError("Unsafe link scheme")
+            profile["profile_url"] = url
     data = {"snapshot_id": snapshot, "groups": groups, "photos": photos}
     encoded = (
         json.dumps(data, ensure_ascii=False)
@@ -114,12 +130,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--photos", type=Path, required=True)
     parser.add_argument("--proposals", type=Path)
+    parser.add_argument(
+        "--links", type=Path, help="{record id: url} JSON, e.g. from whatsapp-links"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     page = build_page(
         args.batch,
         json.loads(args.photos.read_text()),
         json.loads(args.proposals.read_text()) if args.proposals else None,
+        json.loads(args.links.read_text()) if args.links else None,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.write_text(page)

@@ -157,6 +157,50 @@ def contact_lookup():
     return lookup
 
 
+def chat_links() -> dict[str, str]:
+    """{WhatsApp record id: whatsapp://send?phone=<number>} for chats whose number is
+    in the local address book, reached through the contact pointers kept at ingest.
+    Numbers are read in memory only; the caller writes the result to a private file
+    for the review page, never to the estate."""
+    from people_sync import lifedata
+
+    numbers = {}
+    for hits in sources.phone_index().values():
+        for hit in hits:
+            numbers.setdefault(f"apple_contacts:{hit['apple']}", hit["number"])
+    out = {}
+    for row in lifedata.sql(
+        "SELECT id, raw FROM people_sync_records WHERE source = 'whatsapp' AND deleted_at IS NULL"
+    ):
+        try:
+            refs = json.loads(row.get("raw") or "{}").get("contact_refs") or []
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        number = next((numbers[r] for r in refs if r in numbers), None)
+        if number:
+            # ponytail: a bare 10-digit number is assumed US (+1); others pass through
+            out[row["id"]] = "whatsapp://send?phone=" + (
+                "1" + number if len(number) == 10 else number
+            )
+    return out
+
+
+def cli_links(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="people-sync whatsapp-links",
+        description="Write {record id: whatsapp:// deep link} for the review page (private file).",
+    )
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    links = chat_links()
+    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    args.output.write_text(json.dumps(links, indent=0))
+    args.output.chmod(0o600)
+    print(f"WhatsApp links written: {args.output} ({len(links)} chats)")
+
+
 def _digits(jid: str) -> str:
     return re.sub(r"\D", "", jid.split("@")[0])[-10:]
 

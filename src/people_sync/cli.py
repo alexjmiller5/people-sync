@@ -478,6 +478,7 @@ DELEGATES = {
     "google-cleanup": (google_cleanup.cli, "clear Google labels/org fields already consolidated"),
     "review": (review.main, "render a private photo-assisted review page"),
     "propose": (propose.main, "propose identity clusters for the review page"),
+    "whatsapp-links": (whatsapp.cli_links, "deep links to WhatsApp chats for the review page"),
 }
 
 
