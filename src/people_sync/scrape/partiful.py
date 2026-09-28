@@ -334,13 +334,15 @@ DIALOG_SCROLL_JS = (
 )
 # The host dialog is a virtualized list; its React list component holds the
 # complete guest array (name, guest id, RSVP status, plus-ones), so the walk
-# reads that once and opens each guest's detail panel by URL.
+# reads that once and opens each guest's detail panel by URL. The array is
+# reached by walking up from any text leaf in the dialog: anchoring on a
+# "3 days ago" timestamp missed older events, which show absolute dates.
 HOST_GUESTS_JS = (
     "(function(){var d=document.querySelector('[role=dialog]');if(!d)return null;"
-    "var leaf=[...d.querySelectorAll('*')].find(function(e){return !e.children.length&&/ago$/.test((e.innerText||'').trim())});"
-    "if(!leaf)return [];var fk=Object.keys(leaf).find(function(k){return k.indexOf('__reactFiber')===0});var f=leaf[fk];"
+    "var leaves=[...d.querySelectorAll('*')].filter(function(e){return !e.children.length&&(e.innerText||'').trim()});"
+    "for(var j=0;j<leaves.length;j++){var fk=Object.keys(leaves[j]).find(function(k){return k.indexOf('__reactFiber')===0});var f=leaves[j][fk];"
     "for(var i=0;i<40&&f;i++){var p=f.memoizedProps;if(p&&Array.isArray(p.itemData)){"
-    "return p.itemData.map(function(g){return {name:g.name||null,guest_id:g.id||null,status:g.status||null,count:g.count||1}});}f=f.return;}"
+    "return p.itemData.map(function(g){return {name:g.name||null,guest_id:g.id||null,status:g.status||null,count:g.count||1}});}f=f.return;}}"
     "return [];})()"
 )
 HOST_STATUS = {"GOING": "Going", "MAYBE": "Maybe", "INVITED": "Invited"}
