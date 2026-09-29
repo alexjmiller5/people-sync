@@ -251,6 +251,8 @@ the Partiful records as `raw.events` with the capture key; `promote` turns it
 into `person_events` rows once a record is linked to a person). Pass the
 chosen events to `propose --events` (`{record id: [titles]}`) so a lone
 Partiful mutual who was at one of them earns a box.
+`unfollow` (ignored accounts the user still follows, per platform with URLs; the
+report's Unfollow line; re-ingesting an export clears the ones already done).
 `whatsapp-links --output PATH` (chat deep links for WhatsApp records whose number
 is in the local address book; pass the file to `review --links` so each WhatsApp
 card opens the chat in the desktop app for context).
