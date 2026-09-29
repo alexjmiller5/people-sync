@@ -771,3 +771,26 @@ def test_create_adds_the_given_circles(env):
     )
     row = insert.call_args_list[0].args[1][0]
     assert json.loads(row["circles"]) == ["Through Fyn"]
+
+
+def test_ignore_marks_pending_records_and_refuses_matched_ones(env, capsys):
+    rows = {
+        "instagram:a": {
+            "id": "instagram:a",
+            "source": "instagram",
+            "status": "pending",
+            "person_id": None,
+        },
+        "venmo:b": {"id": "venmo:b", "source": "venmo", "status": "matched", "person_id": "p9"},
+    }
+    queries = []
+
+    def sql(query):
+        queries.append(query)
+        return [r for i, r in rows.items() if i in query] if query.startswith("SELECT") else []
+
+    env.patch("people_sync.lifedata.sql", side_effect=sql)
+    reconcile.main(["ignore", "instagram:a", "venmo:b", "--apply"])
+    updates = [q for q in queries if q.startswith("UPDATE")]
+    assert len(updates) == 1 and "'ignored'" in updates[0] and "instagram:a" in updates[0]
+    assert "venmo:b" in capsys.readouterr().out

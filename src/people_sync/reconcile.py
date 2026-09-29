@@ -609,6 +609,20 @@ def create(record_id: str, ops: Ops, name: str | None = None, circles: list[str]
     print(person_id)
 
 
+def ignore(record_ids: list[str], ops: Ops) -> None:
+    """Mark records as not someone the user knows. They leave the triage queue and
+    show up in `people-sync unfollow`. A matched record is refused: unlinking an
+    account from a person is a different decision."""
+    for record_id in record_ids:
+        record = _record(record_id)
+        if record["status"] == "matched":
+            print(f"{record_id} is matched to {record['person_id']} - not ignored")
+            continue
+        ops.sql(
+            f"UPDATE people_sync_records SET status = 'ignored' WHERE id = {lifedata.sq(record_id)}"
+        )
+
+
 # --- cli ----------------------------------------------------------------------
 
 
@@ -648,6 +662,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="add a circle (repeatable), e.g. 'Through Ada'",
     )
+    ignore_p = sub.add_parser(
+        "ignore", parents=[flags], help="mark pending records as not someone the user knows"
+    )
+    ignore_p.add_argument("record_ids", nargs="+")
     return parser
 
 
@@ -658,6 +676,8 @@ def main(argv: list[str] | None = None) -> None:
         link(args.person_id, args.record_id, args.rename, ops, args.name)
     elif args.command == "merge":
         merge(args.survivor_id, args.loser_id, ops)
+    elif args.command == "ignore":
+        ignore(args.record_ids, ops)
     else:
         create(args.record_id, ops, args.name, args.circle)
 
