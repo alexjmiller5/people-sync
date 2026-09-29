@@ -366,7 +366,10 @@ as `CONFLICT birthday` and dropped, circles are only ever unioned, and a merge
 appends every conflicting loser scalar as `merged from ...`. Label and org
 strings become circles verbatim (`CIRCLE_ALIASES` holds the one exception).
 
-`merge` never writes to Notion. It queries the People-related Notion DBs
+`merge` re-points every other cataloged life-data column that references people
+(`catalog_properties.ref_table = 'people'`: quotes, gift recipients, split
+counterparties) before the loser is soft-deleted; estate rules refuse the delete
+while a live row still points at it. `merge` never writes to Notion. It queries the People-related Notion DBs
 (`NOTION_PEOPLE_RELATIONS`) for pages still pointing at the loser page and
 prints them for a manual re-point; without `NOTION_API_TOKEN` it warns and
 skips that check.
