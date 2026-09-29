@@ -353,7 +353,9 @@ id.
 
 The three moves a `people-review` triage session repeats: `link` a pending
 Google record onto an existing person, `merge` two people rows, `create` a
-person from a Google record. Dry run is the default and prints every statement;
+person from a Google record. `ignore` marks pending records as not someone
+the user knows (they then appear in `people-sync unfollow`); `create --circle`
+adds circles such as `Through <person>`. Dry run is the default and prints every statement;
 `--apply` executes.
 
 They are LOSSLESS by construction, which is the property to preserve when
