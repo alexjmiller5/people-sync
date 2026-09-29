@@ -11,7 +11,7 @@ def _rows():
             "name": None,
             "handle": "a",
             "i_follow": 1,
-            "url": "https://www.instagram.com/a/",
+            "url": None,
         },
         {
             "id": "instagram:b",
@@ -42,7 +42,9 @@ def _rows():
 
 def test_pending_keeps_only_followed_accounts_on_follow_platforms(mocker):
     sql = mocker.patch("people_sync.lifedata.sql", return_value=_rows())
-    assert [r["id"] for r in unfollow.pending()] == ["instagram:a", "linkedin:c"]
+    rows = unfollow.pending()
+    assert [r["id"] for r in rows] == ["instagram:a", "linkedin:c"]
+    assert rows[0]["url"] == "https://www.instagram.com/a/"
     assert "status = 'ignored'" in sql.call_args.args[0]
 
 
