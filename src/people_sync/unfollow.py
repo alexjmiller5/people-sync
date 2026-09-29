@@ -9,6 +9,11 @@ import json
 from people_sync import lifedata
 
 FOLLOW_PLATFORMS = ("instagram", "facebook", "linkedin", "snapchat", "venmo", "spotify", "strava")
+# Export-only sources keep no profile URL in `raw`; their handle is the URL.
+URL_FROM_HANDLE = {
+    "instagram": "https://www.instagram.com/{handle}/",
+    "linkedin": "https://www.linkedin.com/in/{handle}",
+}
 
 
 def pending() -> list[dict]:
@@ -17,7 +22,14 @@ def pending() -> list[dict]:
         "FROM people_sync_records WHERE status = 'ignored' AND deleted_at IS NULL "
         "ORDER BY source, name, handle"
     )
-    return [r for r in rows if r["source"] in FOLLOW_PLATFORMS and r.get("i_follow") != 0]
+    out = []
+    for r in rows:
+        if r["source"] not in FOLLOW_PLATFORMS or r.get("i_follow") == 0:
+            continue
+        if not r.get("url") and r.get("handle") and r["source"] in URL_FROM_HANDLE:
+            r["url"] = URL_FROM_HANDLE[r["source"]].format(handle=r["handle"])
+        out.append(r)
+    return out
 
 
 def main(argv: list[str] | None = None) -> None:
