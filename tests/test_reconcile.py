@@ -751,3 +751,23 @@ def test_corrected_spelling_is_a_note_not_a_nickname(env):
     assert reconcile._spelling_variant("Nora Fakeington", "Nora Fakington")
     assert not reconcile._spelling_variant("Dana", "Dana Example")
     assert not reconcile._spelling_variant("Mara Stone", "Mara Field")
+
+
+def test_create_adds_the_given_circles(env):
+    record = {
+        "id": "venmo:1",
+        "source": "venmo",
+        "source_id": "1",
+        "handle": "jt",
+        "name": "Joe Example",
+        "raw": "{}",
+        "status": "pending",
+        "person_id": None,
+    }
+    sql, insert = _generic_env(env, _person(id="x"), record)
+    env.patch("people_sync.reconcile.notion_people.create_stub", return_value="aaaa-bbbb")
+    reconcile.main(
+        ["create", "venmo:1", "--name", "Joe Example", "--circle", "Through Sam", "--apply"]
+    )
+    row = insert.call_args_list[0].args[1][0]
+    assert json.loads(row["circles"]) == ["Through Sam"]

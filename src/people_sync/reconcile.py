@@ -557,7 +557,9 @@ def _merge_relations(survivor_id: str, loser_id: str, ops: Ops) -> None:
 # --- create -------------------------------------------------------------------
 
 
-def create(record_id: str, ops: Ops, name: str | None = None) -> None:
+def create(record_id: str, ops: Ops, name: str | None = None, circles: list[str] = ()) -> None:
+    """`circles`: added to whatever the record contributes (a Google label, an org),
+    e.g. the "Through <person>" label for someone known via a friend."""
     record = _record(record_id)
     if record["status"] == "matched":
         print(f"{record_id} is already matched to {record['person_id']} - nothing to do")
@@ -577,6 +579,9 @@ def create(record_id: str, ops: Ops, name: str | None = None) -> None:
             row.update(_split_name(name))
     else:
         row = {"name": name, **_split_name(name or "")}
+    if circles:
+        merged = union_circles(json.loads(row.get("circles") or "[]"), list(circles))
+        row["circles"] = json.dumps(merged)
     if not name:
         sys.exit(f"record {record_id} has no display name to create a person from; pass --name")
     if not ops.apply:
@@ -637,6 +642,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create_p.add_argument("record_id")
     create_p.add_argument("--name", help="full name (required for non-Google records)")
+    create_p.add_argument(
+        "--circle",
+        action="append",
+        default=[],
+        help="add a circle (repeatable), e.g. 'Through Ada'",
+    )
     return parser
 
 
@@ -648,7 +659,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "merge":
         merge(args.survivor_id, args.loser_id, ops)
     else:
-        create(args.record_id, ops, args.name)
+        create(args.record_id, ops, args.name, args.circle)
 
 
 if __name__ == "__main__":
