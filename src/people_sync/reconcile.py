@@ -481,10 +481,49 @@ def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
             f"WHERE {col} = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
         )
     _merge_relations(survivor_id, loser_id, ops)
+    _merge_foreign_refs(survivor_id, loser_id, ops)
     ops.sql(
         f"UPDATE people SET deleted_at = {lifedata.sq(lifedata.now_iso())} "
         f"WHERE id = {lifedata.sq(loser_id)}"
     )
+
+
+def _merge_foreign_refs(survivor_id: str, loser_id: str, ops: Ops) -> None:
+    """Re-point every other cataloged column that references people (quotes, gift
+    recipients, split counterparties, ...). The estate names them in its catalog,
+    so nothing here knows a table by name; an estate without a catalog has none."""
+    own = {*MERGE_DEDUPE_KEYS, "people_sync_records", "person_relations", "people"}
+    try:
+        columns = lifedata.sql(
+            "SELECT tbl, col, type FROM catalog_properties WHERE ref_table = 'people' "
+            "AND type IN ('ref', 'multi_ref') AND deleted_at IS NULL"
+        )
+    except Exception:
+        return
+    for column in columns:
+        table, col = column["tbl"], column["col"]
+        if table in own:
+            continue
+        if column["type"] == "ref":
+            ops.sql(
+                f"UPDATE {table} SET {col} = {lifedata.sq(survivor_id)} "
+                f"WHERE {col} = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
+            )
+            continue
+        rows = lifedata.sql(
+            f"SELECT id, {col} FROM {table} WHERE {col} LIKE {lifedata.sq('%' + loser_id + '%')} "
+            "AND deleted_at IS NULL"
+        )
+        for row in rows:
+            try:
+                ids = json.loads(row[col] or "[]")
+            except json.JSONDecodeError:
+                continue
+            merged = union_circles([], [survivor_id if i == loser_id else i for i in ids])
+            ops.sql(
+                f"UPDATE {table} SET {col} = {lifedata.sq(json.dumps(merged))} "
+                f"WHERE id = {lifedata.sq(row['id'])}"
+            )
 
 
 def _soft_delete(ops: Ops, table: str, row_id: str, why: str) -> None:

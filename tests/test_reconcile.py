@@ -794,3 +794,34 @@ def test_ignore_marks_pending_records_and_refuses_matched_ones(env, capsys):
     updates = [q for q in queries if q.startswith("UPDATE")]
     assert len(updates) == 1 and "'ignored'" in updates[0] and "instagram:a" in updates[0]
     assert "venmo:b" in capsys.readouterr().out
+
+
+def test_merge_repoints_every_cataloged_reference_to_people(env):
+    queries = []
+
+    def sql(query):
+        queries.append(query)
+        if "FROM catalog_properties" in query:
+            return [
+                {"tbl": "quotes", "col": "person_ids", "type": "multi_ref"},
+                {"tbl": "splits", "col": "counterparty", "type": "ref"},
+                {"tbl": "person_accounts", "col": "person_id", "type": "ref"},
+            ]
+        if query.startswith("SELECT id, person_ids FROM quotes"):
+            return [
+                {"id": "q1", "person_ids": json.dumps(["loser"])},
+                {"id": "q2", "person_ids": json.dumps(["survivor", "loser", "other"])},
+            ]
+        return []
+
+    env.patch("people_sync.lifedata.sql", side_effect=sql)
+    reconcile._merge_foreign_refs("survivor", "loser", reconcile.Ops(True))
+    updates = [q for q in queries if q.startswith("UPDATE")]
+    assert any(
+        "UPDATE splits SET counterparty = 'survivor'" in q and "'loser'" in q for q in updates
+    )
+    assert any("UPDATE quotes" in q and "'q1'" in q and '["survivor"]' in q for q in updates)
+    assert any("'q2'" in q and '["survivor", "other"]' in q for q in updates)
+    assert not any(
+        "person_accounts" in q for q in updates
+    )  # merge already re-points its own tables
