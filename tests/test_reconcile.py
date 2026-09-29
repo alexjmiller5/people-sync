@@ -790,10 +790,17 @@ def test_ignore_marks_pending_records_and_refuses_matched_ones(env, capsys):
         return [r for i, r in rows.items() if i in query] if query.startswith("SELECT") else []
 
     env.patch("people_sync.lifedata.sql", side_effect=sql)
-    reconcile.main(["ignore", "instagram:a", "venmo:b", "--apply"])
+    rows["strava:c"] = {
+        "id": "strava:c",
+        "source": "strava",
+        "status": "ignored",
+        "person_id": None,
+    }
+    reconcile.main(["ignore", "instagram:a", "venmo:b", "strava:c", "--apply"])
     updates = [q for q in queries if q.startswith("UPDATE")]
     assert len(updates) == 1 and "'ignored'" in updates[0] and "instagram:a" in updates[0]
-    assert "venmo:b" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "venmo:b" in out and "strava:c is already ignored" in out
 
 
 def test_merge_repoints_every_cataloged_reference_to_people(env):

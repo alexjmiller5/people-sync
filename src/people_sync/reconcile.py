@@ -653,7 +653,12 @@ def ignore(record_ids: list[str], ops: Ops) -> None:
     show up in `people-sync unfollow`. A matched record is refused: unlinking an
     account from a person is a different decision."""
     for record_id in record_ids:
-        record = _record(record_id)
+        record = _one(f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)}")
+        if not record:
+            sys.exit(f"no contact record {record_id}")
+        if record["status"] == "ignored":
+            print(f"{record_id} is already ignored")
+            continue
         if record["status"] == "matched":
             print(f"{record_id} is matched to {record['person_id']} - not ignored")
             continue
