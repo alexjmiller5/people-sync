@@ -373,6 +373,14 @@ Scripts are importable by their bare module name (`pyproject`'s pytest
 `pythonpath` and ruff `src` both include `scripts`), which is what lets
 `reconcile.py` reuse `google_cleanup.user_groups` and lets tests import it.
 
+## Unfollow list (`people-sync unfollow`)
+
+A record the user drags to the review page's ignore zone ("I don't know them")
+lands in the ledger as `status = 'ignored'`. `unfollow.py` lists the ignored
+records on follow platforms whose `i_follow` is not 0, with profile URLs, as the
+to-do list for unfollowing; a later export that shows `i_follow = 0` drops the
+row without any further bookkeeping.
+
 ## Platform vocabulary
 
 `instagram`, `facebook`, `snapchat`, `linkedin`, `google_contacts`,

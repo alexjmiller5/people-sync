@@ -12,7 +12,16 @@ import structlog
 from pathlib import Path
 
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
-from people_sync import captures, google_cleanup, propose, reconcile, replay, review, whatsapp
+from people_sync import (
+    captures,
+    google_cleanup,
+    propose,
+    reconcile,
+    replay,
+    review,
+    unfollow,
+    whatsapp,
+)
 from people_sync.scrape import cdp
 from people_sync.scrape.profile import ExtractError
 
@@ -479,6 +488,7 @@ DELEGATES = {
     "review": (review.main, "render a private photo-assisted review page"),
     "propose": (propose.main, "propose identity clusters for the review page"),
     "whatsapp-links": (whatsapp.cli_links, "deep links to WhatsApp chats for the review page"),
+    "unfollow": (unfollow.main, "ignored accounts still followed: the unfollow to-do list"),
 }
 
 
