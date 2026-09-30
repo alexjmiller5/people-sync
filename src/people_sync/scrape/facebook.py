@@ -59,10 +59,14 @@ EXTRACTOR_JS = (
     'var main=document.querySelector("[role=main]")||document.body;'
     'var t=main.innerText.split("\\n").map(function(s){return s.trim()}).filter(Boolean);'
     'if(!t.length)return JSON.stringify({error:"no-main",title:document.title});'
-    "var ci=-1;for(var q=0;q<t.length;q++){if(/^[\\d,.K]+ friends( \u2022 [\\d,]+ mutual)?$|^[\\d,]+ mutual friends?$/.test(t[q])){ci=q;break}}"
-    "var name=ci>0?t[ci-1]:null;"
-    'if(!name){var h1=[].slice.call(document.querySelectorAll("h1")).map(function(e){return e.innerText.trim()})'
-    ".filter(function(x){return x&&!/^(Notifications|Facebook)$/.test(x)});name=h1[0]||null}"
+    # The header h1 first; then the line above the profile's own "N friends" line;
+    # only then the line above an "N mutual friends" line - that pattern also sits
+    # under every entry of the friends box, so used first it names the first friend.
+    'var h1=[].slice.call(document.querySelectorAll("h1")).map(function(e){return e.innerText.trim()})'
+    ".filter(function(x){return x&&!/^(Notifications|Facebook)$/.test(x)&&!/friends|mutual/i.test(x)});"
+    "var name=h1[0]||null;var ci=-1;"
+    "if(!name){for(var q=0;q<t.length;q++){if(/^[\\d,.K]+ friends( \u2022 [\\d,]+ mutual)?$/.test(t[q])){ci=q;break}}name=ci>0?t[ci-1]:null}"
+    "if(!name){for(var q=0;q<t.length;q++){if(/^[\\d,]+ mutual friends?$/.test(t[q])){ci=q;break}}name=ci>0?t[ci-1]:null}"
     "var f=function(re){return t.filter(function(x){return re.test(x)})};"
     "var first=function(re){return f(re)[0]||null};"
     "var counts=first(/\\bfriends\\b.*mutual|^[\\d,.K]+ friends$/);"
