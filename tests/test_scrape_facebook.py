@@ -149,7 +149,31 @@ def test_extractor_js_reports_a_missing_profile_as_unavailable():
     assert 'error:"unavailable"' in mod.EXTRACTOR_JS
 
 
-def test_extractor_reads_the_name_from_the_line_above_the_friend_counts():
-    """The 2026-09 layout has no h1 for the name; it is the text line right
-    above "457 friends • 179 mutual"."""
-    assert "friends" in facebook.EXTRACTOR_JS and "t[ci-1]" in facebook.EXTRACTOR_JS
+def test_extractor_takes_the_header_h1_before_any_friend_box_heuristic():
+    """A profile whose friends box reads "469 (68 mutual)" has no "N friends" line, so
+    the line-above-the-counts heuristic used to land on the FIRST FRIEND's name."""
+    import json
+    import subprocess
+
+    lines = [
+        "Dylan Example",
+        "Friends",
+        "See all friends",
+        "469 (68 mutual)",
+        "Clara Friend",
+        "184 mutual friends",
+        "Kieran Other",
+        "49 mutual friends",
+    ]
+    stub = """
+    var window = {location: {pathname: "/dylan.example.585", search: ""}};
+    var main = {innerText: %s.join("\\n")};
+    var document = {body: {innerText: main.innerText}, title: "x",
+      querySelector: function(){return main},
+      querySelectorAll: function(sel){return sel === "h1" ? [{innerText: "Dylan Example"}] : []}};
+    console.log(eval(process.argv[1]));
+    """ % json.dumps(lines)
+    out = subprocess.run(
+        ["node", "-e", stub, facebook.EXTRACTOR_JS], check=True, capture_output=True, text=True
+    )
+    assert json.loads(out.stdout)["name"] == "Dylan Example"
