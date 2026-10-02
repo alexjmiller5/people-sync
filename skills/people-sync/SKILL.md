@@ -266,9 +266,17 @@ report's Unfollow line; re-ingesting an export clears the ones already done).
 is in the local address book; pass the file to `review --links` so each WhatsApp
 card opens the chat in the desktop app for context).
 Venmo's friend inventory comes from its authenticated `/v1/users/<id>/friends`
-API with the session's bearer token held in memory only; payment
-counterparties are a separate, explicit request, deduplicated by account id
-and linked to their transactions through `provenance`, never by name.
+API with the session's bearer token held in memory only. Payment
+counterparties come from the payments already in life-data's `txns_venmo`:
+`people-sync ingest venmo-payments` (no browser) gives every
+person-to-person payment one `provenance` edge to its counterparty's record
+`venmo:<user id>` - `imported_from` on the payment that first brings someone
+in (creating a pending record), `mentions` after - deduplicated by account
+id, never by name. Run it after every Venmo scrape; it is idempotent and
+never rewrites an existing record. A counterparty the user does not know is
+ignored, never a person; the payment still points at the record. A
+check-time estate rule can hold the "every payment is linked" side; the
+reverse does not hold (friends you never paid have no payment).
 
 **Promotion.** `people-sync promote` (dry run; `--apply`) copies scraped
 city / employer / birthday / picture onto matched people where the field is
