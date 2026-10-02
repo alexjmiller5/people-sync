@@ -29,24 +29,55 @@ ROW_SELECTOR = "[class^=mutuals_row]"
 ONBOARDING_DISMISS = "text[button]=Sounds good"
 ROW_PAUSE_S = (2.0, 5.0)
 
-# The profile page: title/h1 = name, the profile picture is the imgix
-# profileImages asset, Instagram links are the person's (the footer carries
-# Partiful's own @partiful, excluded), event names/times list past events.
+# The profile page: h1 = name; the header (topSection) holds the picture, the
+# socials row and a "<Month> birthday" line. Birthday is read from the header
+# only: the events grid below it has titles like "October birthday". Instagram
+# links are read page-wide as before (the footer's @partiful excluded) since
+# matching depends on them; the other networks only from the socials row,
+# where Partiful lists the person's own (Snapchat, TikTok, LinkedIn, Twitter).
+# Event names/times count past events.
+TOP = "[class^=SharedUserProfile_topSection]"
+SOCIALS = "[class^=SharedUserProfile_socials] a[href]"
+# Client-rendered: the header and the events grid paint after the name. A
+# mutual always shares an event, so the events section always arrives.
+READY_JS = (
+    "!!document.querySelector('h1')&&!!document.querySelector('" + TOP + "')"
+    "&&!!document.querySelector('[class^=ProfileEventsSection_root]')"
+)
 EXTRACTOR_JS = (
     "(function(){var h1=document.querySelector('h1');var name=h1?h1.innerText.trim():null;"
     "if(!name)return JSON.stringify({error:'no-profile',title:document.title});"
     "var ig=[].slice.call(document.querySelectorAll('a[href*=\"instagram.com/\"]'))"
     ".map(function(a){var m=a.href.match(/instagram\\.com\\/([A-Za-z0-9._]+)/);return m?m[1]:null})"
     ".filter(function(h){return h&&h.toLowerCase()!=='partiful'});"
+    "var soc=[].slice.call(document.querySelectorAll('"
+    + SOCIALS
+    + "')).map(function(a){return a.href});"
+    "var pick=function(re){return soc.map(function(h){var m=h.match(re);return m?m[1]:null}).filter(Boolean)};"
     "var imgs=[].slice.call(document.querySelectorAll('img'))"
     ".filter(function(i){return /profileImages\\//.test(i.src)&&i.naturalWidth>=80})"
     ".sort(function(a,b){return b.naturalWidth-a.naturalWidth});"
-    "var t=document.body.innerText.split('\\n').map(function(s){return s.trim()}).filter(Boolean);"
+    "var lines=function(e){return e?e.innerText.split('\\n').map(function(s){return s.trim()}).filter(Boolean):[]};"
+    "var t=lines(document.body);"
     "var events=t.filter(function(x,i){return /^(In about |In \\d+ |\\d+ (days?|months?|years?) ago$|Yesterday|Today)/.test(t[i+1]||'')}).length;"
-    "var bday=t.filter(function(x){return /\\b(January|February|March|April|May|June|July|August|September|October|November|December) birthday$/i.test(x)})[0]||null;"
-    "return JSON.stringify({name:name,instagram:ig,avatar:imgs[0]?imgs[0].src:null,"
+    "var bday=lines(document.querySelector('"
+    + TOP
+    + "')).filter(function(x){return /^(January|February|March|April|May|June|July|August|September|October|November|December) birthday$/i.test(x)})[0]||null;"
+    "return JSON.stringify({name:name,instagram:ig,"
+    "tiktok:pick(/tiktok\\.com\\/@([A-Za-z0-9._]+)/),"
+    "twitter:pick(/(?:twitter|x)\\.com\\/([A-Za-z0-9_]+)/),"
+    "snapchat:pick(/snapchat\\.com\\/add\\/([A-Za-z0-9._-]+)/),"
+    "linkedin:pick(/linkedin\\.com\\/in\\/([^\\/?#]+)/),"
+    "avatar:imgs[0]?imgs[0].src:null,"
     "events:events,birthday_month:bday,path:location.pathname});})()"
 )
+# Profile URL per network, as Partiful itself builds them.
+SOCIAL_URLS = {
+    "tiktok": "https://www.tiktok.com/@{}",
+    "twitter": "https://twitter.com/{}",
+    "snapchat": "https://www.snapchat.com/add/{}",
+    "linkedin": "https://www.linkedin.com/in/{}/",
+}
 
 _MONTHS = [
     "january",
@@ -70,6 +101,7 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
     path = (eval_result.get("path") or "").strip("/")
     uid = path.split("/", 1)[1] if path.startswith("u/") else (path or None)
     handles = [h for h in (eval_result.get("instagram") or []) if h]
+    socials = {net: [h for h in (eval_result.get(net) or []) if h] for net in SOCIAL_URLS}
     bday = eval_result.get("birthday_month")
     birthday = None
     if bday:
@@ -87,14 +119,20 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
         education=None,
         work=None,
         birthday=birthday,
-        links=[f"https://www.instagram.com/{h}/" for h in handles] or None,
+        links=[f"https://www.instagram.com/{h}/" for h in handles]
+        + [url.format(h) for net, url in SOCIAL_URLS.items() for h in socials[net]]
+        or None,
         is_private=None,
         is_verified=None,
         follower_count=None,
         following_count=None,
         mutual_count=eval_result.get("events"),
         avatar_url=eval_result.get("avatar"),
-        raw={"extractor": eval_result, "instagram_handles": handles},
+        raw={
+            "extractor": eval_result,
+            "instagram_handles": handles,
+            "socials": {"instagram": handles} | {k: v for k, v in socials.items() if v},
+        },
     )
 
 
@@ -172,7 +210,7 @@ def harvest(browser, start: int = 0, limit: int | None = None, pause_s=ROW_PAUSE
         row = page["entries"][0]
         entry = dict(row)
         if browser.wait_for("location.pathname.startsWith('/u/')", 10):
-            browser.wait_for("!!document.querySelector('h1')", 8)
+            browser.wait_for(READY_JS, 8)
             time.sleep(1.0)
             entry["uid"] = browser.eval("location.pathname").rsplit("/", 1)[-1]
             context = {**row, "source_dom": snapshot.collect(browser, "partiful")}

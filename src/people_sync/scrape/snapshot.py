@@ -21,7 +21,7 @@ SCOPES = {
     "instagram": "main header",
     "facebook": '[role=main] h1, [role=main] [aria-label="Personal details"], [role=main] [aria-label="Education"], [role=main] [aria-label="Work"]',
     "linkedin": "main > section:first-of-type, main section:has(> #about), main section:has(> #experience), main section:has(> #education)",
-    "partiful": 'h1, [class^=profile_] img[src*="profileImages/"], [class^=profile_] a[href^="https://www.instagram.com/"], [class^=profile_] a[href^="https://instagram.com/"]',
+    "partiful": "h1, [class^=SharedUserProfile_topSection]",
     "spotify": 'main [data-testid=entityTitle], main [data-testid=user-image], main a[href$="/followers"], main a[href$="/following"]',
     "strava": "h1, .athlete-profile .location, .athlete-profile .avatar",
     "venmo": "props.pageProps.otherUser (selected personal profile fields only)",
@@ -85,6 +85,10 @@ SCHEMAS = {
     "partiful": {
         "name": "text",
         "instagram": ["instagram-id"],
+        "tiktok": ["tiktok-id"],
+        "twitter": ["twitter-id"],
+        "snapchat": ["snapchat-id"],
+        "linkedin": ["linkedin-id"],
         "avatar": "url",
         "events": "count",
         "birthday_month": "text",
@@ -288,8 +292,9 @@ def safe_url(value, source, *, canonical=False):
 def _value(value, kind, source):
     if value is None:
         return None
-    if kind == "id" or kind == "instagram-id":
-        return _identity(value, "instagram" if kind == "instagram-id" else source)
+    if kind == "id" or kind.endswith("-id"):
+        # "<network>-id": a handle on that network, listed on this source's profile.
+        return _identity(value, source if kind == "id" else kind[: -len("-id")])
     if kind == "url":
         return safe_url(value, source)
     if kind == "count":

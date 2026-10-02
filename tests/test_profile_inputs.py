@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 
 from people_sync import captures, cli, photos, replay
-from people_sync.scrape import partiful, run, spotify, venmo
+from people_sync.scrape import partiful, run, snapshot, spotify, venmo
 
 
 @pytest.mark.parametrize("targets", [None, ["synthetic-tab"]])
@@ -734,3 +734,32 @@ def test_avatar_extension_cannot_reintroduce_invalid_key(mocker, value):
     mocker.patch.object(photos, "put_object")
     key, _ = run._resolve_avatar(None, "spotify", 0, "spotify_example", value, None, None)
     assert key.endswith(".jpg") and "%" not in key
+
+
+def test_partiful_listed_socials_survive_the_capture_boundary():
+    raw = {
+        "name": "Example Person",
+        "path": "/u/example",
+        "instagram": ["example.person"],
+        "tiktok": ["example.tok"],
+        "twitter": ["example_tw"],
+        "snapchat": ["example.snap"],
+        "linkedin": ["example-person-1"],
+        "birthday_month": "October birthday",
+    }
+    p = snapshot.prepare("partiful", "partiful:example", raw, [])
+    assert {k: p["eval"][k] for k in raw} == raw
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tiktok", "x@example.test"),
+        ("twitter", "a/b"),
+        ("snapchat", "user?token=SECRET"),
+        ("linkedin", "a b"),
+    ],
+)
+def test_partiful_social_handles_are_typed_identities(field, value):
+    p = snapshot.prepare("partiful", "partiful:example", {"name": "Example", field: [value]}, [])
+    assert value not in json.dumps(p)

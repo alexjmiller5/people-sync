@@ -14,6 +14,12 @@ FIXTURE = {
     "birthday_month": "August birthday",
     "path": "/u/uid123",
 }
+SOCIALS = {
+    "tiktok": ["test.tok"],
+    "twitter": ["test_tw"],
+    "snapchat": ["test.snap"],
+    "linkedin": ["test-person-1"],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +52,31 @@ def test_parse_maps_profile_fields_and_keeps_instagram_handles():
     assert p.birthday == "--08"
     assert p.mutual_count == 7
     assert p.avatar_url == "https://partiful.imgix.net/profileImages/abc123"
+
+
+def test_parse_keeps_every_listed_social_as_a_link_and_by_network():
+    p = partiful.parse(FIXTURE | SOCIALS)
+    assert p.links == [
+        "https://www.instagram.com/test.person/",
+        "https://www.instagram.com/partiful/",
+        "https://www.tiktok.com/@test.tok",
+        "https://twitter.com/test_tw",
+        "https://www.snapchat.com/add/test.snap",
+        "https://www.linkedin.com/in/test-person-1/",
+    ]
+    assert p.raw["socials"] == {"instagram": ["test.person", "partiful"]} | SOCIALS
+
+
+def test_harvest_waits_for_the_rendered_profile_not_just_the_name(mocker):
+    """A profile read at first paint had no events and no birthday (09-10 captures)."""
+    mocker.patch("people_sync.scrape.partiful.time.sleep")
+    b = FakeBrowser()
+    waited = []
+    b.wait_for = lambda js, timeout: waited.append(js) or True
+
+    next(partiful.harvest(b, limit=1))
+
+    assert partiful.READY_JS in waited
 
 
 def test_extractor_js_drops_partifuls_own_instagram_and_parses_in_node():

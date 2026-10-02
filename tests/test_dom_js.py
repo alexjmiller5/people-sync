@@ -237,3 +237,66 @@ def test_every_extractor_script_parses_as_javascript(js):
         [NODE, "-e", "new Function(process.argv[1])", js], capture_output=True, text=True
     )
     assert r.returncode == 0, r.stderr.strip().splitlines()[-1]
+
+
+PARTIFUL_PROFILE_DOM = """
+const anchor = href => ({href});
+const top = {innerText: 'Example Person\\nexample.person\\nOctober birthday'};
+document.title = 'Example | Partiful';
+document.querySelector = s => ({
+  'h1': {innerText: 'Example Person'},
+  '[class^=SharedUserProfile_topSection]': top,
+}[s] || null);
+document.querySelectorAll = s => {
+  if (s === '[class^=SharedUserProfile_socials] a[href]') return [
+    anchor('https://www.instagram.com/example.person'),
+    anchor('https://www.tiktok.com/@example.tok'),
+    anchor('https://www.twitter.com/example_tw'),
+    anchor('https://www.snapchat.com/add/example.snap'),
+    anchor('https://www.linkedin.com/in/example-person-12345'),
+  ];
+  if (s.startsWith('a[href*=')) return [
+    anchor('https://www.instagram.com/example.person'),
+    anchor('https://www.instagram.com/partiful'),
+  ];
+  return [];
+};
+// An event card titled like a birthday sits below the header, in the body text only.
+document.body = {innerText: 'Example Person\\nOctober birthday\\nDecember birthday\\nIn 3 days'};
+globalThis.location = {pathname: '/u/example'};
+"""
+
+
+def test_partiful_extractor_reads_header_birthday_and_every_listed_social():
+    from people_sync.scrape.partiful import EXTRACTOR_JS
+
+    out = json.loads(run(PARTIFUL_PROFILE_DOM, EXTRACTOR_JS))
+    assert out["birthday_month"] == "October birthday"
+    assert out["instagram"] == ["example.person"]
+    assert out["tiktok"] == ["example.tok"]
+    assert out["twitter"] == ["example_tw"]
+    assert out["snapchat"] == ["example.snap"]
+    assert out["linkedin"] == ["example-person-12345"]
+
+
+def test_partiful_birthday_never_comes_from_an_event_title():
+    from people_sync.scrape.partiful import EXTRACTOR_JS
+
+    setup = PARTIFUL_PROFILE_DOM + "top.innerText = 'Example Person';"
+    assert json.loads(run(setup, EXTRACTOR_JS))["birthday_month"] is None
+
+
+def test_partiful_ready_waits_for_header_and_events():
+    from people_sync.scrape.partiful import READY_JS
+
+    base = "document.querySelector = s => (globalThis.present || []).includes(s) ? {} : null;"
+    assert run(base + "globalThis.present = ['h1'];", READY_JS) is False
+    assert (
+        run(
+            base
+            + "globalThis.present = ['h1', '[class^=SharedUserProfile_topSection]', "
+            + "'[class^=ProfileEventsSection_root]'];",
+            READY_JS,
+        )
+        is True
+    )
