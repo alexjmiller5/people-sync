@@ -28,6 +28,7 @@ tests/             pytest, synthetic fixtures only
   google_cleanup.py Google write-back cleanup (`people-sync google-cleanup`)
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
+  venmo_payments.py links txns_venmo payments to counterparty ledger records
 skills/people-sync/ the generic agent runbook, shipped with the package
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
@@ -408,6 +409,16 @@ gone. `changes.py` (`people-sync changes --since`) reads life-data's
 `history` for matched records and their profiles and lists value-to-value
 changes; first fills are excluded (they belong to `promote`) and so are raw
 bookkeeping keys (`RAW_NOISE`). It never writes.
+
+## Venmo payment counterparties (`people-sync ingest venmo-payments`)
+
+`venmo_payments.py` reads payments from `txns_venmo` (written by the finance
+side, read here through `life sql`) and links each to `venmo:<user id>`.
+Edge ids are `txn:venmo:<txn id>:people_sync_records:venmo:<user id>`, the
+shape the original one-off backfill used, so a run over existing data adds
+nothing. The owner's side is the one the feed labels `you`; anything else
+is skipped and counted. New counterparties go through `ledger.upsert`;
+existing records are left alone, since the friends API's `raw` is richer.
 
 ## Platform vocabulary
 

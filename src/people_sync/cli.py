@@ -21,6 +21,7 @@ from people_sync import (
     replay,
     review,
     unfollow,
+    venmo_payments,
     whatsapp,
 )
 from people_sync.scrape import cdp
@@ -125,6 +126,9 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
+    if args.source == "venmo-payments":
+        print(json.dumps(venmo_payments.run()))
+        return
     try:
         if args.source == "whatsapp":
             report = whatsapp.ingest(
@@ -402,6 +406,10 @@ def build_parser() -> argparse.ArgumentParser:
     for name in _FETCH_NO_PATH:
         p = ingest_sub.add_parser(name)
         p.set_defaults(func=cmd_ingest)
+    vp = ingest_sub.add_parser(
+        "venmo-payments", help="link life-data's Venmo payments to counterparty records"
+    )
+    vp.set_defaults(func=cmd_ingest)
     wa = ingest_sub.add_parser("whatsapp", help="operator-supplied metadata snapshot, read-only")
     wa.add_argument("--snapshot", required=True, help="WAL-consistent metadata-only sqlite copy")
     wa.add_argument("--media-dir", required=True, help="root holding the cached profile pictures")
