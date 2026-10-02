@@ -10,13 +10,14 @@ triage, sweeps); this file is how to work on the code.
 
 ```
 src/people_sync/
-  cli.py           argparse surface: ingest / match / queue / new-person / scrape /
+  cli.py           argparse surface: ingest / match / queue / changes / new-person / scrape /
                    login / photos store
   lifedata.py      the ONLY life-data write path (shells out to the `life` CLI)
   ledger.py        people_sync_records upserts, keyed <source>:<source_id>
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
   sources.py       google (via gog) and apple (local AddressBook sqlite) ingests
   match.py         conservative auto-linker
+  changes.py       read-only report of changed values on matched records (history)
   photos.py        Life Data profile-photo storage, sha256-deduped, plus per-platform fetchers
   notion_people.py new person ids: a Notion stub page when configured, else local
   scrape/          CDP harness (cdp.py), human pacing (pace.py), the scrape loop
@@ -383,8 +384,21 @@ Scripts are importable by their bare module name (`pyproject`'s pytest
 A record the user drags to the review page's ignore zone ("I don't know them")
 lands in the ledger as `status = 'ignored'`. `unfollow.py` lists the ignored
 records on follow platforms whose `i_follow` is not 0, with profile URLs, as the
-to-do list for unfollowing; a later export that shows `i_follow = 0` drops the
-row without any further bookkeeping.
+to-do list for unfollowing; a later export drops the row without any further
+bookkeeping, either by showing `i_follow = 0` or by no longer listing the
+account at all.
+
+## Updates to known contacts
+
+`ledger.upsert(records, complete=True)` is for a whole inventory (an export,
+a Google/Apple read whose payload says `complete`). Live rows missing from it
+come back as `absent` (count plus matched ids); their known follow flags drop
+to 0 and unknown ones stay null; `last_seen` keeps the last real sighting.
+An empty or partial read must never pass `complete`, or every row reads as
+gone. `changes.py` (`people-sync changes --since`) reads life-data's
+`history` for matched records and their profiles and lists value-to-value
+changes; first fills are excluded (they belong to `promote`) and so are raw
+bookkeeping keys (`RAW_NOISE`). It never writes.
 
 ## Platform vocabulary
 

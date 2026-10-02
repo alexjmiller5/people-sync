@@ -83,7 +83,7 @@ def _fake_run_google(cmd, **kwargs):
 
 def test_fetch_google_maps_full_contact(mocker):
     mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_google)
-    recs = {r.source_id: r for r in sources.fetch_google()}
+    recs = {r.source_id: r for r in sources.fetch_google()[0]}
 
     full = recs["people/c1"]
     assert full.source == "google_contacts"
@@ -102,7 +102,7 @@ def test_fetch_google_maps_full_contact(mocker):
 
 def test_fetch_google_paginates_and_skips_malformed(mocker):
     mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_google)
-    recs = {r.source_id: r for r in sources.fetch_google()}
+    recs = {r.source_id: r for r in sources.fetch_google()[0]}
 
     # people/c3's raw call returns invalid JSON - must be skipped, not crash
     assert "people/c3" not in recs
@@ -144,10 +144,11 @@ def test_fetch_google_skips_list_entry_missing_resource(mocker):
     mocker.patch("people_sync.sources.subprocess.run", side_effect=fake_run)
     log = mocker.patch("people_sync.sources.log")
 
-    recs = sources.fetch_google()
+    recs, complete = sources.fetch_google()
 
     # the entry missing "resource" never reaches a raw call or a Record
     assert [r.source_id for r in recs] == ["people/c9"]
+    assert complete is False  # a skipped entry means the inventory is not whole
     log.warning.assert_any_call(
         "skipping malformed entry",
         source="google_contacts",
@@ -227,7 +228,7 @@ def test_fetch_apple_maps_and_skips_missing_id(mocker):
     )
     mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_apple)
 
-    recs = {r.source_id: r for r in sources.fetch_apple()}
+    recs = {r.source_id: r for r in sources.fetch_apple()[0]}
 
     # the row with id=None is skipped, not crashed on
     assert len(recs) == 2
@@ -267,7 +268,7 @@ def test_fetch_apple_maps_and_skips_missing_id(mocker):
 def test_fetch_apple_no_databases_found(mocker):
     mocker.patch("people_sync.sources._db_paths", return_value=[])
     run = mocker.patch("people_sync.sources.subprocess.run")
-    assert sources.fetch_apple() == []
+    assert sources.fetch_apple() == ([], False)  # no inventory: never reads as complete
     run.assert_not_called()
 
 

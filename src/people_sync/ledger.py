@@ -99,7 +99,9 @@ def imported_from_many(table: str, items) -> None:
         lifedata.insert("provenance", missing)
 
 
-def upsert(records: list[Record]) -> dict:
+def upsert(records: list[Record], complete: bool = False) -> dict:
+    """`complete` = the records are the source's whole inventory (a full export, a
+    complete address-book read), so a live row missing from them is gone there."""
     if not records:
         return {"new": 0, "updated": 0}
     # Sources without stable ids (facebook derives one from the display name) can emit
@@ -180,4 +182,36 @@ def upsert(records: list[Record]) -> dict:
             if r.row_id not in held_ids and not (r.hold_existing and r.row_id in existing)
         ],
     )
-    return {"new": len(new_rows), "updated": len(updates)} | ({"held": held} if held else {})
+    result = {"new": len(new_rows), "updated": len(updates)} | ({"held": held} if held else {})
+    if complete:
+        result["absent"] = _absent(records[0].source, {r.row_id for r in observations})
+    return result
+
+
+def _absent(source: str, present: set[str]) -> dict:
+    """Live rows the inventory no longer lists. A known follow/friend flag drops to 0
+    (that is what the source now says); an unknown one stays unknown; last_seen stays
+    the last time the row was actually seen. Matched rows are listed for review."""
+    rows = [
+        r
+        for r in lifedata.sql(
+            "SELECT id, status, person_id, follows_me, i_follow FROM people_sync_records "
+            f"WHERE source = {lifedata.sq(source)} AND deleted_at IS NULL"
+        )
+        if r["id"] not in present
+    ]
+    zero = {
+        r["id"]: {col: "NULL" if r[col] is None else "0" for col in ("follows_me", "i_follow")}
+        for r in rows
+        if r["follows_me"] or r["i_follow"]
+    }
+    if zero:
+        batch_update("people_sync_records", "id", zero)
+    return {
+        "count": len(rows),
+        "matched": [
+            {"record_id": r["id"], "person_id": r["person_id"]}
+            for r in rows
+            if r["status"] == "matched"
+        ],
+    }
