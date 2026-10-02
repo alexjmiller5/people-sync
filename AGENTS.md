@@ -107,7 +107,8 @@ and followed users, excluding artist pages and checking the displayed totals). P
 records match a person only through the Instagram handle on their profile
 (`match.py`), never by name. A Partiful profile's header
 (`[class^=SharedUserProfile_topSection]`, also the retained DOM region) holds
-the "<Month> birthday" line and the socials row; the birthday is read from the
+the "<Month> birthday" line (trailed by " ·" when a join date follows) and the
+socials row; the birthday is read from the
 header only, since event titles below it look the same, and every listed
 network (Instagram, Snapchat, TikTok, LinkedIn, Twitter) is kept as a typed
 `<network>-id` field and a link. `READY_JS` waits for the header and the events

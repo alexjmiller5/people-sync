@@ -300,3 +300,14 @@ def test_partiful_ready_waits_for_header_and_events():
         )
         is True
     )
+
+
+def test_partiful_birthday_followed_by_the_joined_date_still_reads():
+    """With 'Joined <date>' shown, the header line is 'June birthday ·'."""
+    from people_sync.scrape.partiful import EXTRACTOR_JS
+
+    setup = (
+        PARTIFUL_PROFILE_DOM
+        + "top.innerText = 'Example Person\\nJune birthday ·\\nJoined Aug \\'24';"
+    )
+    assert json.loads(run(setup, EXTRACTOR_JS))["birthday_month"] == "June birthday ·"
