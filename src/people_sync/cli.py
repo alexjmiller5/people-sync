@@ -14,6 +14,7 @@ from pathlib import Path
 from people_sync import ledger, lifedata, match, notion_people, photos, sources
 from people_sync import (
     captures,
+    changes,
     google_cleanup,
     propose,
     reconcile,
@@ -137,11 +138,16 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             return
         if args.source in captures.EXPORT_SOURCES:
             records = sources.retained_records(captures.capture_export(args.source, args.path))
+            complete = True  # an export is the whole friends/followers inventory
         else:
-            records = getattr(sources, f"fetch_{args.source}")()
+            records, complete = getattr(sources, f"fetch_{args.source}")()
     except Exception:
         sys.exit("ingest failed; input, retention or replay could not be verified")
-    print(json.dumps(ledger.upsert(records)))
+    print(json.dumps(ledger.upsert(records, complete=complete)))
+
+
+def cmd_changes(args: argparse.Namespace) -> None:
+    print(json.dumps(changes.run(args.since), ensure_ascii=False))
 
 
 def cmd_match(args: argparse.Namespace) -> None:
@@ -410,6 +416,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     match_p = sub.add_parser("match", help="auto-link pending ledger records to people")
     match_p.set_defaults(func=cmd_match)
+
+    changes_p = sub.add_parser(
+        "changes", help="what changed on accounts already linked to a person (read-only)"
+    )
+    changes_p.add_argument("--since", help="ISO date or timestamp (default: all history)")
+    changes_p.set_defaults(func=cmd_changes)
 
     queue_p = sub.add_parser("queue", help="list pending ledger records for triage")
     queue_p.set_defaults(func=cmd_queue)

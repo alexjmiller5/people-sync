@@ -94,6 +94,15 @@ Each prints `{"new": N, "updated": N}` (plus `held` for rows the privacy
 filter could not refresh). Re-ingesting is a no-op beyond refreshed `raw`,
 follow flags and `last_seen`, so a partial run is safe to repeat.
 
+An export, and a Google or Apple read that completed, is the source's whole
+inventory, so the result also carries `absent`: how many live records it no
+longer lists, and the matched ones (`record_id`, `person_id`) - an unfriend,
+an unfollow both ways, a deleted contact, or an Instagram rename (the record
+id is the handle, so the new handle arrives as a new pending record). A known
+follow flag on an absent record drops to 0, which is also what clears an
+unfollowed stranger from `unfollow`; nothing else about the row changes. Go
+through the matched ones with the user. A partial read reports no `absent`.
+
 **WhatsApp** takes an operator-prepared snapshot, never the live store: copy
 `ChatStorage.sqlite` with its `-wal`/`-shm` to a private 0700 directory,
 then extract only `ZWACHATSESSION`, `ZWAPROFILEPICTUREITEM` and
@@ -308,6 +317,21 @@ life sql "SELECT value, count(*) n FROM people, json_each(people.circles) WHERE 
 
 A vocabulary fix is an estate-wide rename with the user's approval, never a
 half-migrated pair of spellings.
+
+**What changed on people already linked:**
+
+```bash
+people-sync changes --since <date of the last review>
+```
+
+Read-only. One row per changed value on a matched record or its scraped
+profile (`field`, `old`, `new`, `at`, with the person): a new name or
+spelling, a moved city, a new job, an edited birthday, a new photo
+(`profile.avatar_sha256`), a dropped follow. A first fill (empty -> value)
+is not listed; that is `promote`'s job. Each row is a question for the user,
+applied through `reconcile`, `promote` or a direct edit with its provenance
+edge, never in bulk. Re-scrapes are what surface profile changes: matched
+records are revisited once they are 180 days stale.
 
 ## Step 8 - sync and report
 

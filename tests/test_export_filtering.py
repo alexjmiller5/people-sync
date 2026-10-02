@@ -287,7 +287,9 @@ def test_filtered_ingest_retains_and_verifies_before_parsing(tmp_path, monkeypat
     monkeypatch.setattr(photos, "put_object", put)
     monkeypatch.setattr(photos, "get_object", get)
     monkeypatch.setattr(parsers, "parse_linkedin", checked_parse)
-    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {"new": len(rows)})
+    monkeypatch.setattr(
+        ledger, "upsert", lambda rows, complete=False: written.extend(rows) or {"new": len(rows)}
+    )
     cli.main(["ingest", "linkedin", "--path", str(path)])
     assert json.loads(capsys.readouterr().out) == {"new": 1}
     assert [r.source_id for r in written] == ["example-123456789"]

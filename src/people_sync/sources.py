@@ -438,12 +438,14 @@ def retained_records(capture: dict) -> list[Record]:
     return [Record(**(row | {"capture_key": key})) for row in result["records"]]
 
 
-def fetch_google() -> list[Record]:
-    return retained_records(contacts_capture("google", collect_google()))
+def fetch_google() -> tuple[list[Record], bool]:
+    payload = collect_google()
+    return retained_records(contacts_capture("google", payload)), payload["complete"]
 
 
-def fetch_apple() -> list[Record]:
-    return retained_records(contacts_capture("apple", collect_apple()))
+def fetch_apple() -> tuple[list[Record], bool]:
+    payload = collect_apple()
+    return retained_records(contacts_capture("apple", payload)), payload["complete"]
 
 
 _PHONE_QUERY = """

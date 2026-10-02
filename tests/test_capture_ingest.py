@@ -123,6 +123,7 @@ def test_real_ingest_holds_existing_excluded_rows_and_continues_eligible_rows(
                 "reason": "permitted-field-exclusions",
             }
         ],
+        "absent": {"count": 0, "matched": []},
     }
     safe = dict(db.execute("SELECT * FROM people_sync_records WHERE id='linkedin:safe'").fetchone())
     assert json.loads(safe["raw"])["Company"] == "Refreshed Studio"
@@ -208,7 +209,7 @@ def test_cli_retains_malformed_export_before_parsing(monkeypatch, tmp_path, reta
     original = b'{"friends_v2":[{"name":"Example Person"},{"timestamp":7}]}'
     export.write_bytes(original)
     written = []
-    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {})
+    monkeypatch.setattr(ledger, "upsert", lambda rows, complete=False: written.extend(rows) or {})
     parse = parsers.parse_facebook
 
     def checked_parse(path):
@@ -244,7 +245,7 @@ def test_cli_consumes_filtered_linkedin_bytes(monkeypatch, tmp_path, retained):
     original = b"First Name,Last Name,URL,Email Address\nExample,Person,https://linkedin.com/in/example,synthetic@example.com\n"
     export.write_bytes(original)
     written = []
-    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {})
+    monkeypatch.setattr(ledger, "upsert", lambda rows, complete=False: written.extend(rows) or {})
     cli.main(["ingest", "linkedin", "--path", str(export)])
     assert len(written) == 1
     assert "Email Address" not in written[0].raw
@@ -320,7 +321,9 @@ def test_contacts_archive_failure_blocks_parse_and_ledger(monkeypatch, retained,
     monkeypatch.setattr(
         sources, f"parse_{source}", lambda payload: pytest.fail("parsed before verification")
     )
-    monkeypatch.setattr(ledger, "upsert", lambda rows: pytest.fail("wrote before verification"))
+    monkeypatch.setattr(
+        ledger, "upsert", lambda rows, complete=False: pytest.fail("wrote before verification")
+    )
     with pytest.raises(SystemExit):
         cli.main(["ingest", source])
 
@@ -407,7 +410,7 @@ def test_ingest_never_rereads_original_after_retention(monkeypatch, tmp_path, re
         export.write_text('{"friends_v2":[{"name":"synthetic@example.com"}]}')
 
     monkeypatch.setattr(photos, "put_object", upload)
-    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {})
+    monkeypatch.setattr(ledger, "upsert", lambda rows, complete=False: written.extend(rows) or {})
     cli.main(["ingest", "facebook", "--path", str(export)])
     assert written[0].name == "Example Person"
 
@@ -420,7 +423,9 @@ def test_non_ok_replay_keeps_capture_but_never_writes(monkeypatch, tmp_path, ret
         "parse_facebook",
         lambda path: (_ for _ in ()).throw(ValueError("synthetic-secret")),
     )
-    monkeypatch.setattr(ledger, "upsert", lambda rows: pytest.fail("wrote failed replay"))
+    monkeypatch.setattr(
+        ledger, "upsert", lambda rows, complete=False: pytest.fail("wrote failed replay")
+    )
     with pytest.raises(SystemExit, match="replay could not be verified"):
         cli.main(["ingest", "facebook", "--path", str(export)])
     assert len(retained) == 1

@@ -23,7 +23,9 @@ def test_ingest_exports_replay_verified_bytes(source, monkeypatch, tmp_path, cap
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr(photos, "put_object", lambda k, b, **kw: stored.__setitem__(k, b))
     monkeypatch.setattr(photos, "get_object", stored.__getitem__)
-    monkeypatch.setattr(ledger, "upsert", lambda rows: written.extend(rows) or {"new": len(rows)})
+    monkeypatch.setattr(
+        ledger, "upsert", lambda rows, complete: written.extend(rows) or {"new": len(rows)}
+    )
     path = tmp_path / "export.json"
     if source == "instagram":
         path = tmp_path
@@ -45,24 +47,24 @@ def test_ingest_exports_replay_verified_bytes(source, monkeypatch, tmp_path, cap
 
 
 def test_ingest_google_calls_fetch_with_no_path_and_upserts(mocker, capsys):
-    fetch = mocker.patch("people_sync.sources.fetch_google", return_value=["rec"])
+    fetch = mocker.patch("people_sync.sources.fetch_google", return_value=(["rec"], True))
     upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 2, "updated": 0})
 
     cli.main(["ingest", "google"])
 
     fetch.assert_called_once_with()
-    upsert.assert_called_once_with(["rec"])
+    upsert.assert_called_once_with(["rec"], complete=True)
     assert json.loads(capsys.readouterr().out) == {"new": 2, "updated": 0}
 
 
 def test_ingest_apple_calls_fetch_with_no_path_and_upserts(mocker, capsys):
-    fetch = mocker.patch("people_sync.sources.fetch_apple", return_value=["rec"])
+    fetch = mocker.patch("people_sync.sources.fetch_apple", return_value=(["rec"], False))
     upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 0, "updated": 4})
 
     cli.main(["ingest", "apple"])
 
     fetch.assert_called_once_with()
-    upsert.assert_called_once_with(["rec"])
+    upsert.assert_called_once_with(["rec"], complete=False)
     assert json.loads(capsys.readouterr().out) == {"new": 0, "updated": 4}
 
 
