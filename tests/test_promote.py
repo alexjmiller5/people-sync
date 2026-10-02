@@ -216,3 +216,89 @@ def test_legacy_month_and_photo_are_not_recast_as_capture_evidence():
         },
     )
     assert ops == []
+
+
+@pytest.mark.parametrize(
+    "existing,field",
+    [
+        ({"birthday": "1999-03-05"}, "birthday"),
+        ({"slightly_known_birthday": "--03"}, "slightly_known_birthday"),
+    ],
+)
+def test_plan_flags_a_birthday_month_that_contradicts_what_is_known(existing, field):
+    ops = promote.plan(
+        [
+            _profile(
+                platform="partiful",
+                record_id="partiful:u1",
+                birthday="--02",
+                location=None,
+                work=None,
+                avatar_r2_key=None,
+            )
+        ],
+        {"p1": {**PEOPLE["p1"], **existing}},
+        [],
+        [],
+        [],
+        set(),
+    )
+    assert [(o.kind, o.value, o.detail["field"]) for o in ops] == [("conflict", "--02", field)]
+
+
+def test_plan_takes_an_agreeing_birthday_month_silently():
+    ops = promote.plan(
+        [
+            _profile(
+                platform="partiful",
+                record_id="partiful:u1",
+                birthday="--02",
+                location=None,
+                work=None,
+                avatar_r2_key=None,
+            )
+        ],
+        {"p1": {**PEOPLE["p1"], "birthday": "--02-14"}},
+        [],
+        [],
+        [],
+        set(),
+    )
+    assert ops == []
+
+
+def test_account_suggestions_list_what_a_partiful_profile_adds():
+    profiles = [
+        {
+            "person_id": "p1",
+            "record_id": "partiful:u1",
+            "links": json.dumps(
+                [
+                    "https://www.instagram.com/Ex.Person/",
+                    "https://www.snapchat.com/add/ex.snap",
+                    "https://www.linkedin.com/in/ex-person-1/",
+                    "https://www.tiktok.com/@ex.tok",
+                ]
+            ),
+        }
+    ]
+    accounts = [{"person_id": "p1", "platform": "instagram", "handle": "ex.person"}]
+    statuses = {"snapchat:ex.snap": "pending"}
+    assert promote.account_suggestions(profiles, accounts, statuses) == [
+        {
+            "person_id": "p1",
+            "platform": "snapchat",
+            "handle": "ex.snap",
+            "from_record": "partiful:u1",
+            "ledger_record": "snapchat:ex.snap",
+            "status": "pending",
+        },
+        {
+            "person_id": "p1",
+            "platform": "linkedin",
+            "handle": "ex-person-1",
+            "from_record": "partiful:u1",
+            "ledger_record": None,
+            "status": None,
+        },
+    ]

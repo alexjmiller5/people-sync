@@ -13,6 +13,11 @@ Facts and where they go:
                people.slightly_known_birthday (--MM, when empty)
 - avatar    -> person_photos (the scrape's R2 object, sha-deduped per person)
 
+A birthday month that contradicts a known birthday is a conflict. Accounts a
+matched person lists on Partiful (Instagram, Snapchat, LinkedIn) and the
+estate lacks are reported under `accounts`, never written: linking one is
+`reconcile link` with the user's word.
+
 Dry-run by default; `--apply` writes. Every write is idempotent through
 the deterministic provenance edge id.
 """
@@ -51,6 +56,12 @@ class Op:
 
 def _norm(s: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _month(value: str) -> str | None:
+    """MM from YYYY-MM-DD, --MM-DD or --MM."""
+    m = re.fullmatch(r"(?:\d{4}|-)-(\d{2})(?:-\d{2})?", value)
+    return m.group(1) if m else None
 
 
 def _asserted_by() -> str:
@@ -134,6 +145,16 @@ def plan(
                     ops.append(
                         Op("birthday", pid, rid, plat, bday, {"cue": bday, "upgrades": existing})
                     )
+            elif re.fullmatch(r"--\d{2}", bday) and (
+                known := [
+                    (f, person[f])
+                    for f in ("birthday", "slightly_known_birthday")
+                    if person.get(f) and _month(person[f]) != bday[2:]
+                ]
+            ):
+                # A month that contradicts a known birthday means one of them is wrong.
+                f, existing = known[0]
+                ops.append(Op("conflict", pid, rid, plat, bday, {"field": f, "existing": existing}))
             elif (
                 re.fullmatch(r"--\d{2}", bday)
                 and not person.get("slightly_known_birthday")
@@ -190,6 +211,73 @@ def plan(
             )
         ]
     return ops
+
+
+# Networks a Partiful profile lists that the estate's platform vocabulary
+# already has; the account row itself comes from `reconcile link` on the
+# ledger record (or by hand), with the user's word - never from here.
+LISTED_ACCOUNTS = {
+    "instagram": r"instagram\.com/([A-Za-z0-9._]+)",
+    "snapchat": r"snapchat\.com/add/([A-Za-z0-9._-]+)",
+    "linkedin": r"linkedin\.com/in/([^/?#]+)",
+}
+
+
+def account_suggestions(
+    profiles: list[dict], accounts: list[dict], statuses: dict[str, str]
+) -> list[dict]:
+    """Accounts a matched person lists on their Partiful profile and the estate
+    does not have yet, each with its ledger record when one exists. Read-only."""
+    have = {(a["person_id"], a["platform"], (a.get("handle") or "").lower()) for a in accounts}
+    out = []
+    for p in profiles:
+        links = p.get("links")
+        if isinstance(links, str):
+            try:
+                links = json.loads(links)
+            except json.JSONDecodeError:
+                links = None
+        for platform, pattern in LISTED_ACCOUNTS.items():
+            for link in links or []:
+                m = re.search(pattern, link)
+                if not m:
+                    continue
+                handle = m.group(1).lower()
+                if (p["person_id"], platform, handle) in have:
+                    continue
+                have.add((p["person_id"], platform, handle))
+                record = f"{platform}:{handle}"
+                out.append(
+                    {
+                        "person_id": p["person_id"],
+                        "platform": platform,
+                        "handle": handle,
+                        "from_record": p["record_id"],
+                        "ledger_record": record if record in statuses else None,
+                        "status": statuses.get(record),
+                    }
+                )
+    return out
+
+
+def load_account_state() -> tuple[list[dict], list[dict], dict[str, str]]:
+    profiles = lifedata.sql(
+        "SELECT p.record_id, p.links, r.person_id FROM people_sync_profiles p "
+        "JOIN people_sync_records r ON r.id = p.record_id "
+        "WHERE p.platform = 'partiful' AND p.links IS NOT NULL AND p.deleted_at IS NULL "
+        "AND r.deleted_at IS NULL AND r.status = 'matched' AND r.person_id IS NOT NULL"
+    )
+    accounts = lifedata.sql(
+        "SELECT person_id, platform, handle FROM person_accounts WHERE deleted_at IS NULL"
+    )
+    statuses = {
+        r["id"]: r["status"]
+        for r in lifedata.sql(
+            "SELECT id, status FROM people_sync_records WHERE deleted_at IS NULL "
+            f"AND source IN ({', '.join(lifedata.sq(k) for k in LISTED_ACCOUNTS)})"
+        )
+    }
+    return profiles, accounts, statuses
 
 
 def load_event_rows() -> list[dict]:
@@ -434,6 +522,8 @@ def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
         for o in ops
         if o.kind != "conflict"
     ]
+    if "partiful" in platforms:
+        summary["accounts"] = account_suggestions(*load_account_state())
     if apply_writes:
         summary["applied"] = apply(ops)
     return summary

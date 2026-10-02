@@ -273,8 +273,13 @@ and linked to their transactions through `provenance`, never by name.
 **Promotion.** `people-sync promote` (dry run; `--apply`) copies scraped
 city / employer / birthday / picture onto matched people where the field is
 empty, each with an `evidence_of` provenance edge to the retained capture;
-conflicts are printed, never resolved automatically. Address-book pictures
-come from their APIs (`photos store`).
+conflicts are printed, never resolved automatically (a Partiful birthday
+month that disagrees with a known birthday is one). Address-book pictures
+come from their APIs (`photos store`). A matched Partiful profile also lists
+the person's own Instagram / Snapchat / LinkedIn (plus TikTok and Twitter,
+kept as links only while those are not platform values); the ones the person
+lacks come back under `accounts` with their ledger record, if any. Each one
+is the user's call: `reconcile link <person> <ledger record>`.
 
 ## The review page
 

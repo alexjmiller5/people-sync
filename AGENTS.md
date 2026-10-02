@@ -105,7 +105,15 @@ so the list is walked click-by-click and profiles are written as it goes;
 `strava`: followers + following of the signed-in athlete; `spotify`: followers
 and followed users, excluding artist pages and checking the displayed totals). Partiful
 records match a person only through the Instagram handle on their profile
-(`match.py`), never by name. `partiful-events` walks the user's past events
+(`match.py`), never by name. A Partiful profile's header
+(`[class^=SharedUserProfile_topSection]`, also the retained DOM region) holds
+the "<Month> birthday" line and the socials row; the birthday is read from the
+header only, since event titles below it look the same, and every listed
+network (Instagram, Snapchat, TikTok, LinkedIn, Twitter) is kept as a typed
+`<network>-id` field and a link. `READY_JS` waits for the header and the events
+grid in both the scrape loop and the mutuals harvest: a first-paint read had
+neither. `promote` reports listed Instagram/Snapchat/LinkedIn accounts the
+person lacks under `accounts` and never writes them. `partiful-events` walks the user's past events
 (`harvest_events`, scope `events`) and each guest list (`harvest_event_guests`,
 scope `event_guests`: a guest-view list is click-walked row by row to `/u/<uid>`;
 the host view's "Manage Guests" list carries each guest's uid in its React
