@@ -281,3 +281,7 @@ def test_harvest_retains_malformed_json_before_decoder_fails(mocker):
         captures.validate(json.loads(upload.call_args.args[1]))["payload"]["raw_eval"] == "{broken"
     )
     assert b.path == "/u/uid0"
+
+
+def test_parse_reads_the_month_from_a_birthday_line_with_a_separator():
+    assert partiful.parse(FIXTURE | {"birthday_month": "June birthday ·"}).birthday == "--06"

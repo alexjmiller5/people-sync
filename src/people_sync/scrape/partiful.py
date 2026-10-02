@@ -30,7 +30,8 @@ ONBOARDING_DISMISS = "text[button]=Sounds good"
 ROW_PAUSE_S = (2.0, 5.0)
 
 # The profile page: h1 = name; the header (topSection) holds the picture, the
-# socials row and a "<Month> birthday" line. Birthday is read from the header
+# socials row and a "<Month> birthday" line ("<Month> birthday ·" when a
+# "Joined <date>" follows it). Birthday is read from the header
 # only: the events grid below it has titles like "October birthday". Instagram
 # links are read page-wide as before (the footer's @partiful excluded) since
 # matching depends on them; the other networks only from the socials row,
@@ -62,7 +63,7 @@ EXTRACTOR_JS = (
     "var events=t.filter(function(x,i){return /^(In about |In \\d+ |\\d+ (days?|months?|years?) ago$|Yesterday|Today)/.test(t[i+1]||'')}).length;"
     "var bday=lines(document.querySelector('"
     + TOP
-    + "')).filter(function(x){return /^(January|February|March|April|May|June|July|August|September|October|November|December) birthday$/i.test(x)})[0]||null;"
+    + "')).filter(function(x){return /^(January|February|March|April|May|June|July|August|September|October|November|December) birthday\\b/i.test(x)})[0]||null;"
     "return JSON.stringify({name:name,instagram:ig,"
     "tiktok:pick(/tiktok\\.com\\/@([A-Za-z0-9._]+)/),"
     "twitter:pick(/(?:twitter|x)\\.com\\/([A-Za-z0-9_]+)/),"
