@@ -46,6 +46,52 @@ def run(setup: str, expression: str):
     return json.loads(out.stdout)["v"]
 
 
+@pytest.mark.parametrize(
+    "header_line,api_name,api_username,expected",
+    [
+        ("73 posts", None, "example_person", None),
+        ("1.2K followers", None, "example_person", None),
+        ("Following", None, "example_person", None),
+        ("Message", None, "example_person", None),
+        ("Example Person", None, "example_person", "Example Person"),
+        ("73 posts", "Example Person", "example_person", "Example Person"),
+        ("Old Name", "Example Person", "example_person", "Example Person"),
+        ("73 posts", "Unrelated Person", "other_person", None),
+    ],
+)
+def test_instagram_profile_names_never_use_header_counts_or_controls(
+    header_line, api_name, api_username, expected
+):
+    from people_sync.scrape import instagram
+
+    header = "example_person\n" + header_line + "\n12 followers\n34 following"
+    setup = (
+        "document.body={innerText:''};location={pathname:'/example_person/'};"
+        "document.querySelector=()=>({innerText:"
+        + json.dumps(header)
+        + ",querySelector:()=>null,querySelectorAll:()=>[]});"
+    )
+    extracted = json.loads(run(setup, instagram.EXTRACTOR_JS))
+    captured = []
+    if api_name is not None:
+        captured = [
+            {
+                "url": "https://www.instagram.com/api/v1/users/web_profile_info/",
+                "body": json.dumps(
+                    {
+                        "data": {
+                            "user": {
+                                "username": api_username,
+                                "full_name": api_name,
+                            }
+                        }
+                    }
+                ),
+            }
+        ]
+    assert instagram.parse(extracted, captured).display_name == expected
+
+
 PARTIFUL_ROW_DOM = """
 globalThis.events = [];
 globalThis.row = {
