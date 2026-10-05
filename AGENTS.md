@@ -87,6 +87,8 @@ navigation returns once both its rendered header and matching profile response
 are ready. Unrelated users in captured responses must never satisfy readiness
 or supply another profile's fields. Missing profile JSON gets a bounded wait
 and the existing complete-header fallback, not an empty cached profile.
+Display names prefer the matching structured profile; the shared parser rejects
+header counts and action labels so live scraping and retained replay agree.
 
 Repeat `scrape --target` up to ten times for a coordinated queue. One process
 selects records once, staggers starts, reserves attempts atomically in `Pacer`,

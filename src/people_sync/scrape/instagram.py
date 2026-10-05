@@ -199,11 +199,20 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
         if hd:
             avatar_url = hd
 
+    display_name = (user or {}).get("full_name", eval_result.get("full_name"))
+    if display_name and re.fullmatch(
+        r"\d[\d,.KkMm]*\s+(?:posts?|followers|following)"
+        r"|Follow|Following|Message|Follow Back|Requested",
+        display_name.strip(),
+        re.IGNORECASE,
+    ):
+        display_name = None
+
     return Profile(
         platform="instagram",
         profile_url=URL.format(handle=username) if username else "",
         platform_id=username,
-        display_name=eval_result.get("full_name"),
+        display_name=display_name or None,
         bio=bio,
         location=None,
         hometown=None,
