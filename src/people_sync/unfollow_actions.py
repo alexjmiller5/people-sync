@@ -30,7 +30,7 @@ OPERATIONS = {
     "venmo": "remove-friend",
 }
 ADAPTERS = {"instagram": instagram_action, "facebook": facebook_action, "venmo": venmo_action}
-SUPPORTED = {(platform, OPERATIONS[platform]) for platform in ADAPTERS}
+SUPPORTED = {("instagram", "unfollow"), ("venmo", "remove-friend")}
 TTL = 3600
 REMOTE_ID_SQL = "coalesce(json_extract(raw, '$.id'), json_extract(raw, '$.pk'), json_extract(raw, '$.graphql_user.id'), json_extract(raw, '$.web_profile_info.data.user.id'))"
 COLUMNS = (
@@ -67,7 +67,7 @@ def require(condition, reason="invalid plan"):
 
 
 def adapter(platform):
-    require((platform, OPERATIONS.get(platform)) in SUPPORTED, "unsupported source/action")
+    require(platform in ADAPTERS, "unsupported source/action")
     return ADAPTERS[platform]
 
 

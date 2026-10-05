@@ -857,9 +857,7 @@ def test_unfollowed_friend_is_still_eligible_for_unfriend(estate):
     assert plan.operation == "unfriend"
 
 
-@pytest.mark.parametrize(
-    ("platform", "operation"), [("facebook", "unfriend"), ("venmo", "remove-friend")]
-)
+@pytest.mark.parametrize(("platform", "operation"), [("venmo", "remove-friend")])
 def test_engine_dispatches_friend_adapters(estate, engine, mocker, platform, operation):
     from importlib import import_module
 
@@ -881,6 +879,26 @@ def test_engine_dispatches_friend_adapters(estate, engine, mocker, platform, ope
     perform.assert_called_once()
     assert not clicks
     assert actions.read_journal()[0]["state"] == "done"
+
+
+def test_facebook_apply_is_disabled_but_observation_adapter_is_available(estate, mocker):
+    from people_sync import unfollow_actions as actions
+
+    estate[0].execute("UPDATE people_sync_records SET source='facebook',id='facebook:'||source_id")
+    plan = actions.make_plan(
+        "facebook",
+        "unfriend",
+        "900009",
+        ["facebook:example_target"],
+        remote_ids={"facebook:example_target": "900001"},
+    )
+    approve = mocker.patch.object(actions, "approve")
+    connect = mocker.patch.object(actions.cdp.Browser, "connect")
+    with pytest.raises(actions.Refused, match="unsupported"):
+        actions.execute(plan)
+    assert actions.adapter("facebook") is actions.facebook_action
+    approve.assert_not_called()
+    connect.assert_not_called()
 
 
 def test_friend_removal_preserves_unknown_follow_state_and_leaves_queue(estate, engine, mocker):
