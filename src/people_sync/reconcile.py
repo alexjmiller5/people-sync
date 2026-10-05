@@ -136,13 +136,13 @@ def _primary_entry(items: list[dict]) -> dict:
 def _birthday(date: dict) -> str | None:
     """Google date -> life-data birthday text.
 
-    life-data stores birthdays as YYYY-MM-DD; no partial birthday exists in the
-    table yet, so a year-less Google birthday takes the ISO 8601 `--MM-DD` form.
+    Unknown years use `--MM-DD`, including Apple's 1604 placeholder carried
+    into Google Contacts. Retained source dates remain unchanged.
     """
     if not date.get("month") or not date.get("day"):
         return None
     month_day = f"{int(date['month']):02d}-{int(date['day']):02d}"
-    if date.get("year"):
+    if date.get("year") and int(date["year"]) != 1604:
         return f"{int(date['year']):04d}-{month_day}"
     return f"--{month_day}"
 
