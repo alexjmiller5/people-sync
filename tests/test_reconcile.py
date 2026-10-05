@@ -573,6 +573,21 @@ def test_merge_refuses_a_person_merged_into_itself(env):
 # --- create -------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("year,expected", [(1604, "--03-04"), (0, "--03-04"), (1990, "1990-03-04")])
+def test_create_preview_does_not_treat_contact_placeholder_as_birth_year(
+    env, capsys, year, expected
+):
+    record = _record(raw=_raw(birthday=[{"date": {"year": year, "month": 3, "day": 4}}]))
+    env.patch("people_sync.lifedata.sql", side_effect=_router(records=[record]))
+
+    reconcile.main(["create", "google_contacts:people/c1"])
+
+    row = next(
+        line[8:] for line in capsys.readouterr().out.splitlines() if line.startswith("DRY-RUN {")
+    )
+    assert json.loads(row)["birthday"] == expected
+
+
 def test_create_populates_every_field_with_the_dash_stripped_page_id(env):
     page_id = "12345678-90ab-cdef-1234-567890abcdef"
     stub = env.patch("people_sync.notion_people.create_stub", return_value=page_id)
