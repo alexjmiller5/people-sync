@@ -389,14 +389,73 @@ Scripts are importable by their bare module name (`pyproject`'s pytest
 `pythonpath` and ruff `src` both include `scripts`), which is what lets
 `reconcile.py` reuse `google_cleanup.user_groups` and lets tests import it.
 
-## Unfollow list (`people-sync unfollow`)
+## Public social accounts
 
-A record the user drags to the review page's ignore zone ("I don't know them")
-lands in the ledger as `status = 'ignored'`. `unfollow.py` lists the ignored
-records on follow platforms whose `i_follow` is not 0, with profile URLs, as the
-to-do list for unfollowing; a later export drops the row without any further
-bookkeeping, either by showing `i_follow = 0` or by no longer listing the
-account at all.
+`public_accounts.py` implements `reconcile public <record_id>` with exactly
+one of `--organization ID`, `--figure ID`, or `--festival ID`.
+Owners are existing live rows in `organizations`, `public_figures`, or
+`music_festivals`; users create them with the installed `life` CLI.
+`public_accounts` has `record_id` and the three optional owner refs, exactly
+one populated. Read platform/handle/profile observations by joining the
+ledger/cache, never by maintaining another copy.
+
+Dry run is the default. Apply inserts the account relation before setting
+the ledger to `public` and clearing its suggestion. Retry with the same
+owner repairs an interrupted status write without duplicating the account.
+Matched records, conflicting owners and tombstones require explicit resolution.
+`ignore` refuses public accounts. Existing ingest preserves their status;
+matching, personal triage and unfollow reports exclude them.
+Catalog rules enforce valid owners, uniqueness and separation from people;
+a check-only rule reports interrupted classifications. Schema is user state,
+created and cataloged through `life`, never installed from this repo.
+Organizations describe social identities, with optional `places.organization_id`
+for physical locations. Employment stays independent and has no organization ref.
+
+## Unfollow (`people-sync unfollow`)
+
+The default command and `--json` list ignored records whose `i_follow` is not
+0, preserving profile URLs. `unfollow_actions.py` adds immutable one-hour
+`plan` batches, read-only live `prepare`, interactive `apply`, verification-only
+`resume`, and read-only `journal`. Preparation binds observed stable IDs and
+relationship states without changing accounts or estate rows. Its final plan
+retains the validated ledger snapshot. A plan binds exact ledger IDs and snapshots, platform/operation,
+signed-in actor, canonical target URLs, observed remote numeric IDs and a full
+SHA256 digest. The human types the exact digest phrase in a foreground canonical
+TTY; no flags, environment values or pipes grant approval. Agents never type it.
+Revalidate expiry and ignored ledger state after approval and before each action.
+
+Instagram `unfollow`, Facebook `unfriend`, and Venmo `remove-friend` use
+source-specific adapters under `scrape/`. LinkedIn `remove-connection` remains
+an explicit plan operation whose apply is refused. Profile inspection and menu
+opening have read-only live validation; final removal and its live postcondition
+remain untested. Synthetic tests exercise strict identity-bound English controls.
+Do not relax selectors or claim broader live validation. Facebook binds the
+numeric authenticated actor ID; other adapters bind the authenticated handle.
+The adapter checks actor/profile identity and mandatory bound numeric IDs,
+warning markers and unique visible controls again within every click's JS turn.
+A missing ID or unknown/ambiguous DOM halts; no broad-selector or API fallback.
+
+Private XDG operational state contains 0400 plans and a 0600 SQLite journal in
+0700 directories, with retained URLs for recovery and no credentials/full-page
+captures. Serialize operations under both journal and scraper platform locks;
+reuse Pacer and its shared block monitor. Persist attempt intent before clicks.
+Failed/uncertain attempts cannot be retried by apply or a newly minted plan.
+Resume only verifies attempted targets, never clicks, and accepts expired plans
+for recovery. Unattempted targets stay untouched and require a new approved plan.
+
+Only a positive live absence observation from a newly loaded document permits
+completion. Instagram writes `i_follow=0`; friendship operations preserve that
+independent flag and write `raw.people_sync_relationship` (operation, absent
+state, actor, approved digest, verification time). The default queue omits the
+completed relationship, while a later import can replace that raw observation.
+These guarded writes go through lifedata, followed by idempotent
+`evidence_of` provenance from the approved manual review batch. Ledger drift
+blocks that write; preserve ignored status and URLs. Journal `verified` means
+remote absence was observed but bookkeeping may need repair; `done` follows
+both writes. Recovery preserves an acknowledged `ledger_at` and skips the
+completed ledger write; repeated provenance failures cannot make it stale.
+Unfollowed records remain eligible for an explicitly selected friendship
+removal. Unsupported and partial batches cannot print success.
 
 ## Updates to known contacts
 

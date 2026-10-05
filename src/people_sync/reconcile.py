@@ -210,6 +210,12 @@ def _record(record_id: str) -> dict:
         sys.exit(f"no contact record {record_id}")
     if record["status"] not in ("pending", "matched"):
         sys.exit(f"record {record_id} is {record['status']}, expected pending")
+    if _one("SELECT name FROM sqlite_master WHERE type='table' AND name='public_accounts'"):
+        if _one(
+            "SELECT id FROM public_accounts "
+            f"WHERE record_id = {lifedata.sq(record_id)} AND deleted_at IS NULL"
+        ):
+            sys.exit(f"record {record_id} has a public account; resolve it explicitly first")
     return record
 
 
@@ -659,6 +665,9 @@ def ignore(record_ids: list[str], ops: Ops) -> None:
         if record["status"] == "ignored":
             print(f"{record_id} is already ignored")
             continue
+        if record["status"] == "public":
+            print(f"{record_id} is public - not ignored")
+            continue
         if record["status"] == "matched":
             print(f"{record_id} is matched to {record['person_id']} - not ignored")
             continue
@@ -710,13 +719,28 @@ def build_parser() -> argparse.ArgumentParser:
         "ignore", parents=[flags], help="mark pending records as not someone the user knows"
     )
     ignore_p.add_argument("record_ids", nargs="+")
+    public_p = sub.add_parser(
+        "public",
+        parents=[flags],
+        help="keep a reviewed social account outside personal relationships",
+    )
+    public_p.add_argument("record_id")
+    owner = public_p.add_mutually_exclusive_group(required=True)
+    owner.add_argument("--organization", metavar="ID")
+    owner.add_argument("--figure", metavar="ID")
+    owner.add_argument("--festival", metavar="ID")
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     ops = Ops(args.apply and not args.dry_run)
-    if args.command == "link":
+    if args.command == "public":
+        from people_sync import public_accounts
+
+        kind = next(k for k in public_accounts.OWNERS if getattr(args, k))
+        public_accounts.link(args.record_id, kind, getattr(args, kind), ops)
+    elif args.command == "link":
         link(args.person_id, args.record_id, args.rename, ops, args.name)
     elif args.command == "merge":
         merge(args.survivor_id, args.loser_id, ops)
