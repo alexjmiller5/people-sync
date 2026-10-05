@@ -269,10 +269,12 @@ run `prepare` first. A bound ID must match the live profile before every click.
 | Platform | Explicit operation | Executable adapter |
 | --- | --- | --- |
 | Instagram | `unfollow` | Strict English profile/dialog controls |
-| Facebook | `unfriend` | Strict profile/menu/confirmation controls |
+| Facebook | `unfriend` | Read-only preparation; apply refuses |
 | LinkedIn | `remove-connection` | Unsupported; apply refuses |
 | Venmo | `remove-friend` | Strict profile/menu controls; Unfriend submits directly |
 
+Facebook final submission is disabled while control ownership and document
+binding remain unverified. Its read-only preparation remains available.
 Facebook uses the authenticated numeric account ID for `--actor`; Instagram
 and Venmo use the exact account handle. Read-only profile and menu checks have
 live validation. Final removal and the subsequent live postcondition have

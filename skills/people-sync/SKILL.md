@@ -281,8 +281,8 @@ For requested removals, run `unfollow prepare --platform <source> --actor <accou
 only reads live identity and relationship state, and saves a private exact plan.
 Show the full batch before `unfollow apply <plan>`; the human must type its
 exact terminal confirmation. Never enter that phrase for them. Instagram
-unfollow, Facebook unfriend and Venmo remove-friend have adapters; LinkedIn
-removal is unsupported and refuses execution. Friendship absence does not
+unfollow and Venmo remove-friend have executable adapters. Facebook supports
+read-only preparation; Facebook and LinkedIn removal refuse execution. Friendship absence does not
 overwrite the independent follow flag. After interruption, `unfollow journal`
 and `unfollow resume <original-plan>` verify outcomes without repeating removals.
 `whatsapp-links --output PATH` (chat deep links for WhatsApp records whose number

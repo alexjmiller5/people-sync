@@ -424,9 +424,10 @@ SHA256 digest. The human types the exact digest phrase in a foreground canonical
 TTY; no flags, environment values or pipes grant approval. Agents never type it.
 Revalidate expiry and ignored ledger state after approval and before each action.
 
-Instagram `unfollow`, Facebook `unfriend`, and Venmo `remove-friend` use
-source-specific adapters under `scrape/`. LinkedIn `remove-connection` remains
-an explicit plan operation whose apply is refused. Profile inspection and menu
+Instagram `unfollow` and Venmo `remove-friend` have executable adapters under
+`scrape/`. Facebook has read-only preparation; apply is disabled until control
+ownership and document binding are verified. LinkedIn `remove-connection`
+remains an explicit plan operation whose apply is refused. Profile inspection and menu
 opening have read-only live validation; final removal and its live postcondition
 remain untested. Synthetic tests exercise strict identity-bound English controls.
 Do not relax selectors or claim broader live validation. Facebook binds the
