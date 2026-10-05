@@ -108,11 +108,11 @@ def test_attempt_reservation_is_atomic_and_preserves_prior_attempts(tmp_path, mo
 
 
 @pytest.mark.parametrize("targets", [["a", "a"], [""], [f"tab-{i}" for i in range(11)]])
-def test_invalid_targets_fail_before_querying_or_connecting(targets, mocker):
+def test_invalid_targets_fail_before_querying_or_connecting(targets, mocker, tmp_path):
     query = mocker.patch.object(run, "_select_records")
     connect = mocker.patch.object(run.Browser, "connect")
     with pytest.raises(ValueError):
-        run.scrape("instagram", targets=targets)
+        run.scrape("instagram", targets=targets, state_path=str(tmp_path / "pace.json"))
     query.assert_not_called()
     connect.assert_not_called()
 

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+from functools import partial
 import json
 import sqlite3
 import shutil
@@ -15,6 +16,9 @@ from people_sync.scrape.profile import ExtractError, Profile
 
 @pytest.fixture(autouse=True)
 def no_live_archive(mocker, monkeypatch, tmp_path):
+    # The production default is bound at import; XDG_STATE_HOME alone does not
+    # isolate its run lock from a real scrape on the operator's machine.
+    monkeypatch.setattr(run, "scrape", partial(run.scrape, state_path=str(tmp_path / "pace.json")))
     stored = {}
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     mocker.patch(

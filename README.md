@@ -241,6 +241,85 @@ no queued record is retried automatically. Each tab is checked before its first
 navigation and while storage or pacing is in progress. A halt preserves pending
 records and screenshots for review. A new run is an explicit operator action.
 
+## Approval-gated relationship removal
+
+`people-sync unfollow` and `people-sync unfollow --json` remain read-only
+reports. Removing a relationship is a separate, exact batch:
+
+```sh
+people-sync unfollow prepare --platform instagram --actor example_operator \
+  --record-id instagram:example_target --endpoint localhost:9222
+people-sync unfollow apply /path/to/private/plan.json --endpoint localhost:9222
+people-sync unfollow journal
+people-sync unfollow resume /path/to/private/plan.json --endpoint localhost:9222
+```
+
+`prepare` only reads the selected accounts. It verifies the signed-in actor,
+records stable target IDs and reports which relationships are already absent.
+It never clicks a removal, requests approval, or writes to the estate.
+Repeat `--record-id` for each intended target. There is no implicit "all".
+Plans bind the ignored ledger rows, operation, signed-in account, canonical
+profile URLs, observed numeric IDs, full SHA256 digest and one-hour expiry.
+For offline planning, `plan --operation unfollow` accepts independently observed
+IDs through repeated `--remote-id instagram:example_target=900001`.
+Retained ledger IDs are included automatically. Conflicting or duplicate IDs
+refuse planning. Applying a handle-only plan is refused before approval;
+run `prepare` first. A bound ID must match the live profile before every click.
+
+| Platform | Explicit operation | Executable adapter |
+| --- | --- | --- |
+| Instagram | `unfollow` | Strict English profile/dialog controls |
+| Facebook | `unfriend` | Strict profile/menu/confirmation controls |
+| LinkedIn | `remove-connection` | Unsupported; apply refuses |
+| Venmo | `remove-friend` | Strict profile/menu controls; Unfriend submits directly |
+
+Facebook uses the authenticated numeric account ID for `--actor`; Instagram
+and Venmo use the exact account handle. Read-only profile and menu checks have
+live validation. Final removal and the subsequent live postcondition have
+**not been exercised against a real account**; synthetic tests cover them.
+Authenticated viewer identity, stable target identity and exact controls must
+all match. Missing or ambiguous controls, a login wall, a different
+account, redirects, expired approval or a source warning halt the batch.
+There are no guessed selectors or API fallbacks. Friendship/connection removal
+is never substituted for unfollowing, or vice versa.
+
+`apply` presents every operation and URL on the controlling terminal, then
+requires the human to type `REMOVE <count> <platform> <operation> <full digest>`
+exactly. No `--yes`, `--force`, environment approval or piped input exists.
+Agents must leave this final confirmation to the human. A TTY interlock cannot
+authenticate who controls a terminal; automation must never type the phrase.
+The selected batch is rechecked after approval and before each action.
+Use `--target` (or `PEOPLE_SYNC_CDP_TARGET`) for a caller-owned, grouped tab;
+the caller closes that tab. Otherwise the CLI creates and closes its own tab.
+
+Private operational state lives in `$XDG_STATE_HOME/people-sync/unfollow`
+(default `~/.local/state/people-sync/unfollow`): immutable `0400` plans, read-only observations and a
+`0600` SQLite journal under `0700` directories. Keep this state for recovery.
+It holds exact identities, URLs and outcomes, never credentials or full-page
+captures. An attempt is durably recorded **before** any click. Warnings stop
+the serial queue, which uses the scraper's Pacer and platform run lock.
+
+Only a positive absence observation from a newly loaded document permits local
+completion. Instagram writes `i_follow=0`. Friendship removal preserves the
+independent follow flag and writes `raw.people_sync_relationship` with the
+operation, actor, absent state, approved digest and verification time. The
+default queue excludes that completed relationship. A subsequent source import
+can replace the observation with fresh source data.
+The CLI compares the current row before writing through `life`, preserves its
+profile URL and ignored status, and adds
+`evidence_of` provenance referencing the approved review batch. Lost storage
+replies can be repaired idempotently. Recovery preserves an acknowledged ledger
+timestamp and skips that completed write, even when provenance is interrupted
+more than once.
+
+After interruption or an uncertain result, use `resume` with the **original
+plan**, even if expired. Its `VERIFY ... <digest>` prompt authorizes verification
+and local bookkeeping only. It never repeats a click, and a new plan cannot
+bypass an existing attempt. If the relationship is still present, it remains
+unknown and stops. Unattempted targets require a new plan and approval. A partial
+resume exits 2; refusals/errors exit 1; interruption exits 130. Success prints
+verified and unattempted counts. Unsupported batches never report completion.
+
 ## Notion credential boundary
 
 People Sync owns a dedicated internal connection with Read content and
@@ -252,3 +331,28 @@ creates pages only in People. `NOTION_API_TOKEN` comes from this project's
 environment, including the installed mini wrapper. Stub creation references
 the stable `title` property ID. Relation checks are read-only; human
 operators re-point relations and handle deletions.
+
+
+### Keep public social accounts outside personal relationships
+
+Create or reuse an owner in `organizations`, `public_figures`, or
+`music_festivals` using your installed `life` CLI and catalog conventions.
+Then review and apply:
+
+```sh
+people-sync reconcile public <record-id> --organization <organization-id>
+people-sync reconcile public <record-id> --organization <organization-id> --apply
+```
+
+Use `--figure` or `--festival` for the other owner types. The optional public
+account catalog consists of `public_accounts(record_id, organization_id,
+public_figure_id, music_festival_id)` with exactly one owner. Account identity
+and cached profile details stay in the source ledger and profile table.
+The ledger needs the `public` status in its catalog. These are user-managed
+tables, created through Life Data, not repository configuration.
+
+Public accounts stay out of personal triage, matching, and unfollow suggestions,
+including after re-import. Rerun the same command after an interrupted write.
+It refuses reassignment and deleted rows; resolve those explicitly through Life
+Data. Classification is a review decision, never inferred from follower counts.
+Employment is independent of organizations.

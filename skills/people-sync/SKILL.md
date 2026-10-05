@@ -20,7 +20,7 @@ development. Life-data is the estate it writes into (`life-map` /
 
 - **The ledger is the memory.** Every record ever seen is a
   `people_sync_records` row keyed `<source>:<source_id>` with a status:
-  `pending` resurfaces, `matched` never re-asks, `ignored` never comes back.
+  `pending` resurfaces; `matched`, `ignored`, and `public` preserve the review decision.
   Never clear it to "start fresh".
 - **Every input is retained before it is parsed.** Exports, contact pages,
   snapshots and profile visits are uploaded as immutable captures, read back,
@@ -155,20 +155,33 @@ people-sync queue          # every pending record, suggestions first
 
 Present the queue to the user in batches of 10-20 with the identifying
 context (source, handle, display name, follow direction, scraped context),
-never one message per record. Three verbs:
+never one message per record. Review actions:
 
 - **link** an existing person / **merge** two people / **create** a person:
-  `people-sync reconcile link <person_id> <record_id>`, `merge <loser>
-  <winner>`, `create <record_id> --name ...`. Dry run by default, `--apply`
+  `people-sync reconcile link <person_id> <record_id>`, `merge <survivor>
+  <loser>`, `create <record_id> --name ...`. Dry run by default, `--apply`
   to write. Lossless by construction: existing values are never overwritten
   (conflicts land in `notes`, a replaced name survives as `nickname`,
   circles union, a merge re-points every child row and prints the loser's
   Notion relations for a manual re-point).
 - **new person** when the estate has never had them:
   `people-sync new-person --name "<Full Name>"` (Notion stub, then the row).
-- **ignore** a stranger, business or burner:
-  `life sql "UPDATE people_sync_records SET status = 'ignored' WHERE id = '<record_id>'"`.
-  Ignored never resurfaces; use it, or the stranger is re-triaged forever.
+- **public** for a reviewed social account the user wants to keep outside personal
+  relationships: create or reuse an owner through the installed `life` CLI,
+  then `people-sync reconcile public <record_id> --organization <id>`
+  (or `--figure <id>` / `--festival <id>`). Dry run first; `--apply` writes.
+  Owners live in `organizations`, `public_figures`, or existing `music_festivals`.
+  The `public_accounts` relation references the ledger for its platform, handle,
+  source ID, and profile evidence. No duplicated observations. Public records
+  leave personal triage and unfollow suggestions and remain public on re-import.
+  An interrupted write is repaired by rerunning with the same owner.
+  Known friends stay people regardless of followers or verification. Never
+  classify from follower counts alone. Employment remains separate.
+- **ignore** a stranger or account the user does not want to keep:
+  `people-sync reconcile ignore <record_id>` (dry run; `--apply` to write).
+  Ignored records leave triage and appear in the unfollow report when followed.
+  This command refuses matched or public records; reassignment is a separate
+  explicit decision.
 
 While the user is looking at a person, record what they volunteer in the
 right table: `people.circles` (their vocabulary; read sibling rows first and
@@ -262,6 +275,16 @@ chosen events to `propose --events` (`{record id: [titles]}`) so a lone
 Partiful mutual who was at one of them earns a box.
 `unfollow` (ignored accounts the user still follows, per platform with URLs; the
 report's Unfollow line; re-ingesting an export clears the ones already done).
+
+For requested removals, run `unfollow prepare --platform <source> --actor <account>
+--record-id <id>` with the operator's CDP endpoint and grouped tab. Preparation
+only reads live identity and relationship state, and saves a private exact plan.
+Show the full batch before `unfollow apply <plan>`; the human must type its
+exact terminal confirmation. Never enter that phrase for them. Instagram
+unfollow, Facebook unfriend and Venmo remove-friend have adapters; LinkedIn
+removal is unsupported and refuses execution. Friendship absence does not
+overwrite the independent follow flag. After interruption, `unfollow journal`
+and `unfollow resume <original-plan>` verify outcomes without repeating removals.
 `whatsapp-links --output PATH` (chat deep links for WhatsApp records whose number
 is in the local address book; pass the file to `review --links` so each WhatsApp
 card opens the chat in the desktop app for context).
