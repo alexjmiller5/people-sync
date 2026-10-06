@@ -54,6 +54,7 @@ uv run python -m people_sync <command>
 | `propose --batch <label> <context.json> ... --output <proposals.json>` | Proposes identity clusters for the review page from names, handles, spellings, place/school/era cues, iMessage cues and shared phone numbers; unconnected entries become separate proposed people |
 | `capture <source> --path <p>` | Retains a privacy-filtered export as an immutable capture without ingesting it |
 | `captures [--state-dir <d>]` | Lists the locally cached captures and verifies each against the file service |
+| `observations [--state-dir <d> \| --input <capture.json>] [--apply]` | Previews an immutable source-entry index; apply verifies retained bytes and inserts missing observations and provenance |
 | `replay --input <capture.json> [--compare <prev>] [--output <p>]` | Parses a retained capture offline into a proposal, with no network and no estate writes |
 | `match` | Auto-links unambiguous pending records to existing people and writes their `person_accounts` rows |
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
@@ -358,3 +359,44 @@ including after re-import. Rerun the same command after an interrupted write.
 It refuses reassignment and deleted rows; resolve those explicitly through Life
 Data. Classification is a review decision, never inferred from follower counts.
 Employment is independent of organizations.
+
+## Source observation index
+
+The shared `people_sync_profiles` table remains the latest profile cache. The
+optional `people_sync_observations` table addresses each original row in a
+validated capture independently of resolved people or account IDs. Identical
+names at different ordinals stay separate. A scope row with a null entry ordinal
+preserves empty, failed and truncated acquisitions. Platform-specific values
+remain in the original file, with hashes and addresses in the index.
+
+Create this operator-owned table through Life Data before applying:
+
+```sh
+life table create people_sync_observations 'capture_key:text!' 'source:text!' \
+  'kind:select!(profile|export|list|contacts)' 'captured_at:datetime!' \
+  'completeness:select!(complete|privacy-filtered|extracted-only|partial|legacy-parsed-only)' \
+  'capture_sha256:text!' 'payload_sha256:text!' 'scope:text!' \
+  'entry_ordinal:int' 'entry_sha256:text!'
+```
+
+Describe and catalog the table for your estate, mark its value columns immutable,
+and refresh its catalog documentation. `id` is a deterministic `psobs:` SHA256
+of capture key, scope and entry ordinal. `capture_sha256` hashes the canonical
+envelope; `payload_sha256` hashes its payload. `entry_sha256` hashes the addressed
+entry, or its scope summary when the ordinal is null. The source and completeness
+values come from the capture envelope, not a claim of platform-wide coverage.
+
+Run `people-sync observations` during an on-demand review; it reads the local
+capture cache without networking or writing. Use `--apply` to check each capture
+against the retained file service and write observations and `imported_from`
+provenance in batches. The usual Life CLI and file-service credentials apply.
+There is no scheduler and collectors do not automatically populate this index.
+Repeat apply after an interrupted run: existing observations are checked, missing
+edges repaired, and deleted rows held. Conflicting content is refused. Apply may
+partially succeed; its JSON report and exit status identify unverified captures
+and invalid inputs. An empty input directory is an error.
+
+This indexes only retained, validated envelopes. Legacy extracted files, missing
+originals, inputs excluded before capture, and unreceived responses cannot be
+recovered by indexing. No profile refresh, identity merge, follow action or
+inventory reconstruction occurs.

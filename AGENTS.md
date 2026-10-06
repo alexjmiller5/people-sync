@@ -6,6 +6,15 @@ No daemon, no cron: it is run ad hoc, roughly monthly, by an agent working
 through the `people-review` skill. That skill is the runbook (procedures,
 triage, sweeps); this file is how to work on the code.
 
+`observations.py` indexes validated retained captures into the optional
+operator-owned `people_sync_observations` table. Its identity is capture key,
+scope and original entry ordinal, never display name or resolved person. Null
+entry ordinals preserve scope coverage. Preview is offline; apply verifies exact
+retained envelope bytes, inserts only missing rows, preserves tombstones and
+repairs provenance. Keep source payloads in their retained files and the shared
+latest-profile cache unchanged. The README describes the catalog contract;
+product code never creates user tables or installs a schedule.
+
 ## Layout
 
 ```
