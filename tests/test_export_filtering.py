@@ -263,6 +263,7 @@ def test_checksum_valid_manifest_tampering_is_rejected(tmp_path, change):
 def test_filtered_ingest_retains_and_verifies_before_parsing(tmp_path, monkeypatch, capsys):
     from people_sync import cli, ledger, parsers, photos
 
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     path = tmp_path / "Connections.csv"
     path.write_text(
         "First Name,Last Name,URL,Company\nExample,Person,https://linkedin.com/in/example-123456789,secret@example.test\n"
@@ -295,6 +296,8 @@ def test_filtered_ingest_retains_and_verifies_before_parsing(tmp_path, monkeypat
     assert [r.source_id for r in written] == ["example-123456789"]
     assert written[0].raw["Company"] == ""
     assert written[0].capture_key in stored
+    capture_id = written[0].capture_key.rsplit("/", 1)[-1].removesuffix(".json")
+    assert (tmp_path / "state" / "people-sync" / "captures" / f"{capture_id}.json").exists()
     assert events == ["retain", "verify", "parse"]
     assert path.read_bytes() == original
 
