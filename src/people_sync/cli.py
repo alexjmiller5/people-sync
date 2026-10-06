@@ -86,6 +86,37 @@ def cmd_captures(args: argparse.Namespace) -> None:
     print(json.dumps({"captures": entries}))
 
 
+def cmd_observations(args: argparse.Namespace) -> None:
+    from people_sync import observations
+
+    paths = (
+        [Path(args.input)]
+        if args.input
+        else sorted((captures.state_directory(args.state_dir) / "captures").glob("*.json"))
+    )
+    inputs, failed = [], []
+    if not paths:
+        failed.append({"reason": "no-captures"})
+    for ordinal, path in enumerate(paths):
+        try:
+            c = json.loads(path.read_bytes())
+            if isinstance(c, dict) and "schema_version" not in c:
+                failed.append({"input_ordinal": ordinal, "reason": "legacy-unverified"})
+                continue
+            captures.validate(c)
+            inputs.append(c)
+        except Exception:
+            failed.append({"input_ordinal": ordinal, "reason": "invalid-input"})
+    try:
+        report = observations.index(inputs, apply=args.apply)
+    except Exception:
+        sys.exit("observation indexing failed; check the catalog and existing observation rows")
+    report["failed_inputs"] = failed
+    print(json.dumps(report))
+    if failed or report["failed"]:
+        raise SystemExit(1)
+
+
 def cmd_replay(args: argparse.Namespace) -> None:
     try:
         original = Path(args.input).read_bytes()
@@ -390,6 +421,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--verify", action="store_true", help="explicit verification (always on)"
     )
     captures_p.set_defaults(func=cmd_captures)
+
+    observations_p = sub.add_parser(
+        "observations", help="preview or index immutable entries from retained source captures"
+    )
+    observation_input = observations_p.add_mutually_exclusive_group()
+    observation_input.add_argument("--input", help="one validated capture file")
+    observation_input.add_argument("--state-dir", help="private capture state root (default: XDG)")
+    observations_p.add_argument(
+        "--apply", action="store_true", help="verify retained files and insert missing observations"
+    )
+    observations_p.set_defaults(func=cmd_observations)
 
     replay_p = sub.add_parser("replay", help="parse retained input offline into a proposal")
     replay_p.add_argument("--input", required=True)
