@@ -66,6 +66,7 @@ WHATSAPP_PARTIAL = (
 BATCH = 1000  # the hub's stream batch limit (soma worker: 1..1000 records per batch)
 HOLD_BACK = timedelta(days=7)  # a transient exclusion younger than this is re-read next run
 COCOA = 978307200  # 2001-01-01T00:00:00Z in unix seconds
+BUSY_TIMEOUT_S = 60.0  # how long a write waits on another connection to comm.sqlite
 
 _WA = Path.home() / "Library/Group Containers/group.net.whatsapp.WhatsApp.shared"
 LIVE = {
@@ -741,8 +742,10 @@ class State:
         root = Path(root)
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = root / "comm.sqlite"
-        self.db = sqlite3.connect(path)
+        self.db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_S)
         path.chmod(0o600)
+        # WAL: a progress read (`comm coverage`, a shell) never blocks the importer's commits.
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS events (stream TEXT NOT NULL, event_id TEXT NOT NULL,
