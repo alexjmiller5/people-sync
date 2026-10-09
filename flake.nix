@@ -53,6 +53,7 @@
             PEOPLE_SYNC_EMAIL_CODE_COMMAND = cfg.emailCodeCommand;
             PEOPLE_SYNC_SMS_CODE_COMMAND = cfg.smsCodeCommand;
             PEOPLE_SYNC_NOTION_PEOPLE_DS = cfg.notion.peopleDataSource;
+            PEOPLE_SYNC_ADDRESSBOOK_HOST = cfg.addressBookHost;
             PEOPLE_SYNC_NOTION_RELATIONS =
               if cfg.notion.relations == { } then null else builtins.toJSON cfg.notion.relations;
           };
@@ -101,6 +102,12 @@
               type = lib.types.nullOr lib.types.str;
               default = null;
               description = "Command printing the newest SMS one-time code after $PEOPLE_SYNC_CODE_AFTER.";
+            };
+            addressBookHost = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "other-mac";
+              description = "ssh host whose macOS address book `comm` also reads (read-only, in memory) to resolve communication participants to people.";
             };
             notion.peopleDataSource = lib.mkOption {
               type = lib.types.nullOr lib.types.str;

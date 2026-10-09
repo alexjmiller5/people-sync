@@ -54,7 +54,9 @@ Environment variables, all optional except where a command needs them:
 | `PEOPLE_SYNC_CDP_TARGET` | login, scrape, list | attach to one caller-owned tab and leave it open |
 | `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | attach on a real profile | a command that answers the browser's remote-debugging prompt |
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND`, `PEOPLE_SYNC_EMAIL_CODE_COMMAND`, `PEOPLE_SYNC_SMS_CODE_COMMAND` | `login` | commands that print a login's credentials / one-time codes; unset = `login` only verifies an existing session |
-| `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map) |
+| `SOMA_HUB_URL`, `SOMA_HUB_TOKEN` | `comm import`, `comm refresh` | a token that may batch-append to the four `comm_*` streams (`/v1/streams/<name>/batch`) and query them (`soma archive query --raw`); without it events wait in the local outbox and `refresh` uses the local mirror |
+| `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants; unset = this Mac's address book only |
+| `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map, `comm/comm.sqlite`) |
 
 The home-manager module (`homeModules.default`) turns these into options and
 installs this skill next to the CLI. Credentials reach the process through
@@ -395,6 +397,81 @@ foreground `soma sync` only when needed), verify a changed row on another
 replica, then report in chat: per-source ingested/new counts, sources
 skipped and why, matched/confirmed/created/ignored, cleanup, photos,
 captures retained and verified, sweep counts, and anything left open.
+
+## Communication history (`comm`)
+
+Metadata only - who, when, channel, direction, and a call's outcome and
+duration - from Apple Messages, Apple call history and the WhatsApp desktop
+stores, into one soma stream per source plus two tables. Run it ad hoc on the
+Mac whose stores are synced (Messages in iCloud, WhatsApp linked), with the hub
+token in the environment:
+
+```bash
+people-sync comm import all                 # live stores past each checkpoint
+people-sync comm import apple_calls --store <backup>/callhistory.db.gz          # a retained backup
+people-sync comm import whatsapp_calls --store <backup>/whatsapp-callhistory.db.gz --lid-store <backup>/whatsapp-lid.db.gz
+people-sync comm refresh                    # communication_summaries from the streams
+people-sync comm coverage                   # import runs + local outbox
+```
+
+**Never body text.** Store connections carry a SQLite authorizer allowing only
+metadata columns; a query touching a body, subject, preview, caption, name or
+attachment column fails. Never work around it, and never read bodies with `imsg`
+or `wa-db` for this job.
+
+**Records** (one JSON object per event, verbatim in the stream):
+
+| Field | Meaning |
+|---|---|
+| `v` | record version, 1 |
+| `event_id` | native stable id and the dedupe key: Messages `guid`, CallHistory `ZUNIQUE_ID`, WhatsApp `ZSTANZAID` / `ZCALLIDSTRING` (stable across devices and backups) |
+| `at` | event time, ISO-8601 UTC with milliseconds |
+| `channel` | `imessage`, `sms`, `rcs`, `phone`, `facetime_audio`, `facetime_video`, `whatsapp` |
+| `direction` | `outbound` / `inbound` |
+| `conversation_kind` | `direct` / `group`, from the source chat (Messages `chat.style`, WhatsApp session type), never from member count; a call with no chat is `group` when the source lists several remote participants or a group id |
+| `participant_ref` | sha256 of `tel:+E164` / `mailto:local@domain` (domain lowercased), else `whatsapp-lid:<id>` or `other:<handle>` (short codes); null for an outbound group message and for group calls |
+| `person_id` | `people.id` the participant resolved to at import, or null |
+| `chat_ref` | messages: sha256 of the native chat id |
+| `outcome`, `duration_seconds`, `source_outcome` | calls: `answered` / `missed` (incoming, not answered) / `unanswered` (outgoing, not connected) / `unknown`, the source duration, and the raw outcome codes |
+| `media` | WhatsApp calls: `audio` / `video` |
+| `source_status` | WhatsApp messages: raw `ZMESSAGESTATUS` |
+| `instance` | store label: `live`, or `backup:<folder>/<file>` |
+
+**Rules the importer enforces.** A message lands only when proven: outgoing =
+sent (Messages `is_sent`, no `error`; WhatsApp status 6 or 8, no error status),
+incoming = present in the store. Reactions, service/system rows, status posts,
+self-chat, failed sends, call rows inside chats and unknown types are counted
+under `excluded`, never appended. A still-pending send younger than 7 days holds
+the checkpoint so the next run re-reads it. A call is `answered` only on an
+explicit source outcome (Apple `ZANSWERED=1`, WhatsApp outcome 0): Apple records
+no outcome for outgoing calls, so those stay `unknown` whatever their duration.
+
+**Identity.** Participants resolve only through confirmed `person_accounts`
+links (`apple_contacts`, `google_contacts` through the CardDAV external id,
+`whatsapp` LIDs and the number WhatsApp pairs with them), matched in memory
+against the address books; an identity two people claim stays unresolved.
+Unresolved participants stay opaque refs, and `refresh` re-resolves every ref
+with today's links. A Mac with few contacts needs `PEOPLE_SYNC_ADDRESSBOOK_HOST`.
+
+**Tables.** `communication_imports`: one row per run per source, `observed_rows
+= accepted + excluded + duplicates` (enforced), with `coverage`
+(`complete` / `partial` / `unavailable`) and `reason`. WhatsApp is always
+`partial`: the desktop store holds only what the phone synced to it.
+`communication_summaries`: one row per (person, channel), id
+`<person_id>:<channel>`, every column a maintained summary owned by
+`comm refresh` (direct events only; `coverage_start`/`coverage_end` from the
+import rows). Never edit either by hand.
+
+**Outbox.** Accepted events are kept in `$XDG_STATE_HOME/people-sync/comm/comm.sqlite`
+before the hub sees them. A refused append leaves them there (the import row
+says how many wait and why); the next `comm import` hands them over first.
+Rerunning appends nothing; `--full` re-reads everything and counts known
+events as duplicates.
+
+**Verify a run:** per stream, `soma archive query --raw "SELECT count(DISTINCT
+event_id) FROM stream('comm_<source>')"` equals the summed `accepted` of that
+source's import rows once the outbox is empty; spot-check a few summaries
+against the stores (counts only); `soma check` clean for both tables.
 
 ## Gotchas
 
