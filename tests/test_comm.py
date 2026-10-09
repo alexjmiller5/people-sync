@@ -836,3 +836,35 @@ def test_hub_aggregate_sql_dedupes_on_event_id():
     sql = comm.hub_aggregate_sql("apple_calls")
     assert "stream('comm_apple_calls')" in sql and "DISTINCT event_id" in sql
     assert "conversation_kind = 'direct'" in sql
+
+
+# --- the comm credential ------------------------------------------------------------------
+
+
+class Recorder:
+    def __init__(self, stdout=""):
+        self.calls, self.stdout = [], stdout
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        return type("P", (), {"returncode": 0, "stdout": self.stdout, "stderr": ""})()
+
+
+def test_comm_hub_calls_use_the_comm_token_when_set(monkeypatch):
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "files-token")
+    monkeypatch.setenv("SOMA_COMM_HUB_TOKEN", "comm-token")
+    rec = Recorder(stdout="[]")
+    monkeypatch.setattr(comm.subprocess, "run", rec)
+    comm.soma_append("comm_apple_calls", [{"event_id": "x"}])
+    comm.hub_aggregates()
+    assert rec.calls and all(kw["env"]["SOMA_HUB_TOKEN"] == "comm-token" for _, kw in rec.calls)
+    assert "SOMA_COMM_HUB_TOKEN" not in rec.calls[0][1]["env"]
+
+
+def test_comm_hub_calls_keep_the_ambient_token_without_one(monkeypatch):
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "files-token")
+    monkeypatch.delenv("SOMA_COMM_HUB_TOKEN", raising=False)
+    rec = Recorder()
+    monkeypatch.setattr(comm.subprocess, "run", rec)
+    comm.soma_append("comm_apple_calls", [{"event_id": "x"}])
+    assert rec.calls[0][1]["env"]["SOMA_HUB_TOKEN"] == "files-token"

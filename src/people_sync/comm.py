@@ -147,6 +147,20 @@ ALLOWED = {
 }
 
 
+COMM_TOKEN_ENV = "SOMA_COMM_HUB_TOKEN"
+
+
+def _hub_env() -> dict:
+    """The environment for `soma` hub calls made by comm: its own credential, when the
+    operator supplies one, replaces SOMA_HUB_TOKEN for these calls only, so the rest of
+    People Sync keeps its narrower token."""
+    env = dict(os.environ)
+    token = env.pop(COMM_TOKEN_ENV, None)
+    if token:
+        env["SOMA_HUB_TOKEN"] = token
+    return env
+
+
 class AppendError(RuntimeError):
     """The hub did not take a batch; the events stay in the local outbox."""
 
@@ -804,6 +818,7 @@ def soma_append(stream: str, records: list[dict]) -> None:
         input=body,
         capture_output=True,
         text=True,
+        env=_hub_env(),
     )
     if proc.returncode != 0:
         lines = [ln.strip() for ln in proc.stderr.splitlines() if ln.strip()]
@@ -1003,6 +1018,7 @@ def hub_aggregates() -> list[dict]:
             ["soma", "archive", "query", "--raw", hub_aggregate_sql(source)],
             capture_output=True,
             text=True,
+            env=_hub_env(),
         )
         if proc.returncode != 0:
             lines = [ln.strip() for ln in proc.stderr.splitlines() if ln.strip()]
