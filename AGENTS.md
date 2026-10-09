@@ -38,6 +38,7 @@ tests/             pytest, synthetic fixtures only
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
   venmo_payments.py links txns_venmo payments to counterparty ledger records
+  comm.py          communication-history metadata: store adapters, streams, summaries (`people-sync comm`)
 skills/people-sync/ the generic agent runbook, shipped with the package
 docs/superpowers/  design spec and plan
 data/              contact exports, gitignored, never committed
@@ -236,6 +237,44 @@ number is used in memory only. `--no-contacts` skips the lookup.
 local address book and writes `{record id: whatsapp://send?phone=...}` to a 0600
 file for `review --links`; the number is read in memory and lands only in that
 private file and the private page, never in the estate.
+
+## Communication history (`people-sync comm`)
+
+`comm.py` reads Apple Messages, Apple call history and the WhatsApp desktop
+stores and appends metadata-only events to `comm_<source>` streams. Three
+properties to preserve, all tested in `tests/test_comm.py` (synthetic sqlite
+fixtures with canary bodies; never a real store):
+
+- **Metadata only, enforced by SQLite.** `opened()` snapshots each store into a
+  private temp dir (APFS clone with its WAL, or a decompressed `.gz`) and sets an
+  authorizer that denies every column outside `ALLOWED`. A new column is added
+  to `ALLOWED` deliberately; never widen it to a body, subject, payload, name,
+  preview or attachment column, and never catch the "not authorized" error -
+  `run_import` re-raises it as a bug. The canary test fails if a body or raw
+  handle reaches a record, the local state, an import row or the output.
+- **Proven semantics, no inference.** Direct vs group comes from the source
+  chat; a send counts only when the store says it was sent; a call is answered
+  only on an explicit outcome code (Apple outgoing calls have none). The status
+  and outcome mappings in comments were proven on real rows; changing one needs
+  the same proof.
+- **Idempotent and durable.** `State` (`comm.sqlite`, 0600) holds every
+  accepted record keyed `(stream, event_id)`, a `landed` flag and the
+  per-(source, instance) checkpoint, written in one transaction per run. The
+  outbox is flushed with one `soma stream import` call per hub batch
+  (`BATCH = 1000`, the worker's limit) and marked landed only on success. A
+  transient exclusion (a pending send, a call whose chat row has not synced)
+  younger than `HOLD_BACK` holds the checkpoint back.
+
+Identity goes through `build_resolver`: `person_accounts` links joined in
+memory to address-book phones/emails (local, plus `PEOPLE_SYNC_ADDRESSBOOK_HOST`
+over ssh) and WhatsApp LID/number pairs. Numbers and emails are never written
+anywhere; `participant_ref` is the findmy-cli `source_handle_key` hash.
+`refresh` aggregates direct events per participant from the hub (`soma archive
+query --raw`, DuckDB over landing, `count(DISTINCT event_id)`) or, when events
+still wait in the outbox or the hub fails, from the local mirror with the same
+SQL shape, then writes `communication_summaries` through `somadata` and
+`ledger.batch_update`. The tables are operator-created (README); this code never
+creates them.
 
 ## Logins
 

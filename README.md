@@ -67,6 +67,9 @@ uv run python -m people_sync <command>
 | `list partiful-events [--since DATE] [--refresh] [--event-id ID ...]` | Walks the guest lists of past events the user went to or hosted, skipping events whose guest list is already retained (`--refresh` re-walks them), and prints each walked event with its guest and record counts |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
+| `comm import <source\|all> [--full] [--store <db\|db.gz>] [--instance <label>]` | Appends new metadata-only communication events (Apple Messages, Apple calls, WhatsApp messages and calls) to their soma streams and records the run in `communication_imports`; `--store` reads a retained backup |
+| `comm refresh [--local]` | Recomputes `communication_summaries` (one row per person and channel) from the streams, or from the local mirror when the hub is unreachable |
+| `comm coverage` | Prints the import runs and how many events wait in the local outbox |
 
 Every ingest retains its input first: the export, contact page or WhatsApp
 snapshot is validated, uploaded as a capture under `profiles/<source>/captures/`,
@@ -186,6 +189,7 @@ programs.people-sync = {
   credentialCommand = "my-login-secrets"; # optional: `login` types; unset = verify only
   notion.peopleDataSource = "<data_source_id>";
   notion.relations.Gifts = [ "<data_source_id>" "<relation property id>" ];
+  addressBookHost = "other-mac";          # optional: resolve `comm` participants with that Mac's contacts too
 };
 ```
 
@@ -360,6 +364,60 @@ including after re-import. Rerun the same command after an interrupted write.
 It refuses reassignment and deleted rows; resolve those explicitly through Soma
 Data. Classification is a review decision, never inferred from follower counts.
 Employment is independent of organizations.
+
+## Communication history
+
+`people-sync comm` imports who-when-channel-direction metadata, plus a call's
+outcome and duration, from this Mac's Apple Messages (`chat.db`), Apple call
+history (`CallHistory.storedata`, live or a retained `.db`/`.db.gz` backup) and
+the WhatsApp desktop stores (`ChatStorage.sqlite`, `CallHistory.sqlite`,
+`LID.sqlite`). It never reads a message body: each store is opened as a private
+read-only snapshot whose SQLite authorizer refuses every column outside a
+metadata allowlist, so bodies, subjects, previews, captions, chat and contact
+names and attachments cannot reach a record.
+
+Each source lands in its own append-only soma stream (`comm_apple_messages`,
+`comm_apple_calls`, `comm_whatsapp_messages`, `comm_whatsapp_calls`), batched
+through `soma stream import` at the hub's 1000-record limit. The record contract
+(dedupe key `event_id`, `participant_ref` = sha256 of `tel:+E164` /
+`mailto:local@domain`, direct/group from the source chat, explicit call outcomes)
+is in the shipped skill. Raw handles never leave the process: a participant
+resolves to `people.id` only through confirmed `person_accounts` links, resolved
+in memory against the local address book and, with `PEOPLE_SYNC_ADDRESSBOOK_HOST`
+set, another Mac's address book read over ssh.
+
+Accepted events go first to a private local mirror
+(`$XDG_STATE_HOME/people-sync/comm/comm.sqlite`): the dedupe set, the per-source
+checkpoint, and an outbox. A run the hub refuses keeps its events there and says
+so in `coverage`/`reason`; the next run hands them over before reading anything
+new. A rerun appends nothing.
+
+The hub token in the environment must be able to batch-append to the four
+streams and, for `refresh`, query them (`soma archive query --raw`). Without it
+`refresh` falls back to the local mirror and prints which source it used.
+
+Create the two operator-owned tables through Soma, then describe and catalog
+them for your estate (`person_id` refs `people`; every summary column names
+`people-sync comm refresh` as its refresher):
+
+```sh
+soma table create communication_summaries 'person_id:ref!' \
+  'channel:select!(imessage|sms|rcs|phone|facetime_audio|facetime_video|whatsapp)' \
+  'last_outbound_sent_at:datetime' 'last_inbound_received_at:datetime' \
+  'last_answered_call_at:datetime' 'last_answered_call_seconds:number' \
+  'outbound_count:int' 'inbound_count:int' 'calls_answered:int' 'calls_missed:int' \
+  'calls_outbound:int' 'calls_inbound:int' 'last_call_at:datetime' \
+  'coverage_start:datetime' 'coverage_end:datetime' 'refreshed_at:datetime!' 'needs_review:text'
+soma table create communication_imports \
+  'source:select!(apple_messages|apple_calls|whatsapp_messages|whatsapp_calls)' \
+  'source_namespace:text!' 'source_instance:text!' 'window_start:datetime' 'window_end:datetime!' \
+  'observed_rows:int!' 'accepted:int!' 'excluded:int!' 'duplicates:int!' 'excluded_by_reason:json' \
+  'event_min_at:datetime' 'event_max_at:datetime' \
+  'coverage:select!(complete|partial|unavailable)' 'reason:text' 'completed_at:datetime!'
+```
+
+Reads need Full Disk Access for the invoking terminal (Messages, call history
+and the WhatsApp group container are TCC-protected). Nothing is scheduled.
 
 ## Source observation index
 

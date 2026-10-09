@@ -16,6 +16,7 @@ from people_sync import ledger, somadata, match, notion_people, photos, sources
 from people_sync import (
     captures,
     changes,
+    comm,
     google_cleanup,
     propose,
     reconcile,
@@ -565,6 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
 # whole (argparse's REMAINDER cannot carry a leading `--help`).
 DELEGATES = {
     "reconcile": (reconcile.main, "triage moves: link / merge / create (dry run by default)"),
+    "comm": (comm.main, "communication history as metadata: import, refresh, coverage"),
     "google-cleanup": (google_cleanup.cli, "clear Google labels/org fields already consolidated"),
     "review": (review.main, "render a private photo-assisted review page"),
     "propose": (propose.main, "propose identity clusters for the review page"),
