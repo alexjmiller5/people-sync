@@ -243,7 +243,9 @@ people-sync scrape <platform> --record-id <source:id>          # one specific re
 Pacing lives in the CLI (8-25 s between pages, a break every 25 attempts,
 staggered starts across tabs, no daily cap). Counters persist in the state
 dir; a backfill can span many sessions, and later runs visit only new or
-stale (180 days) records.
+stale (180 days) records. A tombstoned profile row counts as visited for
+the queue; `--record-id` recaptures it, and a complete capture restores the
+row (the table is a latest-profile cache).
 
 **Halts are final.** A source 401/403/429, a challenge or checkpoint page, a
 visible account warning, browser loss, or any unexpected error stops every

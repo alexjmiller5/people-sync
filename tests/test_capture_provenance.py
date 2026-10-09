@@ -138,6 +138,21 @@ def test_profile_edges_distinguish_tables_and_preserve_tombstones(estate):
     assert len(list(estate.execute("SELECT * FROM provenance"))) == 2
 
 
+def test_a_fresh_scrape_capture_restores_a_tombstoned_profile(estate):
+    key = "profiles/spotify/captures/first.json"
+    ledger.upsert([record(key)])
+    p = Profile(record_id="spotify:example", platform="spotify", display_name="Example Person")
+    upsert_profile(p, raw_r2_key=key)
+    estate.execute("UPDATE people_sync_profiles SET deleted_at='old'")
+    p.display_name = "Changed Name"
+    upsert_profile(p, raw_r2_key="profiles/spotify/captures/next.json", restore=True)
+    row = dict(estate.execute("SELECT * FROM people_sync_profiles").fetchone())
+    assert row["deleted_at"] is None and row["display_name"] == "Changed Name"
+    assert row["raw_r2_key"] == "profiles/spotify/captures/next.json"
+    edges = [dict(e) for e in estate.execute("SELECT * FROM provenance")]
+    assert len(edges) == 3
+
+
 def test_facebook_handle_write_and_retry_have_exact_evidence(estate, mocker, capsys):
     from people_sync import cli
 

@@ -211,6 +211,7 @@ def test_normal_record_uploads_raw_before_upsert_and_calls_pace(mocker):
     assert avatar_key == avatar_calls[0].args[0]
     assert avatar_sha == sha
     assert raw_key == raw_calls[0].args[0]
+    assert upsert.call_args.kwargs == {"restore": True}
 
     pacer.record.assert_called_once()
     pacer.next_gap.assert_called_once()

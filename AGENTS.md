@@ -332,8 +332,9 @@ rather than typing into the wrong field.
 **`people_sync_records` and `people_sync_profiles` are this project's own
 tables, not the `people` table.** The `people_sync_` prefix is the project
 name (People Sync): `people_sync_records` is the ingest/resolution ledger and
-`people_sync_profiles` the scraped-profile cache. `people` is the soma
-person table they resolve INTO, keyed by Notion page id. Never read one
+`people_sync_profiles` the scraped-profile cache (a complete scrape capture
+restores a tombstoned row; other writers leave tombstones alone). `people`
+is the soma person table they resolve INTO, keyed by Notion page id. Never read one
 expecting the other, and note that `FROM people` is a prefix of
 `FROM people_sync_records` - match table names on a word boundary.
 
