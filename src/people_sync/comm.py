@@ -32,6 +32,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from collections import Counter
 from contextlib import contextmanager
@@ -66,6 +67,11 @@ WHATSAPP_PARTIAL = (
 BATCH = 1000  # the hub's stream batch limit (soma worker: 1..1000 records per batch)
 HOLD_BACK = timedelta(days=7)  # a transient exclusion younger than this is re-read next run
 COCOA = 978307200  # 2001-01-01T00:00:00Z in unix seconds
+RETRY_WAITS_S = (10, 30, 90)  # backoff before re-sending a batch after a transient hub failure
+_PERMANENT = re.compile(
+    r"HTTP (?:Error )?4(?!29)\d\d"
+)  # a refusal (scope, validation) is never retried
+_sleep = time.sleep
 BUSY_TIMEOUT_S = 60.0  # how long a write waits on another connection to comm.sqlite
 
 _WA = Path.home() / "Library/Group Containers/group.net.whatsapp.WhatsApp.shared"
@@ -801,13 +807,21 @@ class State:
 
 
 def flush(state: State, stream: str, append) -> tuple[int, str | None]:
-    """Hand the stream's outbox to the hub one batch at a time; stop at the first refusal."""
+    """Hand the stream's outbox to the hub one batch at a time; a transient failure is
+    retried with backoff, a refusal or a failure that outlasts the retries stops the flush."""
     landed = 0
     while batch := state.unlanded(stream, BATCH):
-        try:
-            append(stream, [json.loads(record) for _, record in batch])
-        except AppendError as e:
-            return landed, str(e)
+        records = [json.loads(record) for _, record in batch]
+        for wait in (*RETRY_WAITS_S, None):
+            try:
+                append(stream, records)
+                break
+            except AppendError as e:
+                # A dropped connection or a 5xx/429 is retried with backoff; a resend of a
+                # batch the hub did store is harmless (consumers count DISTINCT event_id).
+                if wait is None or _PERMANENT.search(str(e)):
+                    return landed, str(e)
+                _sleep(wait)
         state.mark_landed(stream, [event_id for event_id, _ in batch])
         landed += len(batch)
     return landed, None
