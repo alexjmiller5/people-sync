@@ -135,7 +135,15 @@ merges the event into the record's `raw.events` (id, title, starts_at, role,
 capture_key) without touching its other fields, and `promote.event_ops` writes
 `person_events` rows for matched records with `evidence_of` edges to that
 capture. Guest sections come from the dialog's counts (`assign_sections`),
-not per-row labels. The mutual-list importer archives the original
+not per-row labels. By default `list partiful-events` skips an event whose
+guest list was already retained: `retained_event_ids` reads the event ids
+landed in partiful records' `raw.events` (each carrying its capture key), which
+syncs across machines, unlike the local capture cache. `--refresh` re-walks
+them, an explicit `--event-id` is always walked, and `--since` drops events
+dated before it. The events page shows no year; `event_dates` infers each from
+the newest-first order and the weekday. An event that failed mid-walk keeps the
+guests already landed and is reported with its `error`; re-walk it by id.
+The mutual-list importer archives the original
 profile extractor result and mutual-row context before parsing or navigating
 back, and passes its file key to `upsert_profile` without uploading it again.
 An archive failure halts the import and leaves the existing ledger/cache intact.
@@ -391,10 +399,17 @@ strings become circles verbatim (`CIRCLE_ALIASES` holds the one exception).
 `merge` re-points every other cataloged soma column that references people
 (`catalog_properties.ref_table = 'people'`: quotes, gift recipients, split
 counterparties) before the loser is soft-deleted; estate rules refuse the delete
-while a live row still points at it. `merge` never writes to Notion. It queries the People-related Notion DBs
-(`NOTION_PEOPLE_RELATIONS`) for pages still pointing at the loser page and
-prints them for a manual re-point; without `NOTION_API_TOKEN` it warns and
-skips that check.
+while a live row still points at it. `merge` never writes to Notion. It prints
+every Notion anchor on the loser page for a manual re-point: the page's own
+non-empty relation properties (Father, Mother, children lists and the People side
+of every two-way relation; a relation past 25 entries is re-read whole from the
+property endpoint), then pages found by querying the configured one-way relations
+(`PEOPLE_SYNC_NOTION_RELATIONS`) and People's own `single_property` self
+relations (Partner), every query followed through its cursors. One page is printed
+once. The run ends with `NOTION RELATIONS CHECKED: N` only when every read
+succeeded; a missing token, unset relation config or failed read prints
+`NOTION RELATIONS INCOMPLETE` naming what was not checked, so silence never reads
+as "no relations". Without any Notion configuration it prints `NOT CHECKED`.
 
 Scripts are importable by their bare module name (`pyproject`'s pytest
 `pythonpath` and ruff `src` both include `scripts`), which is what lets

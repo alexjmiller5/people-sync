@@ -4,7 +4,9 @@ A profile row is a cache; a fact becomes estate data only here, and only
 with a provenance edge (soma-map: no edge, no write). Conservative by
 construction: fills empty values and adds rows, never overwrites or
 closes anything - a conflict (a different birthday, a different current
-city) is reported for triage, not resolved.
+city or employer) is reported for triage, not resolved. A more or less
+specific form of a known value ("Boston, Massachusetts, United States" for
+"Boston, Massachusetts") counts as known.
 
 Facts and where they go:
 - location  -> person_locations (open row, city verbatim, source=platform)
@@ -58,6 +60,14 @@ def _norm(s: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
 
+def _known(value: str, known: set[str]) -> bool:
+    """A normalized value is known when it equals a known one or one of them
+    is a word-prefix of the other ("boston massachusetts" and "boston
+    massachusetts united states"; "acme" and "acme labs")."""
+    v = value + " "
+    return any(v.startswith(k + " ") or (k + " ").startswith(v) for k in known)
+
+
 def _month(value: str) -> str | None:
     """MM from YYYY-MM-DD, --MM-DD or --MM."""
     m = re.fullmatch(r"(?:\d{4}|-)-(\d{2})(?:-\d{2})?", value)
@@ -99,7 +109,7 @@ def plan(
 
         city = (p.get("location") or "").strip()
         if city:
-            if _norm(city) in open_locs.get(pid, set()):
+            if _known(_norm(city), open_locs.get(pid, set())):
                 pass
             elif open_locs.get(pid):
                 ops.append(
@@ -119,8 +129,20 @@ def plan(
 
         work = p.get("work") or []
         company = (work[0] if isinstance(work, list) and work else "").strip() if work else ""
-        if company and _norm(company) not in open_jobs.get(pid, set()):
-            ops.append(Op("employment", pid, rid, plat, company, {"cue": company}))
+        if company and not _known(_norm(company), open_jobs.get(pid, set())):
+            if open_jobs.get(pid):
+                ops.append(
+                    Op(
+                        "conflict",
+                        pid,
+                        rid,
+                        plat,
+                        company,
+                        {"field": "company", "existing": sorted(open_jobs[pid])},
+                    )
+                )
+            else:
+                ops.append(Op("employment", pid, rid, plat, company, {"cue": company}))
 
         bday = p.get("birthday")
         if bday:
@@ -485,7 +507,9 @@ def apply(ops: list[Op]) -> dict:
 
 def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
     state = load_state(platforms)
-    ops = plan(*state) + event_ops(load_event_rows(), state[-1])
+    ops = plan(*state)
+    if "partiful" in platforms:
+        ops += event_ops(load_event_rows(), state[-1])
     summary = {"planned": {}, "conflicts": [], "applied": {}}
     summary["legacy"] = sorted(
         {

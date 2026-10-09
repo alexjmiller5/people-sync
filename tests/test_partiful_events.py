@@ -313,3 +313,128 @@ def test_ingest_guests_batches_one_select_and_one_upsert(mocker):
     assert sql.call_count == 1 and "IN (" in sql.call_args.args[0]
     [records] = upsert.call_args.args
     assert [r.raw["events"][0]["role"] for r in records] == ["went", "maybe"]
+
+
+def test_event_dates_infer_the_missing_year_from_newest_first_order():
+    from datetime import date
+
+    today = date(2026, 10, 9)  # a Friday
+    whens = [
+        "Yesterday at 8pm",
+        "Last Tue at 6:30pm",
+        "Sat 1/10 at 6pm",
+        "Sun 12/14 at 4pm",  # crosses into the previous year
+        "Fri 4/11 at 9pm",
+        "Sun 9/1 at 8pm",
+        "Sat 7/1 at 8pm",  # 2024-07-01 is a Monday: the weekday skips a year
+        "Sat 1/10 at 6pm",  # bounded by the event above, not by today
+        "somewhere at 9pm",
+        None,
+    ]
+    assert partiful.event_dates([{"when": w} for w in whens], today) == [
+        date(2026, 10, 8),
+        date(2026, 10, 6),
+        date(2026, 1, 10),
+        date(2025, 12, 14),
+        date(2025, 4, 11),
+        date(2024, 9, 1),
+        date(2023, 7, 1),
+        date(2015, 1, 10),
+        None,
+        None,
+    ]
+
+
+def test_choose_events_skips_retained_guest_lists_unless_refreshed():
+    from datetime import date
+
+    today = date(2026, 10, 9)
+    events = [
+        {"id": "EVnew0001", "title": "Fresh", "when": "Sat 10/3 at 8pm", "status": "WENT"},
+        {"id": "EVmaybe01", "title": "Unsure", "when": "Fri 10/2 at 8pm", "status": "MAYBE"},
+        {"id": "EVdone001", "title": "Walked", "when": "Sat 9/5 at 8pm", "status": "HOSTING"},
+        {"id": "EVold0001", "title": "Old", "when": "Sat 1/10 at 6pm", "status": "WENT"},
+        {"id": "EVundated", "title": "Odd", "when": "somewhere at 9pm", "status": "WENT"},
+    ]
+    retained = {"EVdone001"}
+
+    chosen, already = partiful.choose_events(events, retained, today=today)
+    assert [e["id"] for e in chosen] == ["EVnew0001", "EVold0001", "EVundated"]
+    assert already == ["EVdone001"]
+    assert chosen[0]["date"] == "2026-10-03" and chosen[2]["date"] is None
+
+    chosen, already = partiful.choose_events(events, retained, refresh=True, today=today)
+    assert [e["id"] for e in chosen] == ["EVnew0001", "EVdone001", "EVold0001", "EVundated"]
+    assert already == []
+
+    # --since drops what the list dates before it; an undatable event is kept
+    chosen, _ = partiful.choose_events(events, retained, since=date(2026, 9, 1), today=today)
+    assert [e["id"] for e in chosen] == ["EVnew0001", "EVundated"]
+
+    # an explicit --event-id is walked even when retained, whatever its status
+    chosen, already = partiful.choose_events(
+        events, retained, wanted={"EVdone001", "EVmaybe01"}, today=today
+    )
+    assert [e["id"] for e in chosen] == ["EVmaybe01", "EVdone001"] and already == []
+
+
+def test_retained_event_ids_read_the_ledger_attendance(mocker):
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[{"id": "EVdone001"}, {"id": None}])
+    assert partiful.retained_event_ids() == {"EVdone001"}
+    query = sql.call_args.args[0]
+    assert "people_sync_records" in query and "'$.events'" in query and "capture_key" in query
+
+
+def test_list_partiful_events_walks_only_new_events_and_prints_their_counts(
+    mocker, monkeypatch, capsys
+):
+    from people_sync import cli
+
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.invalid")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "t")
+    mocker.patch("people_sync.scrape.cdp.Browser.connect")
+    events = [
+        {"id": "EVnew0001", "title": "Fresh", "when": "Sat 10/3 at 8pm", "status": "WENT"},
+        {"id": "EVhidden1", "title": "Ticketed", "when": "Fri 10/2 at 8pm", "status": "WENT"},
+        {"id": "EVdone001", "title": "Walked", "when": "Sat 9/5 at 8pm", "status": "HOSTING"},
+        {"id": "EVold0001", "title": "Old", "when": "Sat 1/10 at 6pm", "status": "WENT"},
+    ]
+    mocker.patch.object(partiful, "harvest_events", return_value=(events, "k"))
+    mocker.patch.object(partiful, "retained_event_ids", return_value={"EVdone001"})
+    header = {"title": "Fresh", "when": "Saturday, Oct 3, 2026"}
+    ref = {"capture_key": "c", "scope": "event_guests", "ordinal": 0, "entry_ordinal": 0}
+
+    def guests(browser, event_id):
+        if event_id == "EVhidden1":
+            raise partiful.ExtractError("guest-list-hidden")
+        yield header, {"uid": "u1", "name": "Ada", "section": "Went"}, ref
+        yield header, {"uid": None, "name": "Bo", "section": "Went"}, ref
+
+    walk = mocker.patch.object(partiful, "harvest_event_guests", side_effect=guests)
+    mocker.patch.object(partiful, "ingest_guests", return_value=["partiful:u1"])
+
+    cli.main(["list", "partiful-events", "--since", "2026-09-01"])
+
+    assert [c.args[1] for c in walk.call_args_list] == ["EVnew0001", "EVhidden1"]
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["listed"] == 4 and out["already_retained"] == 1 and out["failed"] == 1
+    assert out["guests"] == 2 and out["records"] == 1
+    assert out["events"] == [
+        {
+            "id": "EVnew0001",
+            "title": "Fresh",
+            "date": "2026-10-03",
+            "status": "WENT",
+            "guests": 2,
+            "records": 1,
+        },
+        {
+            "id": "EVhidden1",
+            "title": "Ticketed",
+            "date": "2026-10-02",
+            "status": "WENT",
+            "guests": 0,
+            "records": 0,
+            "error": "guest-list-hidden",
+        },
+    ]

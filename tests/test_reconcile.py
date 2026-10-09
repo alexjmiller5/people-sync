@@ -509,58 +509,228 @@ def test_merge_dry_run_emits_no_writes(env):
     assert _writes(sql) == []
 
 
-def test_merge_reports_notion_relations(env, monkeypatch, capsys):
+def _rel(*ids, has_more=False):
+    return {
+        "id": "x",
+        "type": "relation",
+        "relation": [{"id": i} for i in ids],
+        "has_more": has_more,
+    }
+
+
+# The People data source (ds-synthetic, from the autouse fixture): Father/Mother are
+# two-way self relations, Partner is one-way (the target page does not show it).
+PEOPLE_SCHEMA = {
+    "Name": {"id": "title", "type": "title"},
+    "Father": {
+        "id": "fa",
+        "type": "relation",
+        "relation": {"type": "dual_property", "data_source_id": "ds-synthetic"},
+    },
+    "Partner": {
+        "id": "pa",
+        "type": "relation",
+        "relation": {"type": "single_property", "data_source_id": "ds-synthetic"},
+    },
+    "Gifts": {
+        "id": "gi",
+        "type": "relation",
+        "relation": {"type": "dual_property", "data_source_id": "ds-gifts"},
+    },
+}
+
+
+def _notion(env, page, *, items=None, hits=None, fail=()):
+    """Synthetic Notion API: GET pages/<id>, pages/<id>/properties/<prop>,
+    data_sources/<id>; POST data_sources/<id>/query. Paged bodies are keyed by
+    their start_cursor; anything in `fail` raises."""
+    items, hits = items or {}, hits or {}
+
+    def respond(body):
+        resp = env.Mock()
+        resp.json.return_value = body
+        return resp
+
+    def get(url, **kw):
+        path = url.split("/v1/", 1)[1]
+        if path in fail:
+            raise httpx.ConnectError("boom")
+        cursor = (kw.get("params") or {}).get("start_cursor")
+        if "/properties/" in path:
+            return respond(items[(path.rsplit("/", 1)[1], cursor)])
+        if path.startswith("pages/"):
+            return respond({"object": "page", "properties": page})
+        return respond({"properties": PEOPLE_SCHEMA})
+
+    def post(url, json, **kw):
+        ds = url.split("/data_sources/", 1)[1].split("/")[0]
+        if ds in fail:
+            raise httpx.ConnectError("boom")
+        key = (ds, json["filter"]["property"], json.get("start_cursor"))
+        return respond(hits.get(key, {"results": [], "has_more": False}))
+
+    return env.patch("httpx.get", side_effect=get), env.patch("httpx.post", side_effect=post)
+
+
+def _relation_lines(out):
+    return [line for line in out.splitlines() if line.startswith("NOTION RELATION ")]
+
+
+def test_merge_dry_run_prints_the_loser_pages_own_father_and_mother(env, monkeypatch, capsys):
+    # 2026-10-06: the dry run printed nothing while the loser page held Father and
+    # Mother - two-way People self relations, in no configured database.
     monkeypatch.setenv("NOTION_API_TOKEN", "token")
-    _merge_env(env, _person(id="s1"), _person(id="0" * 32))
-    resp = env.Mock()
-    resp.json.return_value = {"results": [{"url": "https://notion.so/page1"}]}
-    post = env.patch("httpx.post", return_value=resp)
+    sql = _merge_env(env, _person(id="s1"), _person(id="0" * 32))
+    page = {
+        "Name": {"id": "title", "type": "title", "title": []},
+        "Father": _rel("f0000001"),
+        "Mother": _rel("m0000001"),
+        "Gifts": _rel(),
+    }
+    get, post = _notion(env, page)
 
     reconcile.main(["merge", "s1", "0" * 32])
 
     out = capsys.readouterr().out
-    assert out.count("NOTION RELATION") == 4
-    assert "https://notion.so/page1" in out
-    assert "re-point manually" in out
-    dashed = "00000000-0000-0000-0000-000000000000"
-    filters = [c.kwargs["json"]["filter"] for c in post.call_args_list]
-    assert all(f["relation"]["contains"] == dashed for f in filters)
-    # filtered by property ID, never by name - a rename in Notion must not silence this
-    assert [f["property"] for f in filters] == ["%3FT%40U", "Y%5B%3E%7B", "t%3DJH", "%3DS%60m"]
-    assert [c.args[0].rsplit("/", 2)[-2] for c in post.call_args_list] == [
-        "ds-gifts",
-        "ds-quotes",
-        "ds-trips",
-        "ds-calendar",
-    ]
+    lines = _relation_lines(out)
+    assert len(lines) == 2
+    assert "Father" in lines[0] and "f0000001" in lines[0] and "re-point manually" in lines[0]
+    assert "Mother" in lines[1] and "m0000001" in lines[1]
+    assert "NOTION RELATIONS CHECKED: 2 to re-point" in out
+    assert get.call_args_list[0].args[0].endswith("/pages/00000000-0000-0000-0000-000000000000")
+    # the one-way self relation is queried like a configured database, by property id
+    queried = [(c.args[0].split("/")[-2], c.kwargs["json"]["filter"]) for c in post.call_args_list]
+    assert (
+        "ds-synthetic",
+        {"property": "pa", "relation": {"contains": "0" * 8 + "-0000-0000-0000-" + "0" * 12}},
+    ) in queried
+    assert _writes(sql) == []
 
 
-def test_merge_survives_a_notion_api_failure(env, monkeypatch, capsys):
+def test_merge_reads_every_entry_of_a_truncated_relation(env, monkeypatch, capsys):
     monkeypatch.setenv("NOTION_API_TOKEN", "token")
-    sql = _merge_env(env, _person(id="s1"), _person(id="l1"))
-    ok = env.Mock()
-    ok.json.return_value = {"results": [{"url": "https://app.notion.com/p/page1"}]}
-    warn = env.patch("people_sync.reconcile.log.warning")
-    env.patch("httpx.post", side_effect=[httpx.ConnectError("boom"), ok, ok, ok])
-
-    reconcile.main(["merge", "s1", "l1", "--apply"])
-
-    # the failed DB warns, the other three are still checked, the merge still runs
-    assert warn.call_args.args[0] == "notion relation check failed"
-    assert warn.call_args.kwargs == {"db": "Gifts", "reason": "ConnectError"}
-    out = capsys.readouterr().out
-    assert out.count("NOTION RELATION") == 3
-    assert any(w.startswith("UPDATE people SET deleted_at") for w in _writes(sql))
-
-
-def test_merge_skips_notion_check_without_a_token(env, capsys):
     _merge_env(env, _person(id="s1"), _person(id="l1"))
-    post = env.patch("httpx.post")
+    page = {"Father's Children": {**_rel("c1", has_more=True), "id": "ch"}}
+
+    def item(i):
+        return {"object": "property_item", "type": "relation", "relation": {"id": i}}
+
+    items = {
+        ("ch", None): {"results": [item("c1"), item("c2")], "has_more": True, "next_cursor": "k2"},
+        ("ch", "k2"): {"results": [item("c3")], "has_more": False, "next_cursor": None},
+    }
+    _notion(env, page, items=items)
 
     reconcile.main(["merge", "s1", "l1"])
 
+    lines = _relation_lines(capsys.readouterr().out)
+    assert [line.split(" -> ")[1].split()[0] for line in lines] == ["c1", "c2", "c3"]
+
+
+def test_merge_follows_query_cursors_and_reports_each_page_once(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    _merge_env(env, _person(id="s1"), _person(id="l1"))
+    hits = {
+        ("ds-gifts", "%3FT%40U", None): {
+            "results": [{"id": "g1", "url": "https://notion.so/gift-g1"}],
+            "has_more": True,
+            "next_cursor": "k2",
+        },
+        ("ds-gifts", "%3FT%40U", "k2"): {
+            "results": [{"id": "g2", "url": "https://notion.so/gift-g2"}],
+            "has_more": False,
+        },
+        ("ds-calendar", "%3DS%60m", None): {
+            "results": [{"id": "e1", "url": "https://notion.so/event-e1"}],
+            "has_more": False,
+        },
+    }
+    # g1 also shows on the loser page (Gifts is two-way): one line, not two
+    _, post = _notion(env, {"Gifts": _rel("g1")}, hits=hits)
+
+    reconcile.main(["merge", "s1", "l1"])
+
+    out = capsys.readouterr().out
+    lines = _relation_lines(out)
+    assert len(lines) == 3
+    assert sum("g1" in line for line in lines) == 1
+    assert any("gift-g2" in line for line in lines) and any("event-e1" in line for line in lines)
+    assert "NOTION RELATIONS CHECKED: 3 to re-point" in out
+    gifts = [c for c in post.call_args_list if "ds-gifts" in c.args[0]]
+    assert [c.kwargs["json"].get("start_cursor") for c in gifts] == [None, "k2"]
+    # configured databases are still filtered by property ID, never by name
+    filters = [c.kwargs["json"]["filter"]["property"] for c in post.call_args_list]
+    assert {"%3FT%40U", "Y%5B%3E%7B", "t%3DJH", "%3DS%60m"} <= set(filters)
+
+
+def test_merge_reports_a_failed_check_as_incomplete_and_still_merges(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    sql = _merge_env(env, _person(id="s1"), _person(id="l1"))
+    hits = {
+        ("ds-quotes", "Y%5B%3E%7B", None): {
+            "results": [{"id": "q1", "url": "https://notion.so/quote-q1"}],
+            "has_more": False,
+        }
+    }
+    _notion(env, {"Mother": _rel("m1")}, hits=hits, fail={"ds-gifts"})
+
+    reconcile.main(["merge", "s1", "l1", "--apply"])
+
+    out = capsys.readouterr().out
+    assert len(_relation_lines(out)) == 2
+    assert "NOTION RELATIONS INCOMPLETE" in out and "Gifts" in out and "ConnectError" in out
+    assert "NOTION RELATIONS CHECKED" not in out
+    assert any(w.startswith("UPDATE people SET deleted_at") for w in _writes(sql))
+
+
+def test_merge_reports_an_unreadable_loser_page_as_incomplete(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    _merge_env(env, _person(id="s1"), _person(id="l1"))
+    _notion(env, {}, fail={"pages/l1"})
+
+    reconcile.main(["merge", "s1", "l1"])
+
+    out = capsys.readouterr().out
+    assert "NOTION RELATIONS INCOMPLETE" in out and "loser page" in out
+
+
+def test_merge_without_a_token_says_the_check_did_not_run(env, capsys):
+    _merge_env(env, _person(id="s1"), _person(id="l1"))
+    get, post = env.patch("httpx.get"), env.patch("httpx.post")
+
+    reconcile.main(["merge", "s1", "l1"])
+
+    get.assert_not_called()
     post.assert_not_called()
-    assert "NOTION RELATION" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "NOTION RELATIONS INCOMPLETE" in out and "NOTION_API_TOKEN" in out
+
+
+def test_merge_without_relation_config_still_reads_the_loser_page(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    monkeypatch.delenv(reconcile.RELATIONS_ENV, raising=False)
+    _merge_env(env, _person(id="s1"), _person(id="l1"))
+    _notion(env, {"Father": _rel("f1")})
+
+    reconcile.main(["merge", "s1", "l1"])
+
+    out = capsys.readouterr().out
+    assert len(_relation_lines(out)) == 1
+    assert "NOTION RELATIONS INCOMPLETE" in out and reconcile.RELATIONS_ENV in out
+
+
+def test_merge_without_notion_says_so(env, monkeypatch, capsys):
+    monkeypatch.setenv("NOTION_API_TOKEN", "token")
+    monkeypatch.delenv(reconcile.RELATIONS_ENV, raising=False)
+    monkeypatch.delenv("PEOPLE_SYNC_NOTION_PEOPLE_DS", raising=False)
+    _merge_env(env, _person(id="s1"), _person(id="l1"))
+    get, post = env.patch("httpx.get"), env.patch("httpx.post")
+
+    reconcile.main(["merge", "s1", "l1"])
+
+    get.assert_not_called()
+    post.assert_not_called()
+    assert "NOTION RELATIONS NOT CHECKED: Notion is not configured" in capsys.readouterr().out
 
 
 def test_merge_refuses_a_person_merged_into_itself(env):
@@ -652,14 +822,6 @@ def test_notion_relations_come_from_config(monkeypatch):
     monkeypatch.setenv(reconcile.RELATIONS_ENV, json.dumps({"Gifts": "ds-1"}))
     with pytest.raises(ValueError):
         reconcile.notion_relations()
-
-
-def test_merge_skips_relation_check_without_config(mocker, monkeypatch, capsys):
-    monkeypatch.setenv("NOTION_API_TOKEN", "t")
-    monkeypatch.delenv(reconcile.RELATIONS_ENV, raising=False)
-    get = mocker.patch("people_sync.reconcile.httpx.post")
-    reconcile.report_notion_relations("0" * 32)
-    get.assert_not_called()
 
 
 def _generic_env(env, person, record):
