@@ -292,6 +292,11 @@ def whatsapp_dbs(tmp_path):
     return {"whatsapp_messages": chat, "whatsapp_calls": calls, "whatsapp_lid": lid}
 
 
+@pytest.fixture(autouse=True)
+def no_backoff(monkeypatch):
+    monkeypatch.setattr(comm, "_sleep", lambda seconds: None)
+
+
 @pytest.fixture
 def stores(tmp_path):
     apple_messages_db(tmp_path / "chat.db")
@@ -881,3 +886,37 @@ def test_a_reader_never_blocks_the_importer(tmp_path, monkeypatch):
     state.mark_landed("comm_apple_calls", ["e1"])
     reader.rollback()
     assert state.waiting() == 0
+
+
+class FlakyHub(FakeHub):
+    def __init__(self, failures, message="RuntimeError: hub unreachable: [Errno 32] Broken pipe"):
+        super().__init__()
+        self.failures, self.message = failures, message
+
+    def __call__(self, stream, records):
+        if self.failures:
+            self.failures -= 1
+            raise comm.AppendError(self.message)
+        super().__call__(stream, records)
+
+
+def test_a_transient_hub_failure_is_retried(stores, tmp_path, monkeypatch):
+    waits = []
+    monkeypatch.setattr(comm, "_sleep", waits.append)
+    hub = FlakyHub(failures=2)
+    report = run("apple_messages", stores, tmp_path / "state", hub)
+    assert report["landed"] == 8 and report["coverage"] == "complete"
+    assert len(waits) == 2
+
+
+def test_a_lasting_or_refused_failure_stops_the_flush(stores, tmp_path, monkeypatch):
+    waits = []
+    monkeypatch.setattr(comm, "_sleep", waits.append)
+    report = run("apple_messages", stores, tmp_path / "s1", FlakyHub(failures=99))
+    assert report["landed"] == 0 and len(waits) == len(comm.RETRY_WAITS_S)
+    waits.clear()
+    refused = FlakyHub(
+        failures=99, message='RuntimeError: hub HTTP 403: {"error":"insufficient scope"}'
+    )
+    report = run("apple_messages", stores, tmp_path / "s2", refused)
+    assert report["landed"] == 0 and waits == []  # a refusal is not retried
