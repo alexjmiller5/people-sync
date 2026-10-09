@@ -392,9 +392,12 @@ checkpoint, and an outbox. A run the hub refuses keeps its events there and says
 so in `coverage`/`reason`; the next run hands them over before reading anything
 new. A rerun appends nothing.
 
-The hub token in the environment must be able to batch-append to the four
-streams and, for `refresh`, query them (`soma archive query --raw`). Without it
-`refresh` falls back to the local mirror and prints which source it used.
+`comm` hands its `soma` calls `SOMA_COMM_HUB_TOKEN` in place of `SOMA_HUB_TOKEN`
+when set, so the rest of People Sync keeps its narrower file token. That token
+must batch-append to the four streams and, for `refresh`, query them
+(`soma archive query --raw`); the hub grants both only to `full` today. Without
+it events wait in the outbox and `refresh` falls back to the local mirror,
+printing which source it used.
 
 Create the two operator-owned tables through Soma, then describe and catalog
 them for your estate (`person_id` refs `people`; every summary column names

@@ -269,6 +269,8 @@ Identity goes through `build_resolver`: `person_accounts` links joined in
 memory to address-book phones/emails (local, plus `PEOPLE_SYNC_ADDRESSBOOK_HOST`
 over ssh) and WhatsApp LID/number pairs. Numbers and emails are never written
 anywhere; `participant_ref` is the findmy-cli `source_handle_key` hash.
+Every `soma` subprocess comm starts gets `_hub_env()`: `SOMA_COMM_HUB_TOKEN`, when
+set, replaces `SOMA_HUB_TOKEN` for those calls only.
 `refresh` aggregates direct events per participant from the hub (`soma archive
 query --raw`, DuckDB over landing, `count(DISTINCT event_id)`) or, when events
 still wait in the outbox or the hub fails, from the local mirror with the same
