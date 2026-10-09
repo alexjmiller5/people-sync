@@ -67,13 +67,13 @@ def test_a_payment_without_exactly_one_self_side_is_skipped():
 
 def test_run_reads_payments_then_writes_records_and_missing_edges(mocker):
     sql = mocker.patch(
-        "people_sync.lifedata.sql",
+        "people_sync.somadata.sql",
         side_effect=lambda q: (
             [pay("t1", "2026-01-01", ME, ("7", "Example Person"))] if "FROM txns_venmo" in q else []
         ),
     )
     upsert = mocker.patch("people_sync.ledger.upsert", return_value={"new": 1, "updated": 0})
-    insert = mocker.patch("people_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     out = venmo_payments.run()
 

@@ -24,9 +24,9 @@ def _profile(**overrides) -> Profile:
 
 
 def test_insert_when_no_existing_row(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
-    insert = mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.somadata.sql", return_value=[])
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-04T00:00:00.000Z")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     upsert_profile(
         _profile(),
@@ -58,9 +58,9 @@ def test_insert_when_no_existing_row(mocker):
 
 
 def test_insert_serializes_education_and_work_lists(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
-    insert = mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.somadata.sql", return_value=[])
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-04T00:00:00.000Z")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     upsert_profile(
         _profile(education=["Some University"], work=["Some Company"]),
@@ -77,9 +77,9 @@ def test_insert_serializes_education_and_work_lists(mocker):
 
 def test_update_when_existing_row_emits_update_not_insert(mocker):
     existing = [{"id": "instagram:alice123", "record_id": "instagram:alice123", "deleted_at": None}]
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=existing)
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
-    insert = mocker.patch("people_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.somadata.sql", return_value=existing)
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-04T00:00:00.000Z")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     upsert_profile(_profile(display_name="Alice Updated"), None, None, None)
 
@@ -106,9 +106,9 @@ def test_update_when_existing_row_emits_update_not_insert(mocker):
 
 
 def test_update_quotes_apostrophes_in_text_fields(mocker):
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-04T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-04T00:00:00.000Z")
     existing = [{"id": "instagram:alice123", "record_id": "instagram:alice123", "deleted_at": None}]
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=existing)
+    sql = mocker.patch("people_sync.somadata.sql", return_value=existing)
 
     upsert_profile(_profile(bio="it's a test"), None, None, None)
 

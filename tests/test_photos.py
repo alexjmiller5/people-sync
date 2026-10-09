@@ -24,8 +24,8 @@ class _Resp:
 
 
 def test_store_photo_dedupes_existing_sha(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "existing"}])
-    insert = mocker.patch("people_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[{"id": "existing"}])
+    insert = mocker.patch("people_sync.somadata.insert")
     put = mocker.patch("people_sync.photos.httpx.put")
 
     result = photos.store_photo("p1", "instagram", b"image-bytes", "jpg")
@@ -37,10 +37,10 @@ def test_store_photo_dedupes_existing_sha(mocker):
 
 
 def test_store_photo_uploads_new_sha(mocker, monkeypatch):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "test-token")
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
-    insert = mocker.patch("people_sync.lifedata.insert")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "test-token")
+    mocker.patch("people_sync.somadata.sql", return_value=[])
+    insert = mocker.patch("people_sync.somadata.insert")
     mocker.patch(
         "people_sync.photos.httpx.get",
         return_value=_Resp(json_data={"result": [{"id": "acct1"}]}),
@@ -68,8 +68,8 @@ def test_store_photo_uploads_new_sha(mocker, monkeypatch):
 
 
 def test_store_photo_dedupe_is_scoped_per_person(mocker, monkeypatch):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "test-token")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "test-token")
     stored_rows: list[tuple[str, str]] = []  # simulates person_photos: (person_id, sha256)
 
     def fake_sql(query):
@@ -86,8 +86,8 @@ def test_store_photo_dedupe_is_scoped_per_person(mocker, monkeypatch):
         for row in rows:
             stored_rows.append((row["person_id"], row["sha256"]))
 
-    mocker.patch("people_sync.lifedata.sql", side_effect=fake_sql)
-    mocker.patch("people_sync.lifedata.insert", side_effect=fake_insert)
+    mocker.patch("people_sync.somadata.sql", side_effect=fake_sql)
+    mocker.patch("people_sync.somadata.insert", side_effect=fake_insert)
     mocker.patch(
         "people_sync.photos.httpx.get",
         return_value=_Resp(json_data={"result": [{"id": "acct1"}]}),
@@ -187,8 +187,8 @@ def test_fetch_apple_photo_returns_none_on_vcard_fetch_failure(mocker):
 
 
 def test_object_api_uses_only_scoped_life_credential(mocker, monkeypatch):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test/")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "client-token")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test/")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "client-token")
     put = mocker.patch("people_sync.photos.httpx.put", return_value=_Resp())
     get = mocker.patch("people_sync.photos.httpx.get", return_value=_Resp(content=b"raw"))
     photos.put_object("profiles/source/a b.json", b"raw", "application/json")

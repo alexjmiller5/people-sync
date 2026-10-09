@@ -4,14 +4,14 @@
     merge   fold one people row into another (the survivor)
     create  promote a Google Contacts record into a brand-new person
 
-Every operation is LOSSLESS: nothing already in life-data is ever overwritten.
+Every operation is LOSSLESS: nothing already in soma is ever overwritten.
 A Google value that would clobber an existing one is appended to `notes`
 instead (`google_last_name: ...`, `aka: ...`, `merged from ...`), a birthday
 conflict is printed and skipped, and circles are only ever unioned. A wrong
 call is therefore recoverable by reading the notes.
 
 Dry run is the default: every write is printed, nothing executes until
---apply. All writes go through lifedata (the `life` CLI), soft deletes only.
+--apply. All writes go through somadata (the `soma` CLI), soft deletes only.
 
     uv run python scripts/reconcile.py link <person_id> <record_id> [--rename]
     uv run python scripts/reconcile.py merge <survivor_id> <loser_id>
@@ -26,7 +26,7 @@ import sys
 import httpx
 import structlog
 
-from people_sync import lifedata, match, notion_people
+from people_sync import somadata, match, notion_people
 from people_sync.google_cleanup import user_groups
 
 log = structlog.get_logger(__name__)
@@ -92,19 +92,19 @@ class Ops:
     def sql(self, query: str) -> None:
         self._echo(query)
         if self.apply:
-            lifedata.sql(query)
+            somadata.sql(query)
 
     def insert(self, table: str, rows: list[dict]) -> None:
         self._echo(f"INSERT INTO {table} {json.dumps(rows)}")
         if self.apply:
-            lifedata.insert(table, rows)
+            somadata.insert(table, rows)
 
 
 # --- shared helpers -----------------------------------------------------------
 
 
 def _one(query: str) -> dict | None:
-    rows = lifedata.sql(query)
+    rows = somadata.sql(query)
     return rows[0] if rows else None
 
 
@@ -115,7 +115,7 @@ def _empty(value) -> bool:
 def _lit(value) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
-    return lifedata.sq(value)
+    return somadata.sq(value)
 
 
 def _set(updates: dict) -> str:
@@ -134,7 +134,7 @@ def _primary_entry(items: list[dict]) -> dict:
 
 
 def _birthday(date: dict) -> str | None:
-    """Google date -> life-data birthday text.
+    """Google date -> soma birthday text.
 
     Unknown years use `--MM-DD`, including Apple's 1604 placeholder carried
     into Google Contacts. Retained source dates remain unchanged.
@@ -205,7 +205,7 @@ def account_row(person_id: str, record: dict, display_name: str | None) -> dict:
 
 
 def _record(record_id: str) -> dict:
-    record = _one(f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)}")
+    record = _one(f"SELECT * FROM people_sync_records WHERE id = {somadata.sq(record_id)}")
     if not record:
         sys.exit(f"no contact record {record_id}")
     if record["status"] not in ("pending", "matched"):
@@ -213,7 +213,7 @@ def _record(record_id: str) -> dict:
     if _one("SELECT name FROM sqlite_master WHERE type='table' AND name='public_accounts'"):
         if _one(
             "SELECT id FROM public_accounts "
-            f"WHERE record_id = {lifedata.sq(record_id)} AND deleted_at IS NULL"
+            f"WHERE record_id = {somadata.sq(record_id)} AND deleted_at IS NULL"
         ):
             sys.exit(f"record {record_id} has a public account; resolve it explicitly first")
     return record
@@ -272,15 +272,15 @@ def _rename(person: dict, new_name: str | None, updates: dict, notes):
 
 def _mark_matched(ops: Ops, record_id: str, person_id: str) -> None:
     ops.sql(
-        f"UPDATE people_sync_records SET status = 'matched', person_id = {lifedata.sq(person_id)} "
-        f"WHERE id = {lifedata.sq(record_id)}"
+        f"UPDATE people_sync_records SET status = 'matched', person_id = {somadata.sq(person_id)} "
+        f"WHERE id = {somadata.sq(record_id)}"
     )
 
 
 def _link_account(ops: Ops, person_id: str, record: dict, display_name: str | None) -> None:
-    existing = lifedata.sql(
-        f"SELECT id, source_id FROM person_accounts WHERE person_id = {lifedata.sq(person_id)} "
-        f"AND platform = {lifedata.sq(record['source'])} AND active = 1 AND deleted_at IS NULL"
+    existing = somadata.sql(
+        f"SELECT id, source_id FROM person_accounts WHERE person_id = {somadata.sq(person_id)} "
+        f"AND platform = {somadata.sq(record['source'])} AND active = 1 AND deleted_at IS NULL"
     )
     # A row with no source_id predates the backfill: it cannot be compared, and
     # inserting alongside it would give the person two google rows. Leave both alone.
@@ -306,7 +306,7 @@ def _link_account(ops: Ops, person_id: str, record: dict, display_name: str | No
 
 def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | None = None) -> None:
     person = _one(
-        f"SELECT * FROM people WHERE id = {lifedata.sq(person_id)} AND deleted_at IS NULL"
+        f"SELECT * FROM people WHERE id = {somadata.sq(person_id)} AND deleted_at IS NULL"
     )
     if not person:
         sys.exit(f"no live person {person_id}")
@@ -329,7 +329,7 @@ def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | Non
         if notes != person["notes"]:
             updates["notes"] = notes
         if updates:
-            ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {lifedata.sq(person_id)}")
+            ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {somadata.sq(person_id)}")
         _link_account(ops, person_id, record, name or record.get("name"))
         _mark_matched(ops, record_id, person_id)
         return
@@ -367,7 +367,7 @@ def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | Non
     if notes != person["notes"]:
         updates["notes"] = notes
     if updates:
-        ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {lifedata.sq(person_id)}")
+        ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {somadata.sq(person_id)}")
     else:
         print("  no people fields to change")
     _link_account(ops, person_id, record, google["display_name"])
@@ -393,7 +393,7 @@ def _notion_hits(data_source_id: str, prop: str, page_id: str, token: str) -> li
 
 
 def _dashed(row_id: str) -> str:
-    """life-data person id -> Notion page id (the row id with its dashes restored)."""
+    """soma person id -> Notion page id (the row id with its dashes restored)."""
     raw = row_id.replace("-", "")
     if len(raw) != 32:
         return row_id
@@ -436,8 +436,8 @@ def report_notion_relations(loser_id: str) -> None:
 def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
     if survivor_id == loser_id:
         sys.exit("survivor and loser are the same person")
-    rows = lifedata.sql(
-        f"SELECT * FROM people WHERE id IN ({lifedata.sq(survivor_id)}, {lifedata.sq(loser_id)}) "
+    rows = somadata.sql(
+        f"SELECT * FROM people WHERE id IN ({somadata.sq(survivor_id)}, {somadata.sq(loser_id)}) "
         "AND deleted_at IS NULL"
     )
     by_id = {row["id"]: row for row in rows}
@@ -447,7 +447,7 @@ def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
     survivor, loser = by_id[survivor_id], by_id[loser_id]
 
     # Notion first: it is read-only reporting, and a failure here must not land
-    # halfway through the life-data writes.
+    # halfway through the soma writes.
     report_notion_relations(loser_id)
 
     print(f"merge {loser_id} -> {survivor_id}")
@@ -477,20 +477,20 @@ def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:
         updates["notes"] = notes
     if updates:
         print(f"  after survivor:  {json.dumps(updates)}")
-        ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {lifedata.sq(survivor_id)}")
+        ops.sql(f"UPDATE people SET {_set(updates)} WHERE id = {somadata.sq(survivor_id)}")
 
     for table, keys in MERGE_DEDUPE_KEYS.items():
         _merge_child_rows(table, keys, survivor_id, loser_id, ops)
     for col in ("person_id", "suggested_person_id"):
         ops.sql(
-            f"UPDATE people_sync_records SET {col} = {lifedata.sq(survivor_id)} "
-            f"WHERE {col} = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
+            f"UPDATE people_sync_records SET {col} = {somadata.sq(survivor_id)} "
+            f"WHERE {col} = {somadata.sq(loser_id)} AND deleted_at IS NULL"
         )
     _merge_relations(survivor_id, loser_id, ops)
     _merge_foreign_refs(survivor_id, loser_id, ops)
     ops.sql(
-        f"UPDATE people SET deleted_at = {lifedata.sq(lifedata.now_iso())} "
-        f"WHERE id = {lifedata.sq(loser_id)}"
+        f"UPDATE people SET deleted_at = {somadata.sq(somadata.now_iso())} "
+        f"WHERE id = {somadata.sq(loser_id)}"
     )
 
 
@@ -500,7 +500,7 @@ def _merge_foreign_refs(survivor_id: str, loser_id: str, ops: Ops) -> None:
     so nothing here knows a table by name; an estate without a catalog has none."""
     own = {*MERGE_DEDUPE_KEYS, "people_sync_records", "person_relations", "people"}
     try:
-        columns = lifedata.sql(
+        columns = somadata.sql(
             "SELECT tbl, col, type FROM catalog_properties WHERE ref_table = 'people' "
             "AND type IN ('ref', 'multi_ref') AND deleted_at IS NULL"
         )
@@ -512,12 +512,12 @@ def _merge_foreign_refs(survivor_id: str, loser_id: str, ops: Ops) -> None:
             continue
         if column["type"] == "ref":
             ops.sql(
-                f"UPDATE {table} SET {col} = {lifedata.sq(survivor_id)} "
-                f"WHERE {col} = {lifedata.sq(loser_id)} AND deleted_at IS NULL"
+                f"UPDATE {table} SET {col} = {somadata.sq(survivor_id)} "
+                f"WHERE {col} = {somadata.sq(loser_id)} AND deleted_at IS NULL"
             )
             continue
-        rows = lifedata.sql(
-            f"SELECT id, {col} FROM {table} WHERE {col} LIKE {lifedata.sq('%' + loser_id + '%')} "
+        rows = somadata.sql(
+            f"SELECT id, {col} FROM {table} WHERE {col} LIKE {somadata.sq('%' + loser_id + '%')} "
             "AND deleted_at IS NULL"
         )
         for row in rows:
@@ -527,16 +527,16 @@ def _merge_foreign_refs(survivor_id: str, loser_id: str, ops: Ops) -> None:
                 continue
             merged = union_circles([], [survivor_id if i == loser_id else i for i in ids])
             ops.sql(
-                f"UPDATE {table} SET {col} = {lifedata.sq(json.dumps(merged))} "
-                f"WHERE id = {lifedata.sq(row['id'])}"
+                f"UPDATE {table} SET {col} = {somadata.sq(json.dumps(merged))} "
+                f"WHERE id = {somadata.sq(row['id'])}"
             )
 
 
 def _soft_delete(ops: Ops, table: str, row_id: str, why: str) -> None:
     print(f"  {table} {row_id}: {why}")
     ops.sql(
-        f"UPDATE {table} SET deleted_at = {lifedata.sq(lifedata.now_iso())} "
-        f"WHERE id = {lifedata.sq(row_id)}"
+        f"UPDATE {table} SET deleted_at = {somadata.sq(somadata.now_iso())} "
+        f"WHERE id = {somadata.sq(row_id)}"
     )
 
 
@@ -544,9 +544,9 @@ def _merge_child_rows(
     table: str, keys: tuple[str, ...], survivor_id: str, loser_id: str, ops: Ops
 ) -> None:
     """Re-point the loser's rows, soft-deleting the ones the survivor already holds."""
-    rows = lifedata.sql(
+    rows = somadata.sql(
         f"SELECT * FROM {table} "
-        f"WHERE person_id IN ({lifedata.sq(survivor_id)}, {lifedata.sq(loser_id)}) "
+        f"WHERE person_id IN ({somadata.sq(survivor_id)}, {somadata.sq(loser_id)}) "
         "AND deleted_at IS NULL"
     )
     # active-only baseline: a retired survivor row (a renamed handle) is history,
@@ -565,14 +565,14 @@ def _merge_child_rows(
             continue
         held.add(row_key)
         ops.sql(
-            f"UPDATE {table} SET person_id = {lifedata.sq(survivor_id)} "
-            f"WHERE id = {lifedata.sq(row['id'])}"
+            f"UPDATE {table} SET person_id = {somadata.sq(survivor_id)} "
+            f"WHERE id = {somadata.sq(row['id'])}"
         )
 
 
 def _merge_relations(survivor_id: str, loser_id: str, ops: Ops) -> None:
-    ids = f"{lifedata.sq(survivor_id)}, {lifedata.sq(loser_id)}"
-    rows = lifedata.sql(
+    ids = f"{somadata.sq(survivor_id)}, {somadata.sq(loser_id)}"
+    rows = somadata.sql(
         "SELECT id, person_id, related_id, relation_type FROM person_relations "
         f"WHERE (person_id IN ({ids}) OR related_id IN ({ids})) AND deleted_at IS NULL"
     )
@@ -594,8 +594,8 @@ def _merge_relations(survivor_id: str, loser_id: str, ops: Ops) -> None:
             continue
         held.add(triple)
         ops.sql(
-            f"UPDATE person_relations SET person_id = {lifedata.sq(person_id)}, "
-            f"related_id = {lifedata.sq(related_id)} WHERE id = {lifedata.sq(row['id'])}"
+            f"UPDATE person_relations SET person_id = {somadata.sq(person_id)}, "
+            f"related_id = {somadata.sq(related_id)} WHERE id = {somadata.sq(row['id'])}"
         )
 
 
@@ -644,7 +644,7 @@ def create(record_id: str, ops: Ops, name: str | None = None, circles: list[str]
     except Exception:
         if page_id:
             print(
-                f"orphaned notion page {page_id}: created but life-data insert failed; "
+                f"orphaned notion page {page_id}: created but soma insert failed; "
                 "re-run with this id or delete the page",
                 file=sys.stderr,
             )
@@ -659,7 +659,7 @@ def ignore(record_ids: list[str], ops: Ops) -> None:
     show up in `people-sync unfollow`. A matched record is refused: unlinking an
     account from a person is a different decision."""
     for record_id in record_ids:
-        record = _one(f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)}")
+        record = _one(f"SELECT * FROM people_sync_records WHERE id = {somadata.sq(record_id)}")
         if not record:
             sys.exit(f"no contact record {record_id}")
         if record["status"] == "ignored":
@@ -672,7 +672,7 @@ def ignore(record_ids: list[str], ops: Ops) -> None:
             print(f"{record_id} is matched to {record['person_id']} - not ignored")
             continue
         ops.sql(
-            f"UPDATE people_sync_records SET status = 'ignored' WHERE id = {lifedata.sq(record_id)}"
+            f"UPDATE people_sync_records SET status = 'ignored' WHERE id = {somadata.sq(record_id)}"
         )
 
 
@@ -687,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     # after the arguments, where a triage session naturally reaches for them
     flags = argparse.ArgumentParser(add_help=False)
     flags.add_argument("--dry-run", action="store_true", help="print the plan only (the default)")
-    flags.add_argument("--apply", action="store_true", help="actually write to life-data")
+    flags.add_argument("--apply", action="store_true", help="actually write to soma")
     sub = parser.add_subparsers(dest="command", required=True)
 
     link_p = sub.add_parser(

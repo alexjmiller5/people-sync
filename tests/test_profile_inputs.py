@@ -83,9 +83,9 @@ def test_signed_avatar_survives_shared_flow_without_url_persistence(
 
     mocker.patch.object(photos, "fetch_url_photo", side_effect=fetch)
     rows = []
-    mocker.patch.object(run.lifedata, "sql", return_value=[])
+    mocker.patch.object(run.somadata, "sql", return_value=[])
     mocker.patch.object(
-        run.lifedata, "insert", side_effect=lambda table, values: rows.extend(values)
+        run.somadata, "insert", side_effect=lambda table, values: rows.extend(values)
     )
     if failure:
         mocker.patch.object(photos, "get_object", return_value=b"wrong")
@@ -131,9 +131,9 @@ def test_partiful_mutual_signed_avatar_retention_before_acquisition(
         "people_sync.ledger.upsert",
         side_effect=lambda records: rows.extend(vars(r) for r in records),
     )
-    mocker.patch.object(run.lifedata, "sql", return_value=[])
+    mocker.patch.object(run.somadata, "sql", return_value=[])
     mocker.patch.object(
-        run.lifedata, "insert", side_effect=lambda table, values: rows.extend(values)
+        run.somadata, "insert", side_effect=lambda table, values: rows.extend(values)
     )
 
     def fetch(url, **kwargs):
@@ -401,7 +401,7 @@ def records_db(monkeypatch):
             (rid, source, rid.split(":")[1], status, deleted),
         )
     db.execute("INSERT INTO people_sync_profiles VALUES ('spotify:fresh',NULL,NULL,'2999-01-01')")
-    monkeypatch.setattr(run.lifedata, "sql", lambda sql: [dict(r) for r in db.execute(sql)])
+    monkeypatch.setattr(run.somadata, "sql", lambda sql: [dict(r) for r in db.execute(sql)])
     yield db
     db.close()
 
@@ -410,8 +410,8 @@ def records_db(monkeypatch):
 def test_cli_record_selector_bypasses_staleness_only(
     mocker, monkeypatch, tmp_path, records_db, rid
 ):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://example.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "synthetic")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://example.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "synthetic")
     visited = []
     mocker.patch.object(run.Browser, "connect", return_value=ProfileBrowser([]))
     mocker.patch.object(

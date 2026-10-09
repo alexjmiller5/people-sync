@@ -19,7 +19,7 @@ def retained(monkeypatch, tmp_path):
 
 @pytest.fixture
 def synthetic_ledger(monkeypatch):
-    """Run real ledger SQL against isolated synthetic rows, never a life database."""
+    """Run real ledger SQL against isolated synthetic rows, never a soma database."""
     with sqlite3.connect(":memory:") as db:
         db.row_factory = sqlite3.Row
         db.execute("""CREATE TABLE people_sync_records (
@@ -46,9 +46,9 @@ def synthetic_ledger(monkeypatch):
                     f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", list(row.values())
                 )
 
-        monkeypatch.setattr(ledger.lifedata, "sql", sql)
-        monkeypatch.setattr(ledger.lifedata, "insert", insert)
-        monkeypatch.setattr(ledger.lifedata, "now_iso", lambda: "2026-09-12T00:00:00.000Z")
+        monkeypatch.setattr(ledger.somadata, "sql", sql)
+        monkeypatch.setattr(ledger.somadata, "insert", insert)
+        monkeypatch.setattr(ledger.somadata, "now_iso", lambda: "2026-09-12T00:00:00.000Z")
         yield db
 
 
@@ -433,9 +433,9 @@ def test_non_ok_replay_keeps_capture_but_never_writes(monkeypatch, tmp_path, ret
 
 def test_capture_key_seam_is_not_serialized_to_ledger(monkeypatch):
     rows = []
-    monkeypatch.setattr(ledger.lifedata, "sql", lambda query: [])
+    monkeypatch.setattr(ledger.somadata, "sql", lambda query: [])
     monkeypatch.setattr(
-        ledger.lifedata,
+        ledger.somadata,
         "insert",
         lambda table, batch: rows.extend(batch) if table == "people_sync_records" else None,
     )
@@ -508,7 +508,7 @@ def test_apple_revalidation_rejects_unsafe_or_ambiguous_inputs(row, retained):
 
 def test_contacts_replay_is_pure_and_yearless_birthday_is_deterministic(monkeypatch):
     from datetime import datetime
-    from people_sync import lifedata, notion_people
+    from people_sync import somadata, notion_people
 
     epoch = (datetime(1604, 5, 2) - datetime(2001, 1, 1)).total_seconds()
     capture = sources.contacts_capture(
@@ -530,7 +530,7 @@ def test_contacts_replay_is_pure_and_yearless_birthday_is_deterministic(monkeypa
     for module, names in (
         (sources, ["_run", "_db_paths"]),
         (photos, ["get_object", "put_object", "fetch_url_photo"]),
-        (lifedata, ["sql", "insert"]),
+        (somadata, ["sql", "insert"]),
         (notion_people, ["create_stub"]),
     ):
         for name in names:

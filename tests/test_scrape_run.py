@@ -681,7 +681,7 @@ def test_shared_stop_after_collection_keeps_archive_without_cache_write(mocker, 
 
 def test_two_snapshots_at_same_timestamp_do_not_overwrite(mocker):
     archived = {}
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-01-01T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-01-01T00:00:00.000Z")
     mocker.patch(
         "people_sync.photos.put_object",
         side_effect=lambda key, body, **kw: archived.update({key: body}),

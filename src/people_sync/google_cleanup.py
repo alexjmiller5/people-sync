@@ -1,13 +1,13 @@
-"""Google write-back cleanup: clear labels/org from Google once life-data holds them.
+"""Google write-back cleanup: clear labels/org from Google once soma holds them.
 
 Google Contacts is the phone book (name, phones, emails, addresses, birthday,
-photo - what the iPhone needs); life-data is the brain (circles, employments,
+photo - what the iPhone needs); soma is the brain (circles, employments,
 socials, notes). This script removes the semantic duplication from Google, one
-contact at a time, and ONLY after re-reading life-data and confirming the
+contact at a time, and ONLY after re-reading soma and confirming the
 replacement is already there: every Google label must already be a circle and
 every org name/title must already be a person_employments row. A contact with
 any gap is printed and skipped - nothing is cleared from Google before its
-life-data replacement is verified. The org is additionally re-read from Google
+soma replacement is verified. The org is additionally re-read from Google
 immediately before it is cleared, so a value that changed since the last ingest
 (and was therefore never verified) is left alone.
 
@@ -20,7 +20,7 @@ import argparse
 import json
 import sys
 
-from people_sync import lifedata, sources
+from people_sync import somadata, sources
 
 RECORDS_QUERY = """
     SELECT c.source_id, c.raw, c.person_id, p.name, p.circles
@@ -66,7 +66,7 @@ def decide(raw: dict, circles: list[str], employments: list[dict], groups: dict[
 
     Returns (labels, orgs, gaps): labels = [(group resourceName, name)] safe to
     drop, orgs = the verified org entries whose fields are safe to clear, gaps = the
-    life-data values that are missing. Any gap means nothing is cleared.
+    soma values that are missing. Any gap means nothing is cleared.
     """
     labels = []
     for membership in raw.get("labels") or []:
@@ -153,8 +153,8 @@ def clear(
 
 
 def main(apply: bool) -> None:
-    records = lifedata.sql(RECORDS_QUERY)
-    employments = lifedata.sql(
+    records = somadata.sql(RECORDS_QUERY)
+    employments = somadata.sql(
         "SELECT person_id, company, title FROM person_employments WHERE deleted_at IS NULL"
     )
     by_person: dict[str, list[dict]] = {}

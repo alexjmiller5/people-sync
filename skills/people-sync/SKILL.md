@@ -1,6 +1,6 @@
 ---
 name: people-sync
-description: Operate the people-sync CLI - consolidate contact sources (Instagram, Facebook, Snapchat, LinkedIn, Google Contacts, Apple Contacts, WhatsApp, Venmo, Partiful, Spotify, Strava) into a life-data people estate, triage the pending ledger with the user, scrape and enrich profiles through a CDP-attached Chrome, keep every input as a retained capture, and build the private photo-assisted review page. Use for any run of `people-sync`, any contact export ingest, any people/contacts triage or profile enrichment, and whenever a source's markup or export format changes.
+description: Operate the people-sync CLI - consolidate contact sources (Instagram, Facebook, Snapchat, LinkedIn, Google Contacts, Apple Contacts, WhatsApp, Venmo, Partiful, Spotify, Strava) into a soma people estate, triage the pending ledger with the user, scrape and enrich profiles through a CDP-attached Chrome, keep every input as a retained capture, and build the private photo-assisted review page. Use for any run of `people-sync`, any contact export ingest, any people/contacts triage or profile enrichment, and whenever a source's markup or export format changes.
 ---
 
 # people-sync
@@ -13,8 +13,8 @@ whose, what a person's context is) is a conversation. **Nothing is
 scheduled, ever.** A month of new contacts is a few hundred rows.
 
 The installed CLI is the only thing to run; the source checkout is for
-development. Life-data is the estate it writes into (`life-map` /
-`life-cli` skills for the schema and the `life` CLI).
+development. Soma is the estate it writes into (`soma-map` /
+`soma-cli` skills for the schema and the `soma` CLI).
 
 ## Ground rules
 
@@ -27,8 +27,8 @@ development. Life-data is the estate it writes into (`life-map` /
   and only then interpreted; every row and promoted fact carries a
   provenance edge to the exact capture. A retention failure stops the run.
 - **A missing or stale export skips that source; it never blocks the run.**
-- **The address books are the phone book, life-data is the brain.** Emails,
-  phone numbers and postal addresses are never copied into life-data; the
+- **The address books are the phone book, soma is the brain.** Emails,
+  phone numbers and postal addresses are never copied into soma; the
   `person_accounts.source_id` (Google `people/c...`, Apple `<uuid>:ABPerson`)
   is the pointer, resolved on demand.
 - **Nothing links an account to a person without the user's word**, except
@@ -46,7 +46,7 @@ Environment variables, all optional except where a command needs them:
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `LIFE_HUB_URL`, `LIFE_HUB_TOKEN` | captures, photos, scrape, list | the life-data file service (scoped `files:*` grants for `profiles/`, `photos/records/`, `photos/people/`) |
+| `SOMA_HUB_URL`, `SOMA_HUB_TOKEN` | captures, photos, scrape, list | the soma file service (scoped `files:*` grants for `profiles/`, `photos/records/`, `photos/people/`) |
 | `NOTION_API_TOKEN`, `PEOPLE_SYNC_NOTION_PEOPLE_DS` | `new-person` | the Notion connection and the People data-source id it creates stubs in |
 | `PEOPLE_SYNC_NOTION_RELATIONS` | `reconcile merge` | JSON `{"<label>": ["<data_source_id>", "<relation property id>"]}` of the DBs that relate to People; unset = the relation check is skipped with a warning |
 | `PEOPLE_SYNC_CDP_ENDPOINT` | login, scrape, list | `host:port` of a Chrome DevTools endpoint to attach to (a dedicated-profile Chrome, no approval prompt) |
@@ -167,7 +167,7 @@ never one message per record. Review actions:
 - **new person** when the estate has never had them:
   `people-sync new-person --name "<Full Name>"` (Notion stub, then the row).
 - **public** for a reviewed social account the user wants to keep outside personal
-  relationships: create or reuse an owner through the installed `life` CLI,
+  relationships: create or reuse an owner through the installed `soma` CLI,
   then `people-sync reconcile public <record_id> --organization <id>`
   (or `--figure <id>` / `--festival <id>`). Dry run first; `--apply` writes.
   Owners live in `organizations`, `public_figures`, or existing `music_festivals`.
@@ -212,7 +212,7 @@ people-sync google-cleanup --apply     # with the user watching
 ```
 
 It clears a label or org only when that exact value is already in
-life-data, re-reads the live contact before clearing an org, and prints
+soma, re-reads the live contact before clearing an org, and prints
 `SKIP <name>: ...` for anything else. A SKIP is a triage to-do, not an error.
 
 ## Step 6 - profile enrichment
@@ -290,7 +290,7 @@ is in the local address book; pass the file to `review --links` so each WhatsApp
 card opens the chat in the desktop app for context).
 Venmo's friend inventory comes from its authenticated `/v1/users/<id>/friends`
 API with the session's bearer token held in memory only. Payment
-counterparties come from the payments already in life-data's `txns_venmo`:
+counterparties come from the payments already in soma's `txns_venmo`:
 `people-sync ingest venmo-payments` (no browser) gives every
 person-to-person payment one `provenance` edge to its counterparty's record
 `venmo:<user id>` - `imported_from` on the payment that first brings someone
@@ -345,10 +345,10 @@ Photos are for the user to inspect, never automatic face matching.
 Short lists to work through with the user, every run:
 
 ```bash
-life sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND (circles IS NULL OR json_array_length(circles) = 0) ORDER BY name"
-life sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND notify_birthday = 1 AND birthday IS NULL"
-life sql "SELECT a.person_id, a.platform, a.handle FROM person_accounts a WHERE a.deleted_at IS NULL AND a.active = 1 AND NOT EXISTS (SELECT 1 FROM person_photos ph WHERE ph.deleted_at IS NULL AND ph.person_id = a.person_id AND ph.platform = a.platform)"
-life sql "SELECT value, count(*) n FROM people, json_each(people.circles) WHERE people.deleted_at IS NULL GROUP BY value ORDER BY value"
+soma sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND (circles IS NULL OR json_array_length(circles) = 0) ORDER BY name"
+soma sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND notify_birthday = 1 AND birthday IS NULL"
+soma sql "SELECT a.person_id, a.platform, a.handle FROM person_accounts a WHERE a.deleted_at IS NULL AND a.active = 1 AND NOT EXISTS (SELECT 1 FROM person_photos ph WHERE ph.deleted_at IS NULL AND ph.person_id = a.person_id AND ph.platform = a.platform)"
+soma sql "SELECT value, count(*) n FROM people, json_each(people.circles) WHERE people.deleted_at IS NULL GROUP BY value ORDER BY value"
 ```
 
 A vocabulary fix is an estate-wide rename with the user's approval, never a
@@ -371,8 +371,8 @@ records are revisited once they are 180 days stale.
 
 ## Step 8 - sync and report
 
-Let life-data's own sync move the rows (`life background status`; a
-foreground `life sync` only when needed), verify a changed row on another
+Let soma's own sync move the rows (`soma background status`; a
+foreground `soma sync` only when needed), verify a changed row on another
 replica, then report in chat: per-source ingested/new counts, sources
 skipped and why, matched/confirmed/created/ignored, cleanup, photos,
 captures retained and verified, sweep counts, and anything left open.
@@ -382,12 +382,12 @@ captures retained and verified, sweep counts, and anything left open.
 - A cloud-synced folder can hand a parser an empty file (dataless
   placeholder). Zero entries from a file that clearly has content means copy
   it to a local path first.
-- `new-person` is two writes. If the life-data insert fails after the Notion
+- `new-person` is two writes. If the soma insert fails after the Notion
   page exists, it prints the orphaned page id; re-run with it rather than
   creating a second page.
-- Never hard-delete a life-data row; soft delete only, or the next sync
+- Never hard-delete a soma row; soft delete only, or the next sync
   resurrects it.
 - LinkedIn's export drops connections it cannot render (rows with only a
   `Connected On` date); they are skipped with a warning by design.
-- Every `life sql` write costs seconds; the CLI batches its writes, and a
+- Every `soma sql` write costs seconds; the CLI batches its writes, and a
   loop of single-row writes is the bug to fix, not a reason to schedule.

@@ -296,7 +296,7 @@ def test_phone_index_and_google_contact_ids(mocker):
         "5550002222": [{"apple": rows[1]["id"], "external": None, "number": "5550002222"}],
     }
     mocker.patch.object(
-        sources.lifedata,
+        sources.somadata,
         "sql",
         return_value=[
             {

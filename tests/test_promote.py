@@ -107,8 +107,8 @@ def test_plan_is_idempotent_through_existing_edges():
 
 
 def test_apply_writes_rows_and_one_provenance_edge_per_value(mocker):
-    inserts = mocker.patch("people_sync.promote.lifedata.insert")
-    sql = mocker.patch("people_sync.promote.lifedata.sql")
+    inserts = mocker.patch("people_sync.promote.somadata.insert")
+    sql = mocker.patch("people_sync.promote.somadata.sql")
     ops = promote.plan([_profile()], PEOPLE, [], [], [], set())
 
     counts = promote.apply(ops)
@@ -140,7 +140,8 @@ def test_run_dry_run_prints_the_plan_and_writes_nothing(mocker):
     mocker.patch(
         "people_sync.promote.load_state", return_value=([_profile()], PEOPLE, [], [], [], set())
     )
-    inserts = mocker.patch("people_sync.promote.lifedata.insert")
+    inserts = mocker.patch("people_sync.promote.somadata.insert")
+    mocker.patch("people_sync.promote.somadata.sql", return_value=[])  # never the real estate
 
     summary = promote.run(apply_writes=False)
 
@@ -155,8 +156,8 @@ def test_missing_capture_is_reported_and_apply_refuses_before_any_write(mocker):
         "people_sync.promote.load_state",
         return_value=([_profile(raw_r2_key=None)], PEOPLE, [], [], [], set()),
     )
-    insert = mocker.patch.object(promote.lifedata, "insert")
-    sql = mocker.patch.object(promote.lifedata, "sql")
+    insert = mocker.patch.object(promote.somadata, "insert")
+    sql = mocker.patch.object(promote.somadata, "sql")
     summary = promote.run(apply_writes=True)
     assert summary["missing_evidence"] == ["facebook:r1"]
     assert summary["planned"] == summary["applied"] == {}
@@ -180,7 +181,8 @@ def test_legacy_evidence_is_reported_without_historical_rewrite(mocker):
             {"people_sync_profiles:facebook:r1:p1:birthday"},
         ),
     )
-    insert = mocker.patch.object(promote.lifedata, "insert")
+    insert = mocker.patch.object(promote.somadata, "insert")
+    mocker.patch.object(promote.somadata, "sql", return_value=[])  # never the real estate
     summary = promote.run(apply_writes=True)
     assert summary["legacy"] == ["facebook:r1"]
     assert summary["applied"] == {}
@@ -188,15 +190,15 @@ def test_legacy_evidence_is_reported_without_historical_rewrite(mocker):
 
 
 def test_exact_capture_edges_make_planning_idempotent(mocker):
-    insert = mocker.patch.object(promote.lifedata, "insert")
-    mocker.patch.object(promote.lifedata, "sql", return_value=[])
+    insert = mocker.patch.object(promote.somadata, "insert")
+    mocker.patch.object(promote.somadata, "sql", return_value=[])
     promote.apply(promote.plan([_profile()], PEOPLE, [], [], [], set()))
     edges = {e["id"] for e in insert.call_args.args[1]}
     assert promote.plan([_profile()], PEOPLE, [], [], [], edges) == []
 
 
 def test_load_state_includes_capture_and_deleted_evidence(mocker):
-    sql = mocker.patch.object(promote.lifedata, "sql", return_value=[])
+    sql = mocker.patch.object(promote.somadata, "sql", return_value=[])
     promote.load_state()
     assert "p.raw_r2_key" in sql.call_args_list[0].args[0]
     query = sql.call_args_list[-1].args[0]

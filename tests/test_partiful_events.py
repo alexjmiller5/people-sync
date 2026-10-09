@@ -79,7 +79,7 @@ def test_ingest_guest_adds_the_event_and_keeps_the_record(mocker):
         "events": [{"id": "old", "title": "Old", "capture_key": "k0"}],
     }
     sql = mocker.patch(
-        "people_sync.lifedata.sql",
+        "people_sync.somadata.sql",
         return_value=[
             {"id": "partiful:abc123def", "raw": json.dumps(existing), "name": "Caroline Odia"}
         ],
@@ -137,12 +137,12 @@ def test_event_ops_promote_once_with_evidence(mocker):
             return []
         return []
 
-    mocker.patch("people_sync.lifedata.sql", side_effect=sql)
+    mocker.patch("people_sync.somadata.sql", side_effect=sql)
     ops = promote.event_ops(promote.load_event_rows(), set())
     assert [(o.kind, o.person_id, o.value, o.raw_r2_key) for o in ops] == [
         ("event", "p1", "ev1", "profiles/partiful/captures/g.json")
     ]
-    insert = mocker.patch("people_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.somadata.insert")
     promote.apply(ops)
     tables = [c.args[0] for c in insert.call_args_list]
     assert tables == ["person_events", "provenance"]
@@ -277,7 +277,7 @@ def test_host_view_reads_uids_from_the_list_without_visiting_guests(retained, mo
 
 
 def test_guest_role_comes_from_the_guest_section_not_the_event(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
+    mocker.patch("people_sync.somadata.sql", return_value=[])
     upsert = mocker.patch("people_sync.ledger.upsert")
     header = {"title": "Rave", "when": "Sat, Jan 25, 2026"}
     event = {"id": "EV1", "title": "Rave", "status": "HOSTING"}
@@ -293,7 +293,7 @@ def test_guest_role_comes_from_the_guest_section_not_the_event(mocker):
 
 
 def test_ingest_guests_batches_one_select_and_one_upsert(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[])
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[])
     upsert = mocker.patch("people_sync.ledger.upsert")
     header = {"title": "Rave", "when": "Sat, Jan 25, 2026"}
     event = {"id": "EV1", "title": "Rave", "status": "WENT"}

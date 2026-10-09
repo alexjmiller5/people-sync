@@ -8,7 +8,7 @@ straight across.
 import json
 from dataclasses import dataclass, field
 
-from people_sync import lifedata
+from people_sync import somadata
 from people_sync.ledger import batch_update, imported_from_many
 
 _JSON_COLUMNS = ("education", "work", "links")
@@ -53,7 +53,7 @@ def _sql_value(value) -> str:
         return "1" if value else "0"
     if isinstance(value, int):
         return str(value)
-    return lifedata.sq(str(value))
+    return somadata.sq(str(value))
 
 
 def _row(p: Profile, avatar_r2_key, avatar_sha256, raw_r2_key, scraped_at) -> dict:
@@ -101,14 +101,14 @@ def upsert_profiles(items) -> None:
     """Batched: one SELECT, one UPDATE, one insert, one evidence round trip for
     every (Profile, avatar_r2_key, avatar_sha256, raw_r2_key). Tombstoned rows
     are left alone; evidence points at the retained capture, never the row."""
-    now = lifedata.now_iso()
+    now = somadata.now_iso()
     record_ids = [p.record_id for p, *_ in items]
     existing = {}
     for start in range(0, len(record_ids), 200):
-        ids = ",".join(lifedata.sq(i) for i in record_ids[start : start + 200])
+        ids = ",".join(somadata.sq(i) for i in record_ids[start : start + 200])
         existing.update(
             (row["record_id"], row)
-            for row in lifedata.sql(
+            for row in somadata.sql(
                 f"SELECT id, record_id, deleted_at FROM people_sync_profiles WHERE record_id IN ({ids})"
             )
         )
@@ -126,5 +126,5 @@ def upsert_profiles(items) -> None:
     if updates:
         batch_update("people_sync_profiles", "record_id", updates)
     if inserts:
-        lifedata.insert("people_sync_profiles", inserts)
+        somadata.insert("people_sync_profiles", inserts)
     imported_from_many("people_sync_profiles", evidence)

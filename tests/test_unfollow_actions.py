@@ -30,7 +30,7 @@ def test_cli_plan_is_private_exact_and_does_not_write_estate_or_open_browser(
     tmp_path, monkeypatch, mocker, capsys
 ):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[row()])
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[row()])
     connect = mocker.patch("people_sync.scrape.cdp.Browser.connect")
     cli.main(
         [
@@ -60,7 +60,7 @@ def test_cli_plan_is_private_exact_and_does_not_write_estate_or_open_browser(
 
 def test_cli_apply_requires_real_tty_before_any_effect(tmp_path, monkeypatch, mocker, capsys):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    mocker.patch("people_sync.lifedata.sql", return_value=[row()])
+    mocker.patch("people_sync.somadata.sql", return_value=[row()])
     cli.main(
         [
             "unfollow",
@@ -79,7 +79,7 @@ def test_cli_apply_requires_real_tty_before_any_effect(tmp_path, monkeypatch, mo
     )
     path = next((tmp_path / "people-sync" / "unfollow" / "plans").glob("*.json"))
     connect = mocker.patch("people_sync.scrape.cdp.Browser.connect")
-    insert = mocker.patch("people_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.somadata.insert")
     with pytest.raises(SystemExit) as exc:
         cli.main(["unfollow", "apply", str(path)])
     assert exc.value.code != 0
@@ -91,7 +91,7 @@ def test_cli_apply_requires_real_tty_before_any_effect(tmp_path, monkeypatch, mo
 
 @pytest.fixture
 def estate(monkeypatch, tmp_path):
-    from people_sync import lifedata
+    from people_sync import somadata
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     db = sqlite3.connect(":memory:")
@@ -116,14 +116,14 @@ def estate(monkeypatch, tmp_path):
             writes.append(query)
         return [dict(r) for r in db.execute(query).fetchall()]
 
-    monkeypatch.setattr(lifedata, "sql", sql)
+    monkeypatch.setattr(somadata, "sql", sql)
 
     def insert(table, rows):
         for r in rows:
             db.execute("INSERT INTO provenance(id) VALUES (?)", (r["id"],))
         edges.extend(rows)
 
-    monkeypatch.setattr(lifedata, "insert", insert)
+    monkeypatch.setattr(somadata, "insert", insert)
     yield db, writes, edges
     db.close()
 
@@ -454,7 +454,7 @@ def test_no_completion_text_on_unsupported_or_partial_cli(estate, engine, mocker
 def test_provenance_failure_can_be_repaired_without_repeating_action(estate, engine, mocker):
     actions, browser, remote, clicks = engine
     plan = make_plan()
-    insert = mocker.patch("people_sync.lifedata.insert", side_effect=RuntimeError)
+    insert = mocker.patch("people_sync.somadata.insert", side_effect=RuntimeError)
     with pytest.raises(RuntimeError):
         actions.execute(plan)
     assert actions.read_journal()[0]["state"] == "verified"
@@ -651,20 +651,20 @@ def test_write_intent_is_durable_before_first_click(estate, engine, mocker):
 
 
 def test_provenance_reply_loss_does_not_duplicate_evidence_on_resume(estate, engine, mocker):
-    from people_sync import lifedata
+    from people_sync import somadata
 
     actions, browser, remote, clicks = engine
-    original = lifedata.insert
+    original = somadata.insert
 
     def stored_but_reply_lost(table, values):
         original(table, values)
         raise RuntimeError("reply lost")
 
-    mocker.patch.object(lifedata, "insert", side_effect=stored_but_reply_lost)
+    mocker.patch.object(somadata, "insert", side_effect=stored_but_reply_lost)
     plan = make_plan()
     with pytest.raises(RuntimeError):
         actions.execute(plan)
-    mocker.patch.object(lifedata, "insert", side_effect=original)
+    mocker.patch.object(somadata, "insert", side_effect=original)
     actions.execute(plan, resume=True)
     assert len(estate[2]) == 1
     assert clicks == ["example_target"]
@@ -947,8 +947,8 @@ def test_friend_provenance_retry_keeps_follow_state_and_completed_write(estate, 
         ["venmo:example_target"],
         remote_ids={"venmo:example_target": "900001"},
     )
-    original = actions.lifedata.insert
-    insert = mocker.patch.object(actions.lifedata, "insert", side_effect=RuntimeError)
+    original = actions.somadata.insert
+    insert = mocker.patch.object(actions.somadata, "insert", side_effect=RuntimeError)
     with pytest.raises(RuntimeError):
         actions.execute(plan)
     before = list(estate[1])
@@ -967,11 +967,11 @@ def test_friend_provenance_retry_keeps_follow_state_and_completed_write(estate, 
 def test_repeated_provenance_interruptions_preserve_acknowledged_ledger_write(
     estate, engine, mocker
 ):
-    from people_sync import lifedata
+    from people_sync import somadata
 
     actions, browser, remote, clicks = engine
     plan = make_plan()
-    original = lifedata.insert
+    original = somadata.insert
     attempts = 0
 
     def flaky_provenance(table, rows):
@@ -981,9 +981,9 @@ def test_repeated_provenance_interruptions_preserve_acknowledged_ledger_write(
             raise RuntimeError("interrupted evidence write")
         return original(table, rows)
 
-    mocker.patch.object(lifedata, "insert", side_effect=flaky_provenance)
+    mocker.patch.object(somadata, "insert", side_effect=flaky_provenance)
     mocker.patch.object(
-        lifedata,
+        somadata,
         "now_iso",
         side_effect=[
             "2026-01-02T00:00:00.000Z",
@@ -1008,23 +1008,23 @@ def test_repeated_provenance_interruptions_preserve_acknowledged_ledger_write(
 def test_resume_skips_completed_ledger_write_even_if_a_second_write_would_fail(
     estate, engine, mocker
 ):
-    from people_sync import lifedata
+    from people_sync import somadata
 
     actions, browser, remote, clicks = engine
     plan = make_plan()
-    original_insert, original_sql = lifedata.insert, lifedata.sql
-    mocker.patch.object(lifedata, "insert", side_effect=RuntimeError)
+    original_insert, original_sql = somadata.insert, somadata.sql
+    mocker.patch.object(somadata, "insert", side_effect=RuntimeError)
     with pytest.raises(RuntimeError):
         actions.execute(plan)
     acknowledged_at = actions.read_journal()[0]["ledger_at"]
-    mocker.patch.object(lifedata, "insert", side_effect=original_insert)
+    mocker.patch.object(somadata, "insert", side_effect=original_insert)
 
     def no_second_write(query):
         if query.startswith("UPDATE "):
             raise RuntimeError("second interruption")
         return original_sql(query)
 
-    mocker.patch.object(lifedata, "sql", side_effect=no_second_write)
+    mocker.patch.object(somadata, "sql", side_effect=no_second_write)
     actions.execute(plan, resume=True)
     assert actions.read_journal()[0]["ledger_at"] == acknowledged_at
     assert actions.read_journal()[0]["state"] == "done"

@@ -58,7 +58,7 @@ def test_unchanged_and_unparseable_raw_emit_nothing():
 
 
 def test_query_reads_only_matched_people_since_the_cutoff(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[])
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[])
     changes.run("2026-09-01")
     query = sql.call_args.args[0]
     assert "r.status = 'matched'" in query

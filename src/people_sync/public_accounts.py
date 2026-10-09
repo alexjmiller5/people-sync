@@ -2,7 +2,7 @@
 
 import sys
 
-from people_sync import lifedata
+from people_sync import somadata
 
 OWNERS = {
     "organization": ("organizations", "organization_id"),
@@ -24,8 +24,8 @@ SOCIAL_SOURCES = {
 def link(record_id: str, owner_kind: str, owner_id: str, ops) -> None:
     """Keep a reviewed account. Inserting its relation before status is retryable."""
     table, column = OWNERS[owner_kind]
-    records = lifedata.sql(
-        f"SELECT * FROM people_sync_records WHERE id = {lifedata.sq(record_id)} "
+    records = somadata.sql(
+        f"SELECT * FROM people_sync_records WHERE id = {somadata.sq(record_id)} "
         "AND deleted_at IS NULL"
     )
     if not records:
@@ -35,14 +35,14 @@ def link(record_id: str, owner_kind: str, owner_id: str, ops) -> None:
         sys.exit("record belongs to personal triage; unlink it explicitly first")
     if record["source"] not in SOCIAL_SOURCES:
         sys.exit("only social accounts can be classified public")
-    owners = lifedata.sql(
-        f"SELECT id FROM {table} WHERE id = {lifedata.sq(owner_id)} AND deleted_at IS NULL"
+    owners = somadata.sql(
+        f"SELECT id FROM {table} WHERE id = {somadata.sq(owner_id)} AND deleted_at IS NULL"
     )
     if not owners:
         sys.exit("no live public owner")
-    accounts = lifedata.sql(
+    accounts = somadata.sql(
         "SELECT * FROM public_accounts "
-        f"WHERE record_id = {lifedata.sq(record_id)} OR id = {lifedata.sq(record_id)}"
+        f"WHERE record_id = {somadata.sq(record_id)} OR id = {somadata.sq(record_id)}"
     )
     if accounts:
         if len(accounts) != 1:
@@ -69,6 +69,6 @@ def link(record_id: str, owner_kind: str, owner_id: str, ops) -> None:
         )
     ops.sql(
         "UPDATE people_sync_records SET status = 'public', suggested_person_id = NULL "
-        f"WHERE id = {lifedata.sq(record_id)} AND deleted_at IS NULL "
+        f"WHERE id = {somadata.sq(record_id)} AND deleted_at IS NULL "
         "AND person_id IS NULL AND status IN ('pending', 'ignored', 'public')"
     )

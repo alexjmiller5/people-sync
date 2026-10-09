@@ -1,7 +1,7 @@
 [project]
 name = "people-sync"
 version = "0.1.0"
-description = "Consolidate contact sources (Apple, Google, Instagram, Snapchat, LinkedIn, Facebook, more) into the life-data people estate"
+description = "Consolidate contact sources (Apple, Google, Instagram, Snapchat, LinkedIn, Facebook, more) into the soma people estate"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28",

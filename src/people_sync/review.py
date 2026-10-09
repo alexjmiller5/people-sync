@@ -3,7 +3,7 @@
 Run with --batch LABEL context.json (repeatable), --photos manifest.json,
 optional --proposals proposals.json, and --output /private/path/index.html.
 Photo paths in the manifest are
-relative to that output file. This script neither fetches nor writes life-data.
+relative to that output file. This script neither fetches nor writes soma.
 """
 
 import argparse

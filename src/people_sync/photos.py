@@ -1,4 +1,4 @@
-"""Content-addressed profile photos and retained originals through life-data.
+"""Content-addressed profile photos and retained originals through soma.
 
 Only the hub URL and a scoped file token are needed. Photo history is
 append-only: identical bytes for a person are skipped, changed pictures
@@ -14,20 +14,20 @@ from urllib.parse import quote
 import httpx
 import structlog
 
-from people_sync import lifedata, sources
+from people_sync import somadata, sources
 
 log = structlog.get_logger(__name__)
 
 
 def _headers() -> dict:
     return {
-        "Authorization": f"Bearer {os.environ['LIFE_HUB_TOKEN']}",
+        "Authorization": f"Bearer {os.environ['SOMA_HUB_TOKEN']}",
         "User-Agent": "people-sync/0.1",
     }
 
 
 def _url(key: str) -> str:
-    return f"{os.environ['LIFE_HUB_URL'].rstrip('/')}/v1/files/{quote(key, safe='/')}"
+    return f"{os.environ['SOMA_HUB_URL'].rstrip('/')}/v1/files/{quote(key, safe='/')}"
 
 
 def _upload(key: str, data: bytes, content_type: str | None = None) -> None:
@@ -64,7 +64,7 @@ def archive_profile(platform, record_id, raw_eval, captured, *, context=None) ->
                 "profile",
                 payload,
                 record_id=record_id,
-                captured_at=lifedata.now_iso(),
+                captured_at=somadata.now_iso(),
                 completeness=snapshot.completeness(payload),
                 exclusions=snapshot.EXCLUSIONS,
             )
@@ -86,15 +86,15 @@ def store_photo(person_id: str, platform: str, image: bytes, ext: str) -> str | 
     # apple_contacts, whatsapp, venmo, partiful, spotify) - person_photos
     # joins to person_accounts on (person_id, platform).
     sha = hashlib.sha256(image).hexdigest()
-    existing = lifedata.sql(
+    existing = somadata.sql(
         "SELECT id FROM person_photos WHERE deleted_at IS NULL "
-        f"AND person_id = {lifedata.sq(person_id)} AND sha256 = {lifedata.sq(sha)}"
+        f"AND person_id = {somadata.sq(person_id)} AND sha256 = {somadata.sq(sha)}"
     )
     if existing:
         return None
     key = f"photos/people/{person_id}/{platform}-{sha[:8]}.{ext}"
     _upload(key, image)
-    lifedata.insert(
+    somadata.insert(
         "person_photos",
         [
             {
@@ -102,7 +102,7 @@ def store_photo(person_id: str, platform: str, image: bytes, ext: str) -> str | 
                 "platform": platform,
                 "r2_key": key,
                 "sha256": sha,
-                "fetched_at": lifedata.now_iso(),
+                "fetched_at": somadata.now_iso(),
             }
         ],
     )

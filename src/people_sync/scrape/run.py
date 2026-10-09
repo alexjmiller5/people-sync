@@ -24,7 +24,7 @@ import structlog
 import httpx
 from websockets.exceptions import ConnectionClosed
 
-from people_sync import lifedata, photos
+from people_sync import somadata, photos
 from people_sync.scrape import snapshot
 from people_sync.scrape.cdp import Browser, CdpError, ScrapeStopped
 from people_sync.scrape.pace import DEFAULT_STATE_PATH, Pacer, challenge_marker
@@ -53,23 +53,23 @@ def _stale_cutoff() -> str:
 
 def _records_sql(platform: str, cutoff: str, record_id: str | None = None) -> str:
     selection = (
-        f"AND c.id = {lifedata.sq(record_id)} "
+        f"AND c.id = {somadata.sq(record_id)} "
         if record_id is not None
-        else f"AND (p.record_id IS NULL OR p.scraped_at < {lifedata.sq(cutoff)}) "
+        else f"AND (p.record_id IS NULL OR p.scraped_at < {somadata.sq(cutoff)}) "
     )
     return (
         "SELECT c.id, c.handle, c.name, "
         "p.avatar_r2_key AS avatar_r2_key, p.avatar_sha256 AS avatar_sha256 "
         "FROM people_sync_records c "
         "LEFT JOIN people_sync_profiles p ON p.record_id = c.id "
-        f"WHERE c.source = {lifedata.sq(platform)} "
+        f"WHERE c.source = {somadata.sq(platform)} "
         "AND c.deleted_at IS NULL "
         "AND c.status IN ('pending', 'matched') " + selection + "ORDER BY c.first_seen"
     )
 
 
 def _select_records(platform: str, record_id: str | None = None) -> list[dict]:
-    records = lifedata.sql(_records_sql(platform, _stale_cutoff(), record_id))
+    records = somadata.sql(_records_sql(platform, _stale_cutoff(), record_id))
     if record_id is not None and len(records) != 1:
         raise ValueError("record must exist in this source and be pending or matched, not deleted")
     return records

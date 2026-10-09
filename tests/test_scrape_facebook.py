@@ -10,8 +10,8 @@ from people_sync.scrape.profile import ExtractError
 def offline_archive(mocker, monkeypatch, tmp_path):
     stored = {}
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    monkeypatch.setenv("LIFE_HUB_URL", "https://files.example.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "synthetic")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://files.example.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "synthetic")
     mocker.patch(
         "people_sync.photos.put_object", side_effect=lambda k, b, **kw: stored.update({k: b})
     )
@@ -124,7 +124,7 @@ def test_list_command_assigns_handles(mocker, capsys):
         "people_sync.scrape.facebook.list_friends",
         return_value=[{"handle": "a.one", "name": "Ann One", "mutual_text": None}],
     )
-    sql = mocker.patch("people_sync.cli.lifedata.sql")
+    sql = mocker.patch("people_sync.cli.somadata.sql")
     sql.side_effect = [
         [
             {"id": "facebook:1", "name": "Ann One", "handle": None},

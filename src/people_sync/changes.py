@@ -1,12 +1,12 @@
 """What changed on accounts already linked to a person: renames, new jobs and cities,
-birthdays, new photos, unfollows. Read-only; life-data's `history` table already
+birthdays, new photos, unfollows. Read-only; soma's `history` table already
 records every cell edit that ingest and scrape make, so this only reads it back.
 A first fill (empty -> value) is enrichment, promote's job, so it is not listed.
 Acting on a change is a triage decision (reconcile, promote), never automatic."""
 
 import json
 
-from people_sync import lifedata
+from people_sync import somadata
 
 RECORD_COLS = ("name", "handle", "raw", "follows_me", "i_follow")
 PROFILE_COLS = (
@@ -29,13 +29,13 @@ EMPTY = (None, "", [], {})
 
 
 def _cols(cols) -> str:
-    return ",".join(lifedata.sq(c) for c in cols)
+    return ",".join(somadata.sq(c) for c in cols)
 
 
 def run(since: str | None = None) -> list[dict]:
-    cutoff = f"AND h.created_at >= {lifedata.sq(since)} " if since else ""
+    cutoff = f"AND h.created_at >= {somadata.sq(since)} " if since else ""
     return diff(
-        lifedata.sql(
+        somadata.sql(
             "SELECT h.tbl, h.row_id AS record_id, h.col, h.old, h.new, h.created_at AS at, "
             "r.person_id, p.name AS person "
             "FROM history h "

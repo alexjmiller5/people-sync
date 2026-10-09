@@ -595,9 +595,9 @@ def harvest_event_guests(browser, event_id: str, pause_s=GUEST_PAUSE_S):
 def ingest_guests(header: dict, event: dict, guests) -> list[str]:
     """Add this event to each guest's Partiful record (created if new), keeping the
     records' other raw fields: one SELECT for the existing rows and one batched
-    upsert (each `life` write costs seconds). `guests` is (guest, capture ref)
+    upsert (each `soma` write costs seconds). `guests` is (guest, capture ref)
     pairs; guests without a uid have no record. Returns the record ids written."""
-    from people_sync import ledger, lifedata
+    from people_sync import ledger, somadata
 
     items = [(g, ref) for g, ref in guests if g.get("uid")]
     if not items:
@@ -605,8 +605,8 @@ def ingest_guests(header: dict, event: dict, guests) -> list[str]:
     ids = sorted({f"partiful:{g['uid']}" for g, _ in items})
     existing = {}
     for start in range(0, len(ids), 200):
-        chunk = ", ".join(lifedata.sq(i) for i in ids[start : start + 200])
-        for row in lifedata.sql(
+        chunk = ", ".join(somadata.sq(i) for i in ids[start : start + 200])
+        for row in somadata.sql(
             f"SELECT id, raw, name FROM people_sync_records WHERE id IN ({chunk})"
         ):
             existing[row["id"]] = row

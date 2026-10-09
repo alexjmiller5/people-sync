@@ -160,7 +160,7 @@ def test_ingest_entry_writes_a_ledger_record_and_a_profile_row(mocker):
     upsert = mocker.patch("people_sync.ledger.upsert")
     upsert_profile = mocker.patch("people_sync.scrape.profile.upsert_profile")
     upload = photos.put_object
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-01-01T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-01-01T00:00:00.000Z")
     profile = partiful.parse({**FIXTURE, "future_field": "retained"})
     entry = {
         "uid": "uid123",
