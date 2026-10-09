@@ -6,7 +6,8 @@ construction: fills empty values and adds rows, never overwrites or
 closes anything - a conflict (a different birthday, a different current
 city or employer) is reported for triage, not resolved. A more or less
 specific form of a known value ("Boston, Massachusetts, United States" for
-"Boston, Massachusetts") counts as known.
+"Boston, Massachusetts") counts as known. A bare country is not a city, and a LinkedIn
+job needs a capture that classified it as a company.
 
 Facts and where they go:
 - location  -> person_locations (open row, city verbatim, source=platform)
@@ -98,6 +99,12 @@ def plan(
     photo_shas: dict[str, set[str]] = {}
     for row in photos:
         photo_shas.setdefault(row["person_id"], set()).add(row.get("sha256") or "")
+    # "City, Region, Country" locations name the countries; a bare country is not a city.
+    countries = {
+        _norm(parts[-1])
+        for p in profiles
+        if len(parts := (p.get("location") or "").split(",")) >= 3
+    }
 
     ops: list[Op] = []
     for p in profiles:
@@ -108,7 +115,7 @@ def plan(
             continue
 
         city = (p.get("location") or "").strip()
-        if city:
+        if city and _norm(city) not in countries:
             if _known(_norm(city), open_locs.get(pid, set())):
                 pass
             elif open_locs.get(pid):
@@ -505,11 +512,39 @@ def apply(ops: list[Op]) -> dict:
     return counts
 
 
-def run(apply_writes: bool = False, platforms=PLATFORMS) -> dict:
+def _read_capture(key: str) -> bytes:
+    """A retained capture: the local cache first, then the file service."""
+    from people_sync import captures, photos
+
+    try:
+        return (captures.state_directory() / "captures" / os.path.basename(key)).read_bytes()
+    except OSError:
+        return photos.get_object(key)
+
+
+def _classified_company(p: dict) -> bool:
+    """A LinkedIn job counts only when its capture classified the org as a
+    company; older captures took the first top-card line, often a school."""
+    try:
+        listed = json.loads(_read_capture(p["raw_r2_key"]))["payload"]["eval"].get("companies")
+    except Exception:
+        return False
+    return p["work"][0] in (listed or [])
+
+
+def run(apply_writes: bool = False, platforms=PLATFORMS, kinds=None) -> dict:
     state = load_state(platforms)
-    ops = plan(*state)
+    profiles = [
+        {**p, "work": None}
+        if p["platform"] == "linkedin" and p.get("work") and not _classified_company(p)
+        else p
+        for p in state[0]
+    ]
+    ops = plan(profiles, *state[1:])
     if "partiful" in platforms:
         ops += event_ops(load_event_rows(), state[-1])
+    if kinds:
+        ops = [op for op in ops if op.kind == "conflict" or op.kind in kinds]
     summary = {"planned": {}, "conflicts": [], "applied": {}}
     summary["legacy"] = sorted(
         {

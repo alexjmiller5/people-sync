@@ -85,3 +85,29 @@ def test_extractor_js_reports_a_missing_profile_as_unavailable():
     from people_sync.scrape import linkedin as mod
 
     assert 'error:"unavailable"' in mod.EXTRACTOR_JS
+
+
+def test_parse_takes_work_and_education_from_the_classified_top_card():
+    raw = {**FIXTURE, "orgs": ["Message", "More"], "companies": ["TestCo"]}
+    p = linkedin.parse({**raw, "schools": ["Test University"]})
+    assert (p.work, p.education) == (["TestCo"], ["Test University"])
+
+
+def test_a_classified_top_card_with_only_a_school_has_no_work():
+    p = linkedin.parse({**FIXTURE, "orgs": ["Test University"], "schools": ["Test University"]})
+    assert (p.work, p.education) == (None, ["Test University"])
+
+
+def test_extractor_js_classifies_top_card_orgs_by_their_placeholder_icon():
+    assert 'svg[id^="company-accent"]' in linkedin.EXTRACTOR_JS
+    assert 'svg[id^="school-accent"]' in linkedin.EXTRACTOR_JS
+    assert "companies:" in linkedin.EXTRACTOR_JS and "schools:" in linkedin.EXTRACTOR_JS
+
+
+def test_retained_linkedin_input_keeps_the_classified_orgs():
+    from people_sync.scrape import snapshot
+
+    raw = {**FIXTURE, "companies": ["TestCo"], "schools": ["Test University"]}
+    payload = snapshot.prepare("linkedin", "linkedin:test-person-123", raw, [])
+    assert payload["eval"]["companies"] == ["TestCo"]
+    assert payload["eval"]["schools"] == ["Test University"]

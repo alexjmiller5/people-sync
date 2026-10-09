@@ -2,7 +2,8 @@
 
 The page is a client-rendered shell; the top card of `main` carries what
 triage needs - name, pronouns, headline, location, the current company and
-school listed after "Contact info", mutual-connection text, connection and
+school listed after "Contact info" (told apart by their placeholder icons'
+`company-accent` / `school-accent` ids), mutual-connection text, connection and
 follower counts, the "You both ..." highlights, and the About text - and the
 profile picture is the `profile-displayphoto` image. Experience and
 education sections are not in the rendered text, and the Voyager GraphQL
@@ -42,6 +43,15 @@ EXTRACTOR_JS = (
     'if(ci>0){var j=ci-1;if(head[j]==="·")j--;loc=head[j]||null}'
     "if(!loc){loc=head.find(x=>/, .*(United States|USA|UK|Canada|Spain|France|Germany|Area)$|Area$/.test(x))||null}"
     "var orgs=ci>0?head.slice(ci+1,ci+3).filter(x=>!/connections$|followers$|mutual connection/.test(x)):[];"
+    # The top card's company and school buttons carry a placeholder icon whose
+    # id says which is which; text order alone cannot (a student's school
+    # comes first, and a card with no orgs yields its action buttons).
+    'var cel=[].slice.call(m.querySelectorAll("a,button,span")).find(e=>e.textContent.trim()==="Contact info");'
+    'var card=cel&&cel.closest("section");var kinds=null;'
+    'if(card){[].slice.call(card.querySelectorAll(\'[role=button] svg[id^="company-accent"],'
+    '[role=button] svg[id^="school-accent"]\')).forEach(function(s){'
+    'var n=s.closest("[role=button]").innerText.split("\\n")[0].trim();if(!n)return;'
+    'kinds=kinds||{company:[],school:[]};kinds[s.id.indexOf("school")===0?"school":"company"].push(n)})}'
     "var f=re=>head.find(x=>re.test(x))||null;"
     "var mut=f(/mutual connection/);var conn=f(/connections$/);var fol=f(/followers$/);"
     "var hl=t.filter(x=>/^You both /.test(x));"
@@ -50,7 +60,8 @@ EXTRACTOR_JS = (
     'var img=m.querySelector("img[src*=profile-displayphoto]")||'
     'm.querySelector("img[alt*=profile i], img.pv-top-card-profile-picture__image");'
     "return JSON.stringify({name:name,pronouns:pronouns,headline:headline,location:loc,"
-    "orgs:orgs,mutual_text:mut,connections:conn,followers:fol,highlights:hl,about:about,"
+    "orgs:orgs,companies:kinds?kinds.company:undefined,schools:kinds?kinds.school:undefined,"
+    "mutual_text:mut,connections:conn,followers:fol,highlights:hl,about:about,"
     "avatar:img?img.src:null,path:location.pathname});})()"
 )
 
@@ -90,6 +101,9 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
         raise ExtractError(eval_result["error"])
 
     orgs = [o for o in (eval_result.get("orgs") or []) if o]
+    # Captures before the icon classification only have the text order.
+    companies, schools = eval_result.get("companies"), eval_result.get("schools")
+    classified = companies is not None or schools is not None
     path = (eval_result.get("path") or "").strip("/")
     platform_id = path.split("/", 1)[1] if path.startswith("in/") else (path or None)
     raw: dict = {"extractor": eval_result}
@@ -110,8 +124,8 @@ def parse(eval_result: dict, captured: list[dict] | None = None) -> Profile:
         or None,
         location=eval_result.get("location"),
         hometown=None,
-        education=orgs[1:2] or None,
-        work=orgs[0:1] or None,
+        education=(schools or [])[:1] or None if classified else orgs[1:2] or None,
+        work=(companies or [])[:1] or None if classified else orgs[0:1] or None,
         birthday=None,
         links=None,
         is_private=None,
