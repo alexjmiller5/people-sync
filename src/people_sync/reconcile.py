@@ -37,11 +37,13 @@ SOURCE = "google_contacts"
 # the Greek sigma does not survive round-trips through every client.
 CIRCLE_ALIASES = {"ΣAE": "SAE"}
 
-# Notion DBs holding a relation to a People page. `merge` never writes to Notion,
-# so it reports the loser's pages for a manual re-point instead. The user
-# supplies them as PEOPLE_SYNC_NOTION_RELATIONS, a JSON object of
-# {"<label>": ["<data_source_id>", "<relation property id>"]} - property IDs,
-# not names, so a rename in Notion cannot silently turn the check into a no-op.
+# Notion DBs whose one-way relation to People never shows on the People page.
+# `merge` never writes to Notion: it reads the loser page's own relations, queries
+# these DBs (plus People's own one-way self relations) and prints every anchor
+# for a manual re-point. The user supplies them as PEOPLE_SYNC_NOTION_RELATIONS,
+# a JSON object of {"<label>": ["<data_source_id>", "<relation property id>"]} -
+# property IDs, not names, so a rename in Notion cannot silently turn a query
+# into a no-op.
 RELATIONS_ENV = "PEOPLE_SYNC_NOTION_RELATIONS"
 
 
@@ -377,19 +379,76 @@ def link(person_id: str, record_id: str, rename: bool, ops: Ops, name: str | Non
 # --- merge --------------------------------------------------------------------
 
 
-def _notion_hits(data_source_id: str, prop: str, page_id: str, token: str) -> list[str]:
-    resp = httpx.post(
-        f"https://api.notion.com/v1/data_sources/{data_source_id}/query",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Notion-Version": "2026-03-11",
-            "Content-Type": "application/json",
-        },
-        json={"filter": {"property": prop, "relation": {"contains": page_id}}, "page_size": 100},
-        timeout=30,
-    )
+def _notion(token: str, path: str, body: dict | None = None, params: dict | None = None) -> dict:
+    """One read-only Notion call: GET, or POST for a data source query."""
+    url = f"https://api.notion.com/v1/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": "2026-03-11",
+        "Content-Type": "application/json",
+    }
+    if body is None:
+        resp = httpx.get(url, headers=headers, params=params, timeout=30)
+    else:
+        resp = httpx.post(url, headers=headers, json=body, timeout=30)
     resp.raise_for_status()
-    return [page.get("url", page.get("id", "")) for page in resp.json().get("results", [])]
+    return resp.json()
+
+
+def _all_results(fetch) -> list[dict]:
+    """Every result of a cursor-paged Notion list; `fetch(cursor_params)` gets one page."""
+    results, cursor = [], None
+    while True:
+        page = fetch({"start_cursor": cursor} if cursor else {})
+        results += page.get("results", [])
+        if not page.get("has_more"):
+            return results
+        cursor = page["next_cursor"]
+
+
+def _notion_hits(data_source_id: str, prop: str, page_id: str, token: str) -> list[dict]:
+    """Pages of one data source whose relation `prop` contains the page."""
+    query = {"filter": {"property": prop, "relation": {"contains": page_id}}, "page_size": 100}
+    return _all_results(
+        lambda cursor: _notion(token, f"data_sources/{data_source_id}/query", {**query, **cursor})
+    )
+
+
+def _own_relations(page_id: str, token: str) -> dict[str, list[str]]:
+    """The page's own non-empty relation properties: Father, Mother and the People
+    side of every two-way relation. A page object lists at most 25 entries per
+    relation (`has_more`), so a longer one is re-read from its property endpoint."""
+    out = {}
+    for name, prop in _notion(token, f"pages/{page_id}").get("properties", {}).items():
+        if prop.get("type") != "relation":
+            continue
+        ids = [r["id"] for r in prop.get("relation", [])]
+        if prop.get("has_more"):
+            ids = [
+                item["relation"]["id"]
+                for item in _all_results(
+                    lambda cursor: _notion(
+                        token, f"pages/{page_id}/properties/{prop['id']}", params=cursor
+                    )
+                )
+            ]
+        if ids:
+            out[name] = ids
+    return out
+
+
+def _one_way_self_relations(data_source_id: str, token: str) -> dict[str, tuple[str, str]]:
+    """People-to-People relations without a two-way twin (Partner): the target
+    page does not show them, so they are queried like a configured database."""
+    schema = _notion(token, f"data_sources/{data_source_id}")
+    return {
+        f"People {name}": (data_source_id, prop["id"])
+        for name, prop in schema.get("properties", {}).items()
+        if prop.get("type") == "relation"
+        and prop["relation"].get("type") == "single_property"
+        and prop["relation"].get("data_source_id", "").replace("-", "")
+        == data_source_id.replace("-", "")
+    }
 
 
 def _dashed(row_id: str) -> str:
@@ -401,36 +460,66 @@ def _dashed(row_id: str) -> str:
 
 
 def report_notion_relations(loser_id: str) -> None:
+    """Print every Notion relation still anchored on the loser page, then one line
+    saying whether that list is complete: a check that did not run, or failed
+    partway, must never read as "no relations"."""
+    people_ds = os.environ.get(notion_people.DATA_SOURCE_ENV)
+    configured = notion_relations()
+    if not people_ds and not configured:
+        print("NOTION RELATIONS NOT CHECKED: Notion is not configured")
+        return
     token = os.environ.get("NOTION_API_TOKEN")
     if not token:
-        log.warning(
-            "skipping notion relation check",
-            source="notion",
-            index=-1,
-            reason="NOTION_API_TOKEN is not set",
-        )
-        return
-    relations = notion_relations()
-    if not relations:
-        log.warning(
-            "skipping notion relation check",
-            source="notion",
-            index=-1,
-            reason=f"{RELATIONS_ENV} is not set",
-        )
+        print("NOTION RELATIONS INCOMPLETE: NOTION_API_TOKEN is not set - nothing was checked")
         return
     page_id = _dashed(loser_id)
-    for db, (data_source_id, prop) in relations.items():
-        # advisory only: one DB failing must not block the merge or the other DBs
+    gaps, seen = [], set()
+    if not configured:
+        gaps.append(f"{RELATIONS_ENV} is not set, one-way relations from other databases")
+
+    def show(related_id: str, line: str) -> None:
+        if related_id.replace("-", "") not in seen:
+            seen.add(related_id.replace("-", ""))
+            print(line)
+
+    try:
+        for name, ids in _own_relations(page_id, token).items():
+            for related in ids:
+                show(
+                    related,
+                    f"NOTION RELATION on the loser page: {name} -> {related} - re-point manually",
+                )
+    except httpx.HTTPError as e:
+        gaps.append(f"the loser page ({type(e).__name__})")
+    incoming = dict(configured)
+    if people_ds:
+        try:
+            incoming.update(_one_way_self_relations(people_ds, token))
+        except httpx.HTTPError as e:
+            gaps.append(f"the People schema ({type(e).__name__})")
+    for db, (data_source_id, prop) in incoming.items():
+        # one DB failing must not block the merge or the other DBs
         try:
             hits = _notion_hits(data_source_id, prop, page_id, token)
         except httpx.HTTPError as e:
-            log.warning("notion relation check failed", db=db, reason=type(e).__name__)
+            gaps.append(f"{db} ({type(e).__name__})")
             continue
-        for url in hits:
-            print(
-                f"NOTION RELATION on {db}: {url} still points at the loser page - re-point manually"
+        for hit in hits:
+            url = hit.get("url", hit.get("id", ""))
+            show(
+                hit.get("id", url),
+                f"NOTION RELATION on {db}: {url} still points at the loser page - re-point manually",
             )
+    if gaps:
+        print(
+            f"NOTION RELATIONS INCOMPLETE: {len(seen)} found, not checked: {'; '.join(gaps)}"
+            " - check the loser page by hand"
+        )
+    else:
+        print(
+            f"NOTION RELATIONS CHECKED: {len(seen)} to re-point "
+            f"(the loser page and {len(incoming)} one-way relations)"
+        )
 
 
 def merge(survivor_id: str, loser_id: str, ops: Ops) -> None:

@@ -64,6 +64,7 @@ uv run python -m people_sync <command>
 | `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (paced, without a daily cap by default) and writes `people_sync_profiles` rows + pictures |
 | `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |
 | `list partiful` | Clicks through every mutual on partiful.com/mutuals and writes a ledger record + profile row per person |
+| `list partiful-events [--since DATE] [--refresh] [--event-id ID ...]` | Walks the guest lists of past events the user went to or hosted, skipping events whose guest list is already retained (`--refresh` re-walks them), and prints each walked event with its guest and record counts |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
 

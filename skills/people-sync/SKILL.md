@@ -38,7 +38,8 @@ development. Soma is the estate it writes into (`soma-map` /
   person's `people.id` is their Notion People page id (dash-stripped) and
   `new-person` creates the stub page first, which keeps Notion relations
   resolvable. Without it, ids are minted locally in the same shape and
-  Notion is never contacted; `reconcile merge` then skips its relation check.
+  Notion is never contacted; `reconcile merge` then says its relation check
+  did not run.
 
 ## Configuration the operator supplies
 
@@ -48,7 +49,7 @@ Environment variables, all optional except where a command needs them:
 |---|---|---|
 | `SOMA_HUB_URL`, `SOMA_HUB_TOKEN` | captures, photos, scrape, list | the soma file service (scoped `files:*` grants for `profiles/`, `photos/records/`, `photos/people/`) |
 | `NOTION_API_TOKEN`, `PEOPLE_SYNC_NOTION_PEOPLE_DS` | `new-person` | the Notion connection and the People data-source id it creates stubs in |
-| `PEOPLE_SYNC_NOTION_RELATIONS` | `reconcile merge` | JSON `{"<label>": ["<data_source_id>", "<relation property id>"]}` of the DBs that relate to People; unset = the relation check is skipped with a warning |
+| `PEOPLE_SYNC_NOTION_RELATIONS` | `reconcile merge` | JSON `{"<label>": ["<data_source_id>", "<relation property id>"]}` of the DBs with a one-way relation to People (two-way ones show on the loser page itself); unset = the merge report says those were not checked |
 | `PEOPLE_SYNC_CDP_ENDPOINT` | login, scrape, list | `host:port` of a Chrome DevTools endpoint to attach to (a dedicated-profile Chrome, no approval prompt) |
 | `PEOPLE_SYNC_CDP_TARGET` | login, scrape, list | attach to one caller-owned tab and leave it open |
 | `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | attach on a real profile | a command that answers the browser's remote-debugging prompt |
@@ -162,8 +163,11 @@ never one message per record. Review actions:
   <loser>`, `create <record_id> --name ...`. Dry run by default, `--apply`
   to write. Lossless by construction: existing values are never overwritten
   (conflicts land in `notes`, a replaced name survives as `nickname`,
-  circles union, a merge re-points every child row and prints the loser's
-  Notion relations for a manual re-point).
+  circles union, a merge re-points every child row and prints every Notion
+  relation anchored on the loser page for a manual re-point). The merge
+  report ends with `NOTION RELATIONS CHECKED: N` only when every read
+  succeeded; `INCOMPLETE` names what was not checked - then read the loser
+  page by hand before retiring it.
 - **new person** when the estate has never had them:
   `people-sync new-person --name "<Full Name>"` (Notion stub, then the row).
 - **public** for a reviewed social account the user wants to keep outside personal
@@ -265,12 +269,22 @@ the user what moved.
 name only), `list partiful` (walks `/mutuals` profile by profile; matches a
 person only through an Instagram handle; built-in avatars are placeholders),
 `list strava` and `list spotify` (followers + following, totals checked),
-`list partiful-events [--event-id ID ...]` (the signed-in user's past events
-they went to or hosted; a guest list is click-walked so every guest resolves
-to a profile id, and a hosted event's "Manage Guests" list is read in one go
-with the ids it already carries; retained per event, and attendance lands on
-the Partiful records as `raw.events` with the capture key; `promote` turns it
-into `person_events` rows once a record is linked to a person). Pass the
+`list partiful-events [--since YYYY-MM-DD] [--refresh] [--event-id ID ...]`
+(the signed-in user's past events they went to or hosted; a guest list is
+click-walked so every guest resolves to a profile id, and a hosted event's
+"Manage Guests" list is read in one go with the ids it already carries;
+retained per event, and attendance lands on the Partiful records as
+`raw.events` with the capture key; `promote` turns it into `person_events`
+rows once a record is linked to a person). By default it walks only events
+whose guest list is not retained yet, so a periodic run is a sweep of new
+events; `--since` limits it to events on or after a date, `--refresh` re-walks
+retained ones, and an explicit `--event-id` is always walked. It prints
+`listed`, `already_retained`, and per walked event its `id`, `title`, `date`,
+`guests` and `records` (an `error` marks a hidden or failed guest list; one
+that failed mid-walk keeps what landed and can be re-walked by id). The
+unmatched guests of one event are
+`SELECT r.id, r.name, r.status FROM people_sync_records r, json_each(r.raw, '$.events') e WHERE r.source = 'partiful' AND json_extract(e.value, '$.id') = '<event id>' AND r.status = 'pending'`.
+Pass the
 chosen events to `propose --events` (`{record id: [titles]}`) so a lone
 Partiful mutual who was at one of them earns a box.
 `unfollow` (ignored accounts the user still follows, per platform with URLs; the
@@ -304,8 +318,11 @@ reverse does not hold (friends you never paid have no payment).
 **Promotion.** `people-sync promote` (dry run; `--apply`) copies scraped
 city / employer / birthday / picture onto matched people where the field is
 empty, each with an `evidence_of` provenance edge to the retained capture;
-conflicts are printed, never resolved automatically (a Partiful birthday
-month that disagrees with a known birthday is one). Address-book pictures
+conflicts are printed, never resolved automatically (a different current
+city or employer, or a Partiful birthday month that disagrees with a known
+birthday). A more or less specific form of a known value is not a conflict.
+`--platform` limits the plan; Partiful attendance is planned only when
+`partiful` is included. Address-book pictures
 come from their APIs (`photos store`). A matched Partiful profile also lists
 the person's own Instagram / Snapchat / LinkedIn (plus TikTok and Twitter,
 kept as links only while those are not platform values); the ones the person

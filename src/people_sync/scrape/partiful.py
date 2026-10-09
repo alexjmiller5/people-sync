@@ -15,6 +15,7 @@ import json
 import random
 import re
 import time
+from datetime import date, timedelta
 
 from people_sync import photos
 from people_sync.scrape import snapshot
@@ -436,6 +437,77 @@ def parse_event_when(text: str | None, year: int | None = None) -> str | None:
     month, day, hour, minute, ampm = m.groups()
     hour = int(hour) % 12 + (12 if ampm == "pm" else 0)
     return f"{year:04d}-{int(month):02d}-{int(day):02d}T{hour:02d}:{int(minute or 0):02d}"
+
+
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _event_date(text: str, bound: date, today: date) -> date | None:
+    weekday = next((i for i, w in enumerate(WEEKDAYS) if re.search(rf"\b{w}\b", text)), None)
+    m = re.search(r"(\d{1,2})/(\d{1,2}) at", text)
+    if m:
+        for year in range(bound.year, bound.year - 30, -1):
+            try:
+                day = date(year, int(m.group(1)), int(m.group(2)))
+            except ValueError:
+                continue
+            if day <= bound and (weekday is None or day.weekday() == weekday):
+                return day
+        return None
+    if text.startswith("Today"):
+        return today
+    if text.startswith("Yesterday"):
+        return today - timedelta(days=1)
+    if weekday is not None:  # "Last Tue": the latest such weekday before today
+        return today - timedelta(days=(today.weekday() - weekday - 1) % 7 + 1)
+    return None
+
+
+def event_dates(events: list[dict], today: date) -> list[date | None]:
+    """The events page shows no year ("Sat 9/5 at 8pm", "Last Tue at 6pm") but
+    lists past events newest first, so each m/d is the latest one on or before
+    the previous event whose weekday matches. None where the text gives no date."""
+    out, bound = [], today
+    for event in events:
+        day = _event_date(event.get("when") or "", bound, today)
+        bound = day or bound
+        out.append(day)
+    return out
+
+
+def retained_event_ids() -> set[str]:
+    """Events whose guest list was already retained: `ingest_guests` lands each
+    one on its guests' records (raw.events) with the capture it came from."""
+    from people_sync import somadata
+
+    rows = somadata.sql(
+        "SELECT DISTINCT json_extract(e.value, '$.id') AS id "
+        "FROM people_sync_records r, json_each(r.raw, '$.events') e "
+        "WHERE r.source = 'partiful' AND json_valid(r.raw) "
+        "AND json_extract(e.value, '$.capture_key') IS NOT NULL"
+    )
+    return {r["id"] for r in rows if r["id"]}
+
+
+def choose_events(events, retained, *, wanted=(), since=None, refresh=False, today=None):
+    """(events to walk, ids skipped as already retained). Default: went/hosted
+    events whose guest list is not retained yet; `wanted` ids are walked whatever
+    their status or retention; `since` drops events dated before it (an event
+    the list cannot date is kept)."""
+    chosen, already = [], []
+    for event, day in zip(events, event_dates(events, today or date.today())):
+        if wanted:
+            if event["id"] not in wanted:
+                continue
+        elif not (event.get("status") or "").upper().startswith(("WENT", "HOSTING")):
+            continue
+        if since and day and day < since:
+            continue
+        if not (refresh or wanted) and event["id"] in retained:
+            already.append(event["id"])
+            continue
+        chosen.append({**event, "date": day.isoformat() if day else None})
+    return chosen, already
 
 
 def harvest_events(browser):

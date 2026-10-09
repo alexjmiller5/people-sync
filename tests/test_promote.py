@@ -304,3 +304,48 @@ def test_account_suggestions_list_what_a_partiful_profile_adds():
             "status": None,
         },
     ]
+
+
+def test_plan_reports_a_job_that_differs_from_the_current_one_instead_of_adding_it():
+    ops = promote.plan(
+        [_profile(work=["OtherCo"])],
+        PEOPLE,
+        [],
+        [{"person_id": "p1", "company": "TestCo", "end": None}],
+        [],
+        set(),
+    )
+    conflicts = [(o.detail["field"], o.value) for o in ops if o.kind == "conflict"]
+    assert conflicts == [("company", "OtherCo")]
+    assert not [o for o in ops if o.kind == "employment"]
+
+
+@pytest.mark.parametrize(
+    ("scraped", "known"),
+    [
+        ("Testville, Michigan, United States", "testville michigan"),
+        ("Testville", "Testville, Michigan"),
+    ],
+)
+def test_plan_treats_a_more_or_less_specific_form_of_a_known_value_as_known(scraped, known):
+    ops = promote.plan(
+        [_profile(location=scraped, work=["TestCo Labs Inc"])],
+        PEOPLE,
+        [{"person_id": "p1", "city": known, "end": None}],
+        [{"person_id": "p1", "company": "TestCo Labs", "end": None}],
+        [],
+        set(),
+    )
+    assert [o.kind for o in ops if o.kind in ("location", "employment", "conflict")] == []
+
+
+def test_run_limited_to_other_platforms_plans_no_partiful_events(mocker):
+    rows = mocker.patch("people_sync.promote.load_event_rows", return_value=[])
+    mocker.patch(
+        "people_sync.promote.load_state", return_value=([_profile()], PEOPLE, [], [], [], set())
+    )
+    mocker.patch("people_sync.promote.somadata.sql", return_value=[])
+
+    promote.run(apply_writes=False, platforms=("linkedin",))
+
+    rows.assert_not_called()

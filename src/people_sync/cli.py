@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from datetime import date
 
 import structlog
 from pathlib import Path
@@ -309,17 +310,16 @@ def cmd_list(args: argparse.Namespace) -> None:
             from people_sync.scrape import partiful
 
             events, _ = partiful.harvest_events(browser)
-            wanted = set(args.event_id or [])
-            chosen = [
-                e
-                for e in events
-                if (e["id"] in wanted)
-                or (not wanted and (e.get("status") or "").upper().startswith(("WENT", "HOSTING")))
-            ]
-            counts = {"events": len(chosen), "guests": 0, "records": 0}
-            counts["skipped"] = 0
+            chosen, already = partiful.choose_events(
+                events,
+                set() if args.refresh else partiful.retained_event_ids(),
+                wanted=set(args.event_id or []),
+                since=args.since,
+                refresh=args.refresh,
+            )
+            result = {"listed": len(events), "already_retained": len(already), "events": []}
             for event in chosen:
-                walked = []
+                walked, error = [], None
                 try:
                     for item in partiful.harvest_event_guests(browser, event["id"]):
                         walked.append(item)
@@ -327,23 +327,31 @@ def cmd_list(args: argparse.Namespace) -> None:
                     # A hidden guest list (ticketed / public events) or a page that
                     # never rendered: record it and walk the next event. Guests
                     # walked before the failure are still ingested.
-                    counts["skipped"] += 1
+                    error = str(e)
                     log.warning(
-                        "event skipped", platform="partiful", index=event["id"], reason=str(e)
+                        "event skipped", platform="partiful", index=event["id"], reason=error
                     )
                 else:
                     log.info(
                         "event walked",
                         platform="partiful",
-                        index=counts["events"],
+                        index=len(result["events"]),
                         reason=event["id"],
                     )
-                counts["guests"] += len(walked)
+                records = []
                 if walked:
                     header = walked[0][0]
                     guests = [(guest, ref) for _, guest, ref in walked]
-                    counts["records"] += len(partiful.ingest_guests(header, event, guests))
-            print(json.dumps(counts))
+                    records = partiful.ingest_guests(header, event, guests)
+                row = {k: event.get(k) for k in ("id", "title", "date", "status")}
+                row.update(guests=len(walked), records=len(records))
+                if error:
+                    row["error"] = error
+                result["events"].append(row)
+            result["guests"] = sum(e["guests"] for e in result["events"])
+            result["records"] = sum(e["records"] for e in result["events"])
+            result["failed"] = sum(1 for e in result["events"] if "error" in e)
+            print(json.dumps(result))
             return
         else:
             from people_sync.scrape import partiful
@@ -511,7 +519,18 @@ def build_parser() -> argparse.ArgumentParser:
     list_p.add_argument(
         "--event-id",
         action="append",
-        help="partiful-events: only these event ids (default: every past event went/hosted)",
+        help="partiful-events: only these event ids, walked even if already retained "
+        "(default: every past event went/hosted whose guest list is not retained yet)",
+    )
+    list_p.add_argument(
+        "--refresh",
+        action="store_true",
+        help="partiful-events: walk already-retained guest lists again",
+    )
+    list_p.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        help="partiful-events: only events on or after this date (YYYY-MM-DD)",
     )
     list_p.add_argument("--start", type=int, default=0, help="partiful: first row index")
     list_p.add_argument("--max", type=int, default=None, help="partiful: rows to process")
