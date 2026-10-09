@@ -36,6 +36,10 @@ def _upload(key: str, data: bytes, content_type: str | None = None) -> None:
         headers["Content-Type"] = content_type
     resp = httpx.put(_url(key), headers=headers, content=data, timeout=60)
     resp.raise_for_status()
+    # The hub replies with the key it stored under; recording any other spelling
+    # leaves a reference that never resolves.
+    if resp.json().get("key") != key:
+        raise ValueError("hub stored the object under a different key")
 
 
 def put_object(key: str, data: bytes, content_type: str | None = None) -> None:

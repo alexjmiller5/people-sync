@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import json
+from urllib.parse import unquote, urlsplit
+
 import pytest
 
 import httpx
@@ -21,6 +23,11 @@ class _Resp:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise httpx.HTTPStatusError("error", request=None, response=self)
+
+
+def _hub_put(url, **kwargs):
+    """The hub decodes the request path exactly once and replies with the key it stored."""
+    return _Resp(json_data={"key": unquote(urlsplit(url).path.removeprefix("/v1/files/"))})
 
 
 def test_store_photo_dedupes_existing_sha(mocker):
@@ -45,7 +52,7 @@ def test_store_photo_uploads_new_sha(mocker, monkeypatch):
         "people_sync.photos.httpx.get",
         return_value=_Resp(json_data={"result": [{"id": "acct1"}]}),
     )
-    put = mocker.patch("people_sync.photos.httpx.put", return_value=_Resp())
+    put = mocker.patch("people_sync.photos.httpx.put", side_effect=_hub_put)
 
     image = b"image-bytes"
     sha8 = hashlib.sha256(image).hexdigest()[:8]
@@ -92,7 +99,7 @@ def test_store_photo_dedupe_is_scoped_per_person(mocker, monkeypatch):
         "people_sync.photos.httpx.get",
         return_value=_Resp(json_data={"result": [{"id": "acct1"}]}),
     )
-    put = mocker.patch("people_sync.photos.httpx.put", return_value=_Resp())
+    put = mocker.patch("people_sync.photos.httpx.put", side_effect=_hub_put)
 
     image = b"same-image-bytes"
 
@@ -189,7 +196,7 @@ def test_fetch_apple_photo_returns_none_on_vcard_fetch_failure(mocker):
 def test_object_api_uses_only_scoped_life_credential(mocker, monkeypatch):
     monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test/")
     monkeypatch.setenv("SOMA_HUB_TOKEN", "client-token")
-    put = mocker.patch("people_sync.photos.httpx.put", return_value=_Resp())
+    put = mocker.patch("people_sync.photos.httpx.put", side_effect=_hub_put)
     get = mocker.patch("people_sync.photos.httpx.get", return_value=_Resp(content=b"raw"))
     photos.put_object("profiles/source/a b.json", b"raw", "application/json")
     assert put.call_args.args[0] == "https://hub.test/v1/files/profiles/source/a%20b.json"
@@ -283,3 +290,32 @@ def test_scrape_caller_parses_only_after_verified_archive(
         with pytest.raises(photos.ArchiveError):
             run._collect_profile(browser, module, "spotify", 0, record)
         assert not parsed
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "photos/records/facebook/facebook_profile.php?id=123-abcd1234.jpg",
+        "profiles/spotify/spotify_name#1/2026-09-09T19:48:54.159Z.json",
+        "photos/records/linkedin/linkedin_m\u00e9lanie-abcd1234.jpg",
+        "profiles/source/a b+c.json",
+    ],
+)
+def test_upload_stores_under_the_exact_key(mocker, monkeypatch, key):
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "client-token")
+    put = mocker.patch("people_sync.photos.httpx.put", side_effect=_hub_put)
+    photos.put_object(key, b"raw")
+    assert _hub_put(put.call_args.args[0]).json()["key"] == key
+
+
+def test_upload_refuses_a_reply_naming_another_key(mocker, monkeypatch):
+    """A reference must name the object the hub stored, never a near-miss spelling."""
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "client-token")
+    mocker.patch(
+        "people_sync.photos.httpx.put",
+        return_value=_Resp(json_data={"key": "profiles/spotify/spotify_name"}, status_code=201),
+    )
+    with pytest.raises(ValueError):
+        photos.put_object("profiles/spotify/spotify_name#1/2026-09-09T19:48:54.159Z.json", b"raw")

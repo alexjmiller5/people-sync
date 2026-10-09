@@ -628,7 +628,9 @@ Soma owns person photos (`photos/people/`), record avatars
 approved shared-service contract: `photos.py` uses only `SOMA_HUB_URL` and
 a dedicated `SOMA_HUB_TOKEN`, with separate `files:read:<prefix>/` and
 `files:write:<prefix>/` grants for those three namespaces. Existing object
-keys and rows stay stable. No Cloudflare token or bucket config reaches
+keys and rows stay stable. Every upload compares the key in the hub's reply
+with the requested key and fails on any difference, so a recorded key always
+names the stored object. No Cloudflare token or bucket config reaches
 this client. Scrapes validate both settings before opening a source page.
 
 ## Notion credential boundary
