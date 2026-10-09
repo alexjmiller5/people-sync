@@ -380,7 +380,11 @@ def cmd_promote(args: argparse.Namespace) -> None:
 
     print(
         json.dumps(
-            promote.run(apply_writes=args.apply, platforms=args.platform or promote.PLATFORMS)
+            promote.run(
+                apply_writes=args.apply,
+                platforms=args.platform or promote.PLATFORMS,
+                kinds=args.kind,
+            )
         )
     )
 
@@ -546,6 +550,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply", action="store_true", help="write (default: print the plan only)"
     )
     promote_p.add_argument("--platform", action="append", help="limit to a platform (repeatable)")
+    promote_p.add_argument(
+        "--kind",
+        action="append",
+        choices=("location", "employment", "birthday", "birthday_month", "photo", "event"),
+        help="limit to a fact kind (repeatable); conflicts are always listed",
+    )
     promote_p.set_defaults(func=cmd_promote)
 
     for name, (target, help_text) in DELEGATES.items():

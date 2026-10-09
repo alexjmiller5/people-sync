@@ -349,3 +349,53 @@ def test_run_limited_to_other_platforms_plans_no_partiful_events(mocker):
     promote.run(apply_writes=False, platforms=("linkedin",))
 
     rows.assert_not_called()
+
+
+def test_plan_skips_a_location_that_only_names_a_country():
+    ops = promote.plan(
+        [
+            _profile(location="Testland"),
+            _profile(record_id="linkedin:r2", person_id="p2", location="A, B, Testland"),
+        ],
+        {**PEOPLE, "p2": {**PEOPLE["p1"], "id": "p2"}},
+        [{"person_id": "p1", "city": "Elsewhere", "end": None}],
+        [],
+        [],
+        set(),
+    )
+    assert [(o.person_id, o.value) for o in ops if o.kind in ("location", "conflict")] == [
+        ("p2", "A, B, Testland")
+    ]
+
+
+def _linkedin_run(mocker, eval_):
+    mocker.patch("people_sync.promote.load_event_rows", return_value=[])
+    profile = _profile(record_id="linkedin:r1", platform="linkedin", work=["TestCo"])
+    mocker.patch(
+        "people_sync.promote.load_state", return_value=([profile], PEOPLE, [], [], [], set())
+    )
+    mocker.patch("people_sync.promote.somadata.sql", return_value=[])
+    mocker.patch(
+        "people_sync.promote._read_capture",
+        return_value=json.dumps({"payload": {"eval": eval_}}).encode(),
+    )
+    return promote.run(apply_writes=False, platforms=("linkedin",))
+
+
+def test_a_linkedin_job_needs_a_capture_that_classified_it_as_a_company(mocker):
+    assert "employment" not in _linkedin_run(mocker, {"orgs": ["TestCo"]})["planned"]
+    assert _linkedin_run(mocker, {"companies": ["TestCo"]})["planned"]["employment"] == 1
+
+
+def test_run_limited_to_kinds_plans_and_applies_only_those(mocker):
+    mocker.patch("people_sync.promote.load_event_rows", return_value=[])
+    mocker.patch(
+        "people_sync.promote.load_state", return_value=([_profile()], PEOPLE, [], [], [], set())
+    )
+    mocker.patch("people_sync.promote.somadata.sql", return_value=[])
+    applied = mocker.patch("people_sync.promote.apply", return_value={"photo": 1})
+
+    summary = promote.run(apply_writes=True, kinds=("photo",))
+
+    assert summary["planned"] == {"photo": 1}
+    assert [o.kind for o in applied.call_args.args[0]] == ["photo"]

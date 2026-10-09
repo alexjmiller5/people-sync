@@ -78,6 +78,8 @@ SCHEMAS = {
             "text",
         ),
         "orgs": ["text"],
+        "companies": ["text"],
+        "schools": ["text"],
         "highlights": ["text"],
         "avatar": "url",
         "path": "path",
