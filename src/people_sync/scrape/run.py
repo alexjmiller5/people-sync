@@ -261,7 +261,7 @@ def _store_profile(browser, platform, index, record, profile, raw_key, avatar_ur
         record.get("avatar_sha256"),
     )
 
-    upsert_profile(profile, avatar_key, avatar_sha, raw_key)
+    upsert_profile(profile, avatar_key, avatar_sha, raw_key, restore=True)
 
 
 def scrape(

@@ -93,14 +93,19 @@ def upsert_profile(
     avatar_r2_key: str | None = None,
     avatar_sha256: str | None = None,
     raw_r2_key: str | None = None,
+    *,
+    restore: bool = False,
 ) -> None:
-    upsert_profiles([(p, avatar_r2_key, avatar_sha256, raw_r2_key)])
+    upsert_profiles([(p, avatar_r2_key, avatar_sha256, raw_r2_key)], restore=restore)
 
 
-def upsert_profiles(items) -> None:
+def upsert_profiles(items, *, restore: bool = False) -> None:
     """Batched: one SELECT, one UPDATE, one insert, one evidence round trip for
     every (Profile, avatar_r2_key, avatar_sha256, raw_r2_key). Tombstoned rows
-    are left alone; evidence points at the retained capture, never the row."""
+    are left alone unless `restore`: the table is a latest-profile cache, so a
+    fresh complete scrape capture brings its row back (earlier captures stay
+    reachable through provenance). Evidence points at the retained capture,
+    never the row."""
     now = somadata.now_iso()
     record_ids = [p.record_id for p, *_ in items]
     existing = {}
@@ -117,9 +122,11 @@ def upsert_profiles(items) -> None:
         row = _row(p, avatar_r2_key, avatar_sha256, raw_r2_key, now)
         prior = existing.get(p.record_id)
         if prior:
-            if prior.get("deleted_at"):
+            if prior.get("deleted_at") and not restore:
                 continue
             updates[p.record_id] = {col: _sql_value(val) for col, val in row.items()}
+            if restore:
+                updates[p.record_id]["deleted_at"] = "NULL"
         else:
             inserts.append({"id": p.record_id, "record_id": p.record_id, **row})
         evidence.append((prior["id"] if prior else p.record_id, raw_r2_key, ()))
