@@ -920,3 +920,33 @@ def test_a_lasting_or_refused_failure_stops_the_flush(stores, tmp_path, monkeypa
     )
     report = run("apple_messages", stores, tmp_path / "s2", refused)
     assert report["landed"] == 0 and waits == []  # a refusal is not retried
+
+
+def test_hub_aggregates_come_back_as_canonical_iso_times(monkeypatch):
+    rows = [
+        {
+            "participant_ref": REF_A,
+            "person_id": None,
+            "channel": "sms",
+            "kind": "message",
+            "direction": "inbound",
+            "outcome": None,
+            "n": 1,
+            "last_at": "2026-10-08 16:35:03.734",
+            "last_seconds": None,
+        },
+        {
+            "participant_ref": REF_B,
+            "person_id": None,
+            "channel": "phone",
+            "kind": "call",
+            "direction": "inbound",
+            "outcome": "answered",
+            "n": 2,
+            "last_at": "2026-10-08 16:35:03",
+            "last_seconds": 12.5,
+        },
+    ]
+    monkeypatch.setattr(comm.subprocess, "run", Recorder(stdout=json.dumps(rows)))
+    got = comm.hub_aggregates()
+    assert {r["last_at"] for r in got} == {"2026-10-08T16:35:03.734Z", "2026-10-08T16:35:03.000Z"}
