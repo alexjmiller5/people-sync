@@ -2,7 +2,7 @@
 
 Consolidates every source where you know people - Instagram, Facebook,
 Snapchat, LinkedIn, Google Contacts, Apple Contacts - into a single
-life-data people estate.
+soma people estate.
 
 There is no daemon, no cron, no scheduler: this is a CLI run ad hoc, roughly
 monthly. The deterministic half of a run lives here - parsing exports,
@@ -29,12 +29,12 @@ person in the loop.
 
 Runtime dependencies outside Python:
 
-- The `life` CLI - the only write path to the people estate.
+- The `soma` CLI - the only write path to the people estate.
 - The `gog` CLI - Google People API access for `ingest google` and Google
   photo fetches.
 - macOS with Contacts data for `ingest apple` (reads the local AddressBook
   SQLite copies read-only).
-- A life-data hub URL and a scoped file token for `photos store`.
+- A soma hub URL and a scoped file token for `photos store`.
 
 ## Commands
 
@@ -58,7 +58,7 @@ uv run python -m people_sync <command>
 | `replay --input <capture.json> [--compare <prev>] [--output <p>]` | Parses a retained capture offline into a proposal, with no network and no estate writes |
 | `match` | Auto-links unambiguous pending records to existing people and writes their `person_accounts` rows |
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
-| `new-person --name <name>` | Creates the life-data `people` row; with a Notion People data source configured, a Notion stub page comes first and its id becomes the row id |
+| `new-person --name <name>` | Creates the soma `people` row; with a Notion People data source configured, a Notion stub page comes first and its id becomes the row id |
 | `photos store --person <id> --platform <p> --file <path>` | Stores a profile photo in R2 and appends a `person_photos` row, deduped by sha256 |
 | `login <platform>` | Signs the browser's profile into a platform at human pace (TOTP / SMS / mailed codes via the wired commands); idempotent |
 | `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (paced, without a daily cap by default) and writes `people_sync_profiles` rows + pictures |
@@ -125,7 +125,7 @@ These cannot be codified:
 `.env.tpl` is the canonical manifest, holding 1Password `op://` references
 only and no plaintext:
 
-- `LIFE_HUB_URL` and `LIFE_HUB_TOKEN` - the life-data file service URL and
+- `SOMA_HUB_URL` and `SOMA_HUB_TOKEN` - the soma file service URL and
   a dedicated client token with read/write grants for `photos/people/`,
   `photos/records/`, and `profiles/`.
 - `NOTION_API_TOKEN` - dedicated Notion connection token for People stub insertion
@@ -137,7 +137,7 @@ Run anything that needs them through 1Password:
 op run --env-file=.env.tpl -- uv run python -m people_sync <command>
 ```
 
-Files are uploaded and read through `/v1/files/<key>`. Life Data owns the
+Files are uploaded and read through `/v1/files/<key>`. Soma owns the
 retained photos and source snapshots; this client never holds provider
 storage credentials. Existing `r2_key` values remain stable references.
 
@@ -308,7 +308,7 @@ independent follow flag and writes `raw.people_sync_relationship` with the
 operation, actor, absent state, approved digest and verification time. The
 default queue excludes that completed relationship. A subsequent source import
 can replace the observation with fresh source data.
-The CLI compares the current row before writing through `life`, preserves its
+The CLI compares the current row before writing through `soma`, preserves its
 profile URL and ignored status, and adds
 `evidence_of` provenance referencing the approved review batch. Lost storage
 replies can be repaired idempotently. Recovery preserves an acknowledged ledger
@@ -339,7 +339,7 @@ operators re-point relations and handle deletions.
 ### Keep public social accounts outside personal relationships
 
 Create or reuse an owner in `organizations`, `public_figures`, or
-`music_festivals` using your installed `life` CLI and catalog conventions.
+`music_festivals` using your installed `soma` CLI and catalog conventions.
 Then review and apply:
 
 ```sh
@@ -352,11 +352,11 @@ account catalog consists of `public_accounts(record_id, organization_id,
 public_figure_id, music_festival_id)` with exactly one owner. Account identity
 and cached profile details stay in the source ledger and profile table.
 The ledger needs the `public` status in its catalog. These are user-managed
-tables, created through Life Data, not repository configuration.
+tables, created through Soma, not repository configuration.
 
 Public accounts stay out of personal triage, matching, and unfollow suggestions,
 including after re-import. Rerun the same command after an interrupted write.
-It refuses reassignment and deleted rows; resolve those explicitly through Life
+It refuses reassignment and deleted rows; resolve those explicitly through Soma
 Data. Classification is a review decision, never inferred from follower counts.
 Employment is independent of organizations.
 
@@ -369,10 +369,10 @@ names at different ordinals stay separate. A scope row with a null entry ordinal
 preserves empty, failed and truncated acquisitions. Platform-specific values
 remain in the original file, with hashes and addresses in the index.
 
-Create this operator-owned table through Life Data before applying:
+Create this operator-owned table through Soma before applying:
 
 ```sh
-life table create people_sync_observations 'capture_key:text!' 'source:text!' \
+soma table create people_sync_observations 'capture_key:text!' 'source:text!' \
   'kind:select!(profile|export|list|contacts)' 'captured_at:datetime!' \
   'completeness:select!(complete|privacy-filtered|extracted-only|partial|legacy-parsed-only)' \
   'capture_sha256:text!' 'payload_sha256:text!' 'scope:text!' \
@@ -389,7 +389,7 @@ values come from the capture envelope, not a claim of platform-wide coverage.
 Run `people-sync observations` during an on-demand review; it reads the local
 capture cache without networking or writing. Use `--apply` to check each capture
 against the retained file service and write observations and `imported_from`
-provenance in batches. The usual Life CLI and file-service credentials apply.
+provenance in batches. The usual Soma CLI and file-service credentials apply.
 There is no scheduler and collectors do not automatically populate this index.
 Repeat apply after an interrupted run: existing observations are checked, missing
 edges repaired, and deleted rows held. Conflicting content is refused. Apply may

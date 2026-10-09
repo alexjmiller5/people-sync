@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Python CLI that consolidates contact sources (Instagram, Facebook, Snapchat,
-LinkedIn, Google Contacts, Apple Contacts) into the life-data people estate.
+LinkedIn, Google Contacts, Apple Contacts) into the soma people estate.
 No daemon, no cron: it is run ad hoc, roughly monthly, by an agent working
 through the `people-review` skill. That skill is the runbook (procedures,
 triage, sweeps); this file is how to work on the code.
@@ -21,13 +21,13 @@ product code never creates user tables or installs a schedule.
 src/people_sync/
   cli.py           argparse surface: ingest / match / queue / changes / new-person / scrape /
                    login / photos store
-  lifedata.py      the ONLY life-data write path (shells out to the `life` CLI)
+  somadata.py      the ONLY soma write path (shells out to the `soma` CLI)
   ledger.py        people_sync_records upserts, keyed <source>:<source_id>
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
   sources.py       google (via gog) and apple (local AddressBook sqlite) ingests
   match.py         conservative auto-linker
   changes.py       read-only report of changed values on matched records (history)
-  photos.py        Life Data profile-photo storage, sha256-deduped, plus per-platform fetchers
+  photos.py        Soma profile-photo storage, sha256-deduped, plus per-platform fetchers
   notion_people.py new person ids: a Notion stub page when configured, else local
   scrape/          CDP harness (cdp.py), human pacing (pace.py), the scrape loop
                    (run.py), per-platform extractors, and the login flow
@@ -324,21 +324,21 @@ rather than typing into the wrong field.
 **`people_sync_records` and `people_sync_profiles` are this project's own
 tables, not the `people` table.** The `people_sync_` prefix is the project
 name (People Sync): `people_sync_records` is the ingest/resolution ledger and
-`people_sync_profiles` the scraped-profile cache. `people` is the life-data
+`people_sync_profiles` the scraped-profile cache. `people` is the soma
 person table they resolve INTO, keyed by Notion page id. Never read one
 expecting the other, and note that `FROM people` is a prefix of
 `FROM people_sync_records` - match table names on a word boundary.
 
-**Every life-data write goes through `lifedata.py`, which shells out to the
-`life` CLI. Never open `life.db` with sqlite directly** - the hub's sync
+**Every soma write goes through `somadata.py`, which shells out to the
+`soma` CLI. Never open `life.db` with sqlite directly** - the hub's sync
 depends on the CLI's bookkeeping, and a raw write is invisible to it. Soft
 deletes only (`SET deleted_at = updated_at`); a hard delete is resurrected by
 the next sync.
 
-`lifedata.sq()` quotes every value interpolated into SQL. Use it; do not
+`somadata.sq()` quotes every value interpolated into SQL. Use it; do not
 f-string a raw value into a query.
 
-Every `life sql` write costs seconds (a read is instant), so estate writes
+Every `soma sql` write costs seconds (a read is instant), so estate writes
 are batched: `ledger.batch_update` turns a set of row updates into one
 `UPDATE ... CASE <key>` statement per 200 rows, `ledger.imported_from_many`
 checks and inserts evidence for a whole ingest in two round trips, and
@@ -381,14 +381,14 @@ adds circles such as `Through <person>`. Dry run is the default and prints every
 `--apply` executes.
 
 They are LOSSLESS by construction, which is the property to preserve when
-editing them: an existing life-data value is never overwritten. A conflicting
+editing them: an existing soma value is never overwritten. A conflicting
 Google name part is appended to `notes` (`google_last_name: ...`), a replaced
 name survives in `nickname` or as `aka: ...`, a conflicting birthday is printed
 as `CONFLICT birthday` and dropped, circles are only ever unioned, and a merge
 appends every conflicting loser scalar as `merged from ...`. Label and org
 strings become circles verbatim (`CIRCLE_ALIASES` holds the one exception).
 
-`merge` re-points every other cataloged life-data column that references people
+`merge` re-points every other cataloged soma column that references people
 (`catalog_properties.ref_table = 'people'`: quotes, gift recipients, split
 counterparties) before the loser is soft-deleted; estate rules refuse the delete
 while a live row still points at it. `merge` never writes to Notion. It queries the People-related Notion DBs
@@ -405,7 +405,7 @@ Scripts are importable by their bare module name (`pyproject`'s pytest
 `public_accounts.py` implements `reconcile public <record_id>` with exactly
 one of `--organization ID`, `--figure ID`, or `--festival ID`.
 Owners are existing live rows in `organizations`, `public_figures`, or
-`music_festivals`; users create them with the installed `life` CLI.
+`music_festivals`; users create them with the installed `soma` CLI.
 `public_accounts` has `record_id` and the three optional owner refs, exactly
 one populated. Read platform/handle/profile observations by joining the
 ledger/cache, never by maintaining another copy.
@@ -418,7 +418,7 @@ Matched records, conflicting owners and tombstones require explicit resolution.
 matching, personal triage and unfollow reports exclude them.
 Catalog rules enforce valid owners, uniqueness and separation from people;
 a check-only rule reports interrupted classifications. Schema is user state,
-created and cataloged through `life`, never installed from this repo.
+created and cataloged through `soma`, never installed from this repo.
 Organizations describe social identities, with optional `places.organization_id`
 for physical locations. Employment stays independent and has no organization ref.
 
@@ -460,7 +460,7 @@ completion. Instagram writes `i_follow=0`; friendship operations preserve that
 independent flag and write `raw.people_sync_relationship` (operation, absent
 state, actor, approved digest, verification time). The default queue omits the
 completed relationship, while a later import can replace that raw observation.
-These guarded writes go through lifedata, followed by idempotent
+These guarded writes go through somadata, followed by idempotent
 `evidence_of` provenance from the approved manual review batch. Ledger drift
 blocks that write; preserve ignored status and URLs. Journal `verified` means
 remote absence was observed but bookkeeping may need repair; `done` follows
@@ -476,7 +476,7 @@ a Google/Apple read whose payload says `complete`). Live rows missing from it
 come back as `absent` (count plus matched ids); their known follow flags drop
 to 0 and unknown ones stay null; `last_seen` keeps the last real sighting.
 An empty or partial read must never pass `complete`, or every row reads as
-gone. `changes.py` (`people-sync changes --since`) reads life-data's
+gone. `changes.py` (`people-sync changes --since`) reads soma's
 `history` for matched records and their profiles and lists value-to-value
 changes; first fills are excluded (they belong to `promote`) and so are raw
 bookkeeping keys (`RAW_NOISE`). It never writes.
@@ -484,7 +484,7 @@ bookkeeping keys (`RAW_NOISE`). It never writes.
 ## Venmo payment counterparties (`people-sync ingest venmo-payments`)
 
 `venmo_payments.py` reads payments from `txns_venmo` (written by the finance
-side, read here through `life sql`) and links each to `venmo:<user id>`.
+side, read here through `soma sql`) and links each to `venmo:<user id>`.
 Edge ids are `txn:venmo:<txn id>:people_sync_records:venmo:<user id>`, the
 shape the original one-off backfill used, so a run over existing data adds
 nothing. The owner's side is the one the feed labels `you`; anything else
@@ -549,7 +549,7 @@ commit messages. Concretely:
   contents. `log.warning("skipping malformed entry", source=..., index=i,
   reason=...)` is the shape; adding the name or handle leaks a person into the
   logs.
-- Emails, phone numbers, and addresses are NEVER copied into life-data. The
+- Emails, phone numbers, and addresses are NEVER copied into soma. The
   Apple query selects presence counts (`phone_count`, `email_count`), not
   values, and the Google raw dict keeps names, memberships, organizations,
   birthdays, and the photo url only. Both keep the platform's `source_id`, so
@@ -587,7 +587,7 @@ Tests first, always. `just test` (pytest), `just check` (ruff check + format
 check, read-only), `just fmt` (ruff format + fix). All three must be clean
 before a commit.
 
-External effects are mocked: `lifedata.sql` / `lifedata.insert`, `httpx`, and
+External effects are mocked: `somadata.sql` / `somadata.insert`, `httpx`, and
 `subprocess`-backed helpers (`sources._run`). Nothing in the suite touches the
 real estate, the network, or the address book. Mutation-test what you write:
 break the field mapping, confirm the test fails.
@@ -623,10 +623,10 @@ gitignored - it holds personal data and never gets committed.
 
 ## Retained file storage
 
-Life Data owns person photos (`photos/people/`), record avatars
+Soma owns person photos (`photos/people/`), record avatars
 (`photos/records/`) and retained source snapshots (`profiles/`). This is an
-approved shared-service contract: `photos.py` uses only `LIFE_HUB_URL` and
-a dedicated `LIFE_HUB_TOKEN`, with separate `files:read:<prefix>/` and
+approved shared-service contract: `photos.py` uses only `SOMA_HUB_URL` and
+a dedicated `SOMA_HUB_TOKEN`, with separate `files:read:<prefix>/` and
 `files:write:<prefix>/` grants for those three namespaces. Existing object
 keys and rows stay stable. No Cloudflare token or bucket config reaches
 this client. Scrapes validate both settings before opening a source page.

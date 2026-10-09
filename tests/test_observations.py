@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from people_sync import captures, cli, lifedata, photos
+from people_sync import captures, cli, somadata, photos
 
 
 def export_capture(tmp_path):
@@ -30,8 +30,8 @@ def test_cli_preview_is_read_only_and_keeps_duplicate_source_entries(tmp_path, m
     def forbidden(*args, **kwargs):
         raise AssertionError("preview touched a service")
 
-    monkeypatch.setattr(lifedata, "sql", forbidden)
-    monkeypatch.setattr(lifedata, "insert", forbidden)
+    monkeypatch.setattr(somadata, "sql", forbidden)
+    monkeypatch.setattr(somadata, "insert", forbidden)
     monkeypatch.setattr(photos, "get_object", forbidden)
     args = cli.build_parser().parse_args(["observations", "--input", str(path)])
     args.func(args)
@@ -159,8 +159,8 @@ def estate(monkeypatch):
                 [row[k] for k in keys],
             )
 
-    monkeypatch.setattr(lifedata, "sql", sql)
-    monkeypatch.setattr(lifedata, "insert", insert)
+    monkeypatch.setattr(somadata, "sql", sql)
+    monkeypatch.setattr(somadata, "insert", insert)
     return db
 
 
@@ -306,7 +306,7 @@ def test_writes_are_batched_and_capture_identity_conflict_precedes_writes(
     path.write_text(json.dumps({"friends_v2": [{"name": "Example"}] * (ledger.CHUNK + 1)}))
     c = captures.capture_export("facebook", path)
     remote(monkeypatch, [c])
-    insert = lifedata.insert
+    insert = somadata.insert
     sizes = []
 
     def record(table, rows):
@@ -314,7 +314,7 @@ def test_writes_are_batched_and_capture_identity_conflict_precedes_writes(
             sizes.append(len(rows))
         insert(table, rows)
 
-    monkeypatch.setattr(lifedata, "insert", record)
+    monkeypatch.setattr(somadata, "insert", record)
     assert observations.index([c], apply=True)["inserted"] == ledger.CHUNK + 2
     assert sizes == [ledger.CHUNK, 2]
     altered = copy.deepcopy(c)

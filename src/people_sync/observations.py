@@ -4,7 +4,7 @@ import base64
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
-from people_sync import captures, ledger, lifedata, photos, replay
+from people_sync import captures, ledger, somadata, photos, replay
 
 TABLE = "people_sync_observations"
 COLUMNS = (
@@ -81,7 +81,7 @@ def _verified(item):
 
 
 def index(inputs: list[dict], *, apply: bool = False) -> dict:
-    """Preview offline; apply only remote-verified captures, in batched Life writes."""
+    """Preview offline; apply only remote-verified captures, in batched Soma writes."""
     planned = {}
     for c in inputs:
         rows = plan(c)
@@ -113,11 +113,11 @@ def index(inputs: list[dict], *, apply: bool = False) -> dict:
             )
     existing = {}
     for start in range(0, len(rows), ledger.CHUNK):
-        ids = ",".join(lifedata.sq(r["id"]) for r in rows[start : start + ledger.CHUNK])
+        ids = ",".join(somadata.sq(r["id"]) for r in rows[start : start + ledger.CHUNK])
         existing.update(
             {
                 r["id"]: r
-                for r in lifedata.sql(
+                for r in somadata.sql(
                     f"SELECT {','.join(COLUMNS)},deleted_at FROM {TABLE} WHERE id IN ({ids})"
                 )
             }
@@ -136,7 +136,7 @@ def index(inputs: list[dict], *, apply: bool = False) -> dict:
         else:
             missing.append(row)
     for start in range(0, len(missing), ledger.CHUNK):
-        lifedata.insert(TABLE, missing[start : start + ledger.CHUNK])
+        somadata.insert(TABLE, missing[start : start + ledger.CHUNK])
     ledger.imported_from_many(TABLE, [(r["id"], r["capture_key"], ()) for r in live])
     result["inserted"] = len(missing)
     return result

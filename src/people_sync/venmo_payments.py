@@ -1,4 +1,4 @@
-"""Venmo payment counterparties. Every person-to-person payment in life-data's
+"""Venmo payment counterparties. Every person-to-person payment in soma's
 `txns_venmo` points at its counterparty's ledger record (`venmo:<user id>`)
 through one `provenance` edge: `imported_from` on the payment that first
 brought the counterparty in (which also creates the pending record), then
@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from people_sync import lifedata
+from people_sync import somadata
 from people_sync.ledger import CHUNK, Record
 
 PAYMENTS = (
@@ -91,16 +91,16 @@ def plan(txns: list[dict], records: set[str], edges: set[str]):
 def run() -> dict:
     from people_sync import ledger
 
-    txns = lifedata.sql(PAYMENTS)
+    txns = somadata.sql(PAYMENTS)
     records = {
         r["id"]
-        for r in lifedata.sql(
+        for r in somadata.sql(
             "SELECT id FROM people_sync_records WHERE source = 'venmo' AND deleted_at IS NULL"
         )
     }
     edges = {
         e["id"]
-        for e in lifedata.sql(
+        for e in somadata.sql(
             "SELECT id FROM provenance WHERE from_kind = 'txn' AND to_kind = 'people_sync_records'"
         )
     }
@@ -108,7 +108,7 @@ def run() -> dict:
     if new:
         ledger.upsert(new)
     for start in range(0, len(missing), CHUNK):
-        lifedata.insert("provenance", missing[start : start + CHUNK])
+        somadata.insert("provenance", missing[start : start + CHUNK])
     return {
         "payments": len(txns),
         "new_records": len(new),

@@ -1,4 +1,4 @@
-"""Thin wrapper around the life CLI - the only write path to life-data."""
+"""Thin wrapper around the soma CLI - the only write path to soma."""
 
 import json
 import random
@@ -25,14 +25,14 @@ def _run(cmd: list[str], input: str | None = None) -> str:
 
 
 def sql(query: str) -> list[dict]:
-    out = _run(["life", "sql", query]).strip()
+    out = _run(["soma", "sql", query]).strip()
     return json.loads(out) if out else []
 
 
 def insert(table: str, rows: list[dict]) -> None:
     if not rows:
         return
-    _run(["life", "insert", table], input=json.dumps(rows))
+    _run(["soma", "insert", table], input=json.dumps(rows))
 
 
 def sq(value: str | None) -> str:

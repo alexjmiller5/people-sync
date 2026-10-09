@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import structlog
 
-from people_sync import lifedata
+from people_sync import somadata
 
 log = structlog.get_logger(__name__)
 
@@ -61,7 +61,7 @@ def _url_from_raw(source: str, raw: dict) -> str | None:
 def _instagram_owners() -> dict[str, set[str]]:
     """Instagram handle (letters) -> people who hold that account."""
     owners: dict[str, set[str]] = defaultdict(set)
-    for a in lifedata.sql(
+    for a in somadata.sql(
         "SELECT person_id, handle FROM person_accounts "
         "WHERE deleted_at IS NULL AND platform = 'instagram' AND handle IS NOT NULL"
     ):
@@ -81,10 +81,10 @@ def _partiful_candidates(record: dict, ig_owner: dict[str, set[str]]) -> set[str
 
 
 def run_match() -> dict:
-    people = lifedata.sql(
+    people = somadata.sql(
         "SELECT id, name, first_name, last_name, nickname FROM people WHERE deleted_at IS NULL"
     )
-    pending = lifedata.sql(
+    pending = somadata.sql(
         "SELECT id, source, source_id, handle, name, raw FROM people_sync_records "
         "WHERE status = 'pending'"
     )
@@ -135,16 +135,16 @@ def run_match() -> dict:
         person = people_by_id[person_id]
         word_count = len(normalize(person.get("name") or "").split())
         if word_count < 2 and record["source"] != "partiful":
-            lifedata.sql(
-                f"UPDATE people_sync_records SET suggested_person_id = {lifedata.sq(person_id)} "
-                f"WHERE id = {lifedata.sq(record['id'])}"
+            somadata.sql(
+                f"UPDATE people_sync_records SET suggested_person_id = {somadata.sq(person_id)} "
+                f"WHERE id = {somadata.sq(record['id'])}"
             )
             suggested += 1
             continue
 
-        lifedata.sql(
+        somadata.sql(
             "UPDATE people_sync_records SET status = 'matched', "
-            f"person_id = {lifedata.sq(person_id)} WHERE id = {lifedata.sq(record['id'])}"
+            f"person_id = {somadata.sq(person_id)} WHERE id = {somadata.sq(record['id'])}"
         )
         auto += 1
 
@@ -169,6 +169,6 @@ def run_match() -> dict:
         )
 
     if account_rows:
-        lifedata.insert("person_accounts", account_rows)
+        somadata.insert("person_accounts", account_rows)
 
     return {"auto": auto, "suggested": suggested, "left_pending": len(pending) - auto - suggested}

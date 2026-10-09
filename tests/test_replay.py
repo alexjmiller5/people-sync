@@ -14,7 +14,7 @@ import pytest
 def offline(monkeypatch):
     import httpx
     import subprocess
-    from people_sync import photos, lifedata, ledger, notion_people
+    from people_sync import photos, somadata, ledger, notion_people
     from people_sync.scrape.cdp import Browser
 
     def forbidden(*args, **kwargs):
@@ -26,8 +26,8 @@ def offline(monkeypatch):
         (photos, "get_object"),
         (photos, "put_object"),
         (photos, "fetch_url_photo"),
-        (lifedata, "sql"),
-        (lifedata, "insert"),
+        (somadata, "sql"),
+        (somadata, "insert"),
         (ledger, "upsert"),
         (notion_people, "create_stub"),
         (Browser, "connect"),
@@ -36,14 +36,14 @@ def offline(monkeypatch):
 
 
 def test_replay_is_offline_and_deterministic(monkeypatch):
-    from people_sync import captures, replay, photos, lifedata
+    from people_sync import captures, replay, photos, somadata
 
     def forbidden(*args, **kwargs):
         raise AssertionError("offline replay attempted an external operation")
 
     monkeypatch.setattr(photos, "get_object", forbidden)
     monkeypatch.setattr(photos, "fetch_url_photo", forbidden)
-    monkeypatch.setattr(lifedata, "sql", forbidden)
+    monkeypatch.setattr(somadata, "sql", forbidden)
     c = captures.build_capture(
         "spotify",
         "profile",

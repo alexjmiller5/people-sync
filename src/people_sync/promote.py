@@ -1,7 +1,7 @@
 """Promote scraped profile facts onto the person they were matched to.
 
 A profile row is a cache; a fact becomes estate data only here, and only
-with a provenance edge (life-map: no edge, no write). Conservative by
+with a provenance edge (soma-map: no edge, no write). Conservative by
 construction: fills empty values and adds rows, never overwrites or
 closes anything - a conflict (a different birthday, a different current
 city) is reported for triage, not resolved.
@@ -27,7 +27,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from people_sync import lifedata
+from people_sync import somadata
 from people_sync.ledger import capture_edge_id
 
 FROM_KIND = "people_sync_profiles"
@@ -261,20 +261,20 @@ def account_suggestions(
 
 
 def load_account_state() -> tuple[list[dict], list[dict], dict[str, str]]:
-    profiles = lifedata.sql(
+    profiles = somadata.sql(
         "SELECT p.record_id, p.links, r.person_id FROM people_sync_profiles p "
         "JOIN people_sync_records r ON r.id = p.record_id "
         "WHERE p.platform = 'partiful' AND p.links IS NOT NULL AND p.deleted_at IS NULL "
         "AND r.deleted_at IS NULL AND r.status = 'matched' AND r.person_id IS NOT NULL"
     )
-    accounts = lifedata.sql(
+    accounts = somadata.sql(
         "SELECT person_id, platform, handle FROM person_accounts WHERE deleted_at IS NULL"
     )
     statuses = {
         r["id"]: r["status"]
-        for r in lifedata.sql(
+        for r in somadata.sql(
             "SELECT id, status FROM people_sync_records WHERE deleted_at IS NULL "
-            f"AND source IN ({', '.join(lifedata.sq(k) for k in LISTED_ACCOUNTS)})"
+            f"AND source IN ({', '.join(somadata.sq(k) for k in LISTED_ACCOUNTS)})"
         )
     }
     return profiles, accounts, statuses
@@ -282,14 +282,14 @@ def load_account_state() -> tuple[list[dict], list[dict], dict[str, str]]:
 
 def load_event_rows() -> list[dict]:
     """Matched Partiful records with attendance, minus events already promoted."""
-    rows = lifedata.sql(
+    rows = somadata.sql(
         "SELECT r.id AS record_id, r.person_id, r.raw FROM people_sync_records r "
         "WHERE r.source = 'partiful' AND r.status = 'matched' AND r.person_id IS NOT NULL "
         "AND r.deleted_at IS NULL"
     )
     existing = {
         (e["person_id"], e["event_id"])
-        for e in lifedata.sql(
+        for e in somadata.sql(
             "SELECT person_id, event_id FROM person_events WHERE platform = 'partiful'"
         )
     }
@@ -333,8 +333,8 @@ def event_ops(rows: list[dict], edges: set[str]) -> list[Op]:
 def load_state(
     platforms=PLATFORMS,
 ) -> tuple[list[dict], dict[str, dict], list[dict], list[dict], list[dict], set[str]]:
-    plats = ", ".join(lifedata.sq(p) for p in platforms)
-    profiles = lifedata.sql(
+    plats = ", ".join(somadata.sq(p) for p in platforms)
+    profiles = somadata.sql(
         "SELECT p.record_id, p.platform, p.location, p.work, p.birthday, p.avatar_r2_key, p.avatar_sha256, p.scraped_at, p.raw_r2_key, "
         "r.person_id FROM people_sync_profiles p JOIN people_sync_records r ON r.id = p.record_id "
         f"WHERE p.deleted_at IS NULL AND r.deleted_at IS NULL AND r.status = 'matched' AND r.person_id IS NOT NULL AND p.platform IN ({plats})"
@@ -347,21 +347,21 @@ def load_state(
                 p["work"] = None
     people = {
         r["id"]: r
-        for r in lifedata.sql(
+        for r in somadata.sql(
             "SELECT id, name, birthday, slightly_known_birthday FROM people WHERE deleted_at IS NULL"
         )
     }
-    locations = lifedata.sql(
+    locations = somadata.sql(
         "SELECT person_id, city, end FROM person_locations WHERE deleted_at IS NULL"
     )
-    employments = lifedata.sql(
+    employments = somadata.sql(
         "SELECT person_id, company, end FROM person_employments WHERE deleted_at IS NULL"
     )
-    photos = lifedata.sql("SELECT person_id, sha256 FROM person_photos WHERE deleted_at IS NULL")
+    photos = somadata.sql("SELECT person_id, sha256 FROM person_photos WHERE deleted_at IS NULL")
     edges = {
         e["id"]
-        for e in lifedata.sql(
-            f"SELECT id FROM provenance WHERE from_kind IN ({lifedata.sq(FROM_KIND)}, 'takeout')"
+        for e in somadata.sql(
+            f"SELECT id FROM provenance WHERE from_kind IN ({somadata.sq(FROM_KIND)}, 'takeout')"
         )
     }
     return profiles, people, locations, employments, photos, edges
@@ -398,7 +398,7 @@ def apply(ops: list[Op]) -> dict:
             continue
         if op.kind == "location":
             row_id = f"loc:{op.person_id}:{op.record_id}"
-            lifedata.insert(
+            somadata.insert(
                 "person_locations",
                 [
                     {
@@ -416,7 +416,7 @@ def apply(ops: list[Op]) -> dict:
             edges.append(_edge(op, "person_locations", row_id, "city", True))
         elif op.kind == "employment":
             row_id = f"emp:{op.person_id}:{op.record_id}"
-            lifedata.insert(
+            somadata.insert(
                 "person_employments",
                 [
                     {
@@ -433,18 +433,18 @@ def apply(ops: list[Op]) -> dict:
             )
             edges.append(_edge(op, "person_employments", row_id, "company", True))
         elif op.kind == "birthday":
-            lifedata.sql(
-                f"UPDATE people SET birthday = {lifedata.sq(op.value)} WHERE id = {lifedata.sq(op.person_id)}"
+            somadata.sql(
+                f"UPDATE people SET birthday = {somadata.sq(op.value)} WHERE id = {somadata.sq(op.person_id)}"
             )
             edges.append(_edge(op, "people", op.person_id, "birthday", False))
         elif op.kind == "birthday_month":
-            lifedata.sql(
-                f"UPDATE people SET slightly_known_birthday = {lifedata.sq(op.value)} WHERE id = {lifedata.sq(op.person_id)}"
+            somadata.sql(
+                f"UPDATE people SET slightly_known_birthday = {somadata.sq(op.value)} WHERE id = {somadata.sq(op.person_id)}"
             )
             edges.append(_edge(op, "people", op.person_id, "slightly_known_birthday", False))
         elif op.kind == "event":
             row_id = f"partiful:{op.value}:{op.person_id}"
-            lifedata.insert(
+            somadata.insert(
                 "person_events",
                 [
                     {
@@ -462,7 +462,7 @@ def apply(ops: list[Op]) -> dict:
             edges.append(_edge(op, "person_events", row_id, None, True))
         elif op.kind == "photo":
             row_id = f"photo:{op.person_id}:{op.record_id}"
-            lifedata.insert(
+            somadata.insert(
                 "person_photos",
                 [
                     {
@@ -471,7 +471,7 @@ def apply(ops: list[Op]) -> dict:
                         "platform": op.platform,
                         "r2_key": op.value,
                         "sha256": op.detail.get("sha256"),
-                        "fetched_at": op.detail.get("fetched_at") or lifedata.now_iso(),
+                        "fetched_at": op.detail.get("fetched_at") or somadata.now_iso(),
                         "notes": None,
                     }
                 ],
@@ -479,7 +479,7 @@ def apply(ops: list[Op]) -> dict:
             edges.append(_edge(op, "person_photos", row_id, "r2_key", True))
         counts[op.kind] = counts.get(op.kind, 0) + 1
     if edges:
-        lifedata.insert("provenance", edges)
+        somadata.insert("provenance", edges)
     return counts
 
 

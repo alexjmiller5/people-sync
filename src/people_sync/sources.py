@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import structlog
 
-from people_sync import captures, lifedata
+from people_sync import captures, somadata
 from people_sync.ledger import Record
 
 log = structlog.get_logger(__name__)
@@ -492,7 +492,7 @@ def google_contact_ids() -> dict[str, str]:
         return found
 
     out = {}
-    for row in lifedata.sql(
+    for row in somadata.sql(
         "SELECT id, raw FROM people_sync_records WHERE source = 'google_contacts' AND deleted_at IS NULL"
     ):
         try:

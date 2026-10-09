@@ -11,9 +11,9 @@ from people_sync.scrape import facebook, partiful, spotify, strava
 
 @pytest.fixture(autouse=True)
 def no_estate(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
+    mocker.patch("people_sync.somadata.sql", return_value=[])
     mocker.patch(
-        "people_sync.lifedata.insert", side_effect=AssertionError("unexpected estate write")
+        "people_sync.somadata.insert", side_effect=AssertionError("unexpected estate write")
     )
 
 
@@ -202,8 +202,8 @@ def test_list_replay_is_explicitly_unsupported_and_privacy_revalidated(retained)
 def test_facebook_file_config_required_before_browser(mocker, monkeypatch):
     from people_sync import cli
 
-    monkeypatch.delenv("LIFE_HUB_URL", raising=False)
-    monkeypatch.delenv("LIFE_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("SOMA_HUB_URL", raising=False)
+    monkeypatch.delenv("SOMA_HUB_TOKEN", raising=False)
     connect = mocker.patch("people_sync.scrape.cdp.Browser.connect")
     with pytest.raises(SystemExit):
         cli.main(["list", "facebook"])
@@ -459,8 +459,8 @@ def test_partiful_decisions_remain_untouched_with_capture_refs(retained, mocker)
     from tests.test_scrape_partiful import FakeBrowser
 
     entry = next(partiful.harvest(FakeBrowser(), limit=1))[2]
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "partiful:uid0"}])
-    inserted = mocker.patch("people_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[{"id": "partiful:uid0"}])
+    inserted = mocker.patch("people_sync.somadata.insert")
     mocker.patch("people_sync.scrape.profile.upsert_profile")
     partiful.ingest_entry(entry)
     update = next(c.args[0] for c in sql.call_args_list if c.args[0].startswith("UPDATE"))

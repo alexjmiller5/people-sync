@@ -41,7 +41,7 @@ def _rows():
 
 
 def test_pending_keeps_only_followed_accounts_on_follow_platforms(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=_rows())
+    sql = mocker.patch("people_sync.somadata.sql", return_value=_rows())
     rows = unfollow.pending()
     assert [r["id"] for r in rows] == ["instagram:a", "linkedin:c"]
     assert rows[0]["url"] == "https://www.instagram.com/a/"
@@ -49,7 +49,7 @@ def test_pending_keeps_only_followed_accounts_on_follow_platforms(mocker):
 
 
 def test_cli_lists_by_platform_and_as_json(mocker, capsys):
-    mocker.patch("people_sync.lifedata.sql", return_value=_rows())
+    mocker.patch("people_sync.somadata.sql", return_value=_rows())
     cli.main(["unfollow"])
     out = capsys.readouterr().out
     assert "instagram" in out and "https://www.instagram.com/a/" in out and "instagram:b" not in out

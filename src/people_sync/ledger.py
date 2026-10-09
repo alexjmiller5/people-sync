@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from people_sync import lifedata
+from people_sync import somadata
 
 log = structlog.get_logger(__name__)
 
@@ -39,11 +39,11 @@ def capture_edge_id(key: str, table: str, row_id: str, rel: str, field: str | No
     return "takeout:" + hashlib.sha256(identity.encode()).hexdigest()
 
 
-CHUNK = 200  # rows per statement: keeps one `life sql` argument well under the OS limit
+CHUNK = 200  # rows per statement: keeps one `soma sql` argument well under the OS limit
 
 
 def batch_update(table: str, key_col: str, rows: dict[str, dict]) -> None:
-    """One UPDATE per chunk of rows (each `life sql` write costs seconds, so per-row
+    """One UPDATE per chunk of rows (each `soma sql` write costs seconds, so per-row
     statements dominate a large ingest). `rows` maps key -> {column: sql-literal}."""
     keys = list(rows)
     for start in range(0, len(keys), CHUNK):
@@ -51,11 +51,11 @@ def batch_update(table: str, key_col: str, rows: dict[str, dict]) -> None:
         columns = list(rows[chunk[0]])
         sets = []
         for col in columns:
-            whens = " ".join(f"WHEN {lifedata.sq(k)} THEN {rows[k][col]}" for k in chunk)
+            whens = " ".join(f"WHEN {somadata.sq(k)} THEN {rows[k][col]}" for k in chunk)
             sets.append(f"{col} = CASE {key_col} {whens} END")
-        lifedata.sql(
+        somadata.sql(
             f"UPDATE {table} SET {', '.join(sets)} "
-            f"WHERE {key_col} IN ({','.join(lifedata.sq(k) for k in chunk)})"
+            f"WHERE {key_col} IN ({','.join(somadata.sq(k) for k in chunk)})"
         )
 
 
@@ -90,13 +90,13 @@ def imported_from_many(table: str, items) -> None:
     existing = set()
     ids = list(rows)
     for start in range(0, len(ids), CHUNK):
-        chunk = ",".join(lifedata.sq(i) for i in ids[start : start + CHUNK])
+        chunk = ",".join(somadata.sq(i) for i in ids[start : start + CHUNK])
         existing |= {
-            r["id"] for r in lifedata.sql(f"SELECT id FROM provenance WHERE id IN ({chunk})")
+            r["id"] for r in somadata.sql(f"SELECT id FROM provenance WHERE id IN ({chunk})")
         }
     missing = [row for edge_id, row in rows.items() if edge_id not in existing]
     if missing:
-        lifedata.insert("provenance", missing)
+        somadata.insert("provenance", missing)
 
 
 def upsert(records: list[Record], complete: bool = False) -> dict:
@@ -119,14 +119,14 @@ def upsert(records: list[Record], complete: bool = False) -> dict:
         )
     observations = records
     records = deduped
-    ids = ",".join(lifedata.sq(r.row_id) for r in records)
+    ids = ",".join(somadata.sq(r.row_id) for r in records)
     existing = {
         row["id"]: row
-        for row in lifedata.sql(
+        for row in somadata.sql(
             f"SELECT id, deleted_at FROM people_sync_records WHERE id IN ({ids})"
         )
     }
-    now = lifedata.now_iso()
+    now = somadata.now_iso()
     new_rows = []
     updates: dict[str, dict] = {}
     held = []
@@ -144,12 +144,12 @@ def upsert(records: list[Record], complete: bool = False) -> dict:
                 )
                 continue
             updates[r.row_id] = {
-                "handle": lifedata.sq(r.handle),
-                "name": lifedata.sq(r.name),
-                "raw": lifedata.sq(json.dumps(r.raw)),
+                "handle": somadata.sq(r.handle),
+                "name": somadata.sq(r.name),
+                "raw": somadata.sq(json.dumps(r.raw)),
                 "follows_me": _int_sql(r.follows_me),
                 "i_follow": _int_sql(r.i_follow),
-                "last_seen": lifedata.sq(now),
+                "last_seen": somadata.sq(now),
             }
         else:
             new_rows.append(
@@ -172,7 +172,7 @@ def upsert(records: list[Record], complete: bool = False) -> dict:
     if updates:
         batch_update("people_sync_records", "id", updates)
     if new_rows:
-        lifedata.insert("people_sync_records", new_rows)
+        somadata.insert("people_sync_records", new_rows)
     held_ids = {row["record_id"] for row in held}
     imported_from_many(
         "people_sync_records",
@@ -194,9 +194,9 @@ def _absent(source: str, present: set[str]) -> dict:
     the last time the row was actually seen. Matched rows are listed for review."""
     rows = [
         r
-        for r in lifedata.sql(
+        for r in somadata.sql(
             "SELECT id, status, person_id, follows_me, i_follow FROM people_sync_records "
-            f"WHERE source = {lifedata.sq(source)} AND deleted_at IS NULL"
+            f"WHERE source = {somadata.sq(source)} AND deleted_at IS NULL"
         )
         if r["id"] not in present
     ]

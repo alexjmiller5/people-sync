@@ -11,7 +11,7 @@ import sys
 import structlog
 from pathlib import Path
 
-from people_sync import ledger, lifedata, match, notion_people, photos, sources
+from people_sync import ledger, somadata, match, notion_people, photos, sources
 from people_sync import (
     captures,
     changes,
@@ -190,7 +190,7 @@ def cmd_match(args: argparse.Namespace) -> None:
 
 
 def cmd_queue(args: argparse.Namespace) -> None:
-    print(json.dumps(lifedata.sql(QUEUE_QUERY)))
+    print(json.dumps(somadata.sql(QUEUE_QUERY)))
 
 
 def cmd_new_person(args: argparse.Namespace) -> None:
@@ -199,11 +199,11 @@ def cmd_new_person(args: argparse.Namespace) -> None:
     except RuntimeError as e:
         sys.exit(str(e))
     try:
-        lifedata.insert("people", [{"id": person_id, "name": args.name}])
+        somadata.insert("people", [{"id": person_id, "name": args.name}])
     except Exception:
         if page_id:
             print(
-                f"orphaned notion page {page_id}: created but life-data insert failed; "
+                f"orphaned notion page {page_id}: created but soma insert failed; "
                 "re-run with this id or delete the page",
                 file=sys.stderr,
             )
@@ -213,7 +213,7 @@ def cmd_new_person(args: argparse.Namespace) -> None:
 
 def _require_file_token() -> None:
     """Validate file service configuration before opening the source page."""
-    for name in ("LIFE_HUB_TOKEN", "LIFE_HUB_URL"):
+    for name in ("SOMA_HUB_TOKEN", "SOMA_HUB_URL"):
         if not os.environ.get(name):
             sys.exit(f"{name} is not set - profile pictures cannot be stored")
 
@@ -263,7 +263,7 @@ def cmd_list(args: argparse.Namespace) -> None:
             from people_sync.scrape import facebook
 
             entries = facebook.list_friends(browser)
-            records = lifedata.sql(
+            records = somadata.sql(
                 "SELECT id, name, handle FROM people_sync_records "
                 "WHERE source = 'facebook' AND deleted_at IS NULL"
             )
@@ -277,9 +277,9 @@ def cmd_list(args: argparse.Namespace) -> None:
                 if prior and prior != u["handle"]:
                     continue
                 if not prior:
-                    lifedata.sql(
-                        f"UPDATE people_sync_records SET handle = {lifedata.sq(u['handle'])} "
-                        f"WHERE id = {lifedata.sq(u['id'])} AND deleted_at IS NULL"
+                    somadata.sql(
+                        f"UPDATE people_sync_records SET handle = {somadata.sq(u['handle'])} "
+                        f"WHERE id = {somadata.sq(u['id'])} AND deleted_at IS NULL"
                     )
                     updates.append(u)
                 ledger.imported_from(
@@ -449,7 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
         p = ingest_sub.add_parser(name)
         p.set_defaults(func=cmd_ingest)
     vp = ingest_sub.add_parser(
-        "venmo-payments", help="link life-data's Venmo payments to counterparty records"
+        "venmo-payments", help="link soma's Venmo payments to counterparty records"
     )
     vp.set_defaults(func=cmd_ingest)
     wa = ingest_sub.add_parser("whatsapp", help="operator-supplied metadata snapshot, read-only")
@@ -476,7 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_p = sub.add_parser("queue", help="list pending ledger records for triage")
     queue_p.set_defaults(func=cmd_queue)
 
-    new_person = sub.add_parser("new-person", help="create a Notion People stub + life-data row")
+    new_person = sub.add_parser("new-person", help="create a Notion People stub + soma row")
     new_person.add_argument("--name", required=True)
     new_person.set_defaults(func=cmd_new_person)
 

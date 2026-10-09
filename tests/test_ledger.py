@@ -16,9 +16,9 @@ def rec(sid="alice123"):
 
 
 def test_new_record_inserted_pending(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])  # nothing exists
-    ins = mocker.patch("people_sync.lifedata.insert")
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.sql", return_value=[])  # nothing exists
+    ins = mocker.patch("people_sync.somadata.insert")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-02T00:00:00.000Z")
     out = upsert([rec()])
     row = ins.call_args.args[1][0]
     assert row["id"] == "instagram:alice123"
@@ -29,8 +29,8 @@ def test_new_record_inserted_pending(mocker):
 
 
 def test_existing_record_updates_not_status(mocker):
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=[{"id": "instagram:alice123"}])
-    ins = mocker.patch("people_sync.lifedata.insert")
+    sql = mocker.patch("people_sync.somadata.sql", return_value=[{"id": "instagram:alice123"}])
+    ins = mocker.patch("people_sync.somadata.insert")
     upsert([rec()])
     ins.assert_not_called()
     update = sql.call_args.args[0]
@@ -38,9 +38,9 @@ def test_existing_record_updates_not_status(mocker):
 
 
 def test_double_upsert_idempotent_counts(mocker):
-    mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.somadata.insert")
     mocker.patch(
-        "people_sync.lifedata.sql",
+        "people_sync.somadata.sql",
         side_effect=[[], [{"id": "instagram:alice123"}], []],
     )
     assert upsert([rec()]) == {"new": 1, "updated": 0}
@@ -52,9 +52,9 @@ def test_duplicate_ids_within_batch_collapse(mocker):
     same row_id twice; a batch must insert it once, not violate the UNIQUE constraint.
     The LAST occurrence wins, and the collapse is logged because it silently drops a
     person from the queue."""
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
-    ins = mocker.patch("people_sync.lifedata.insert")
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.sql", return_value=[])
+    ins = mocker.patch("people_sync.somadata.insert")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-02T00:00:00.000Z")
     log = mocker.patch("people_sync.ledger.log")
 
     first, second = rec(), rec()
@@ -75,16 +75,16 @@ def test_duplicate_ids_within_batch_collapse(mocker):
 
 
 def test_no_warning_when_batch_has_no_duplicates(mocker):
-    mocker.patch("people_sync.lifedata.sql", return_value=[])
-    mocker.patch("people_sync.lifedata.insert")
-    mocker.patch("people_sync.lifedata.now_iso", return_value="2026-09-02T00:00:00.000Z")
+    mocker.patch("people_sync.somadata.sql", return_value=[])
+    mocker.patch("people_sync.somadata.insert")
+    mocker.patch("people_sync.somadata.now_iso", return_value="2026-09-02T00:00:00.000Z")
     log = mocker.patch("people_sync.ledger.log")
     upsert([rec(), rec("bob456")])
     log.warning.assert_not_called()
 
 
 def _fake_estate(live_rows):
-    """lifedata.sql stand-in: answers the existing-ids and live-rows reads, records writes."""
+    """somadata.sql stand-in: answers the existing-ids and live-rows reads, records writes."""
     writes = []
 
     def sql(query):
@@ -139,8 +139,8 @@ def test_complete_inventory_zeroes_follow_flags_of_absent_records(mocker):
         },
     ]
     sql, writes = _fake_estate(live)
-    mocker.patch("people_sync.lifedata.sql", side_effect=sql)
-    mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.somadata.sql", side_effect=sql)
+    mocker.patch("people_sync.somadata.insert")
 
     out = upsert([rec()], complete=True)
 
@@ -178,8 +178,8 @@ def test_absent_record_keeps_unknown_flags_unknown(mocker):
         },
     ]
     sql, writes = _fake_estate(live)
-    mocker.patch("people_sync.lifedata.sql", side_effect=sql)
-    mocker.patch("people_sync.lifedata.insert")
+    mocker.patch("people_sync.somadata.sql", side_effect=sql)
+    mocker.patch("people_sync.somadata.insert")
 
     out = upsert([rec()], complete=True)
 
@@ -199,8 +199,8 @@ def test_partial_ingest_never_reads_absence(mocker):
             }
         ]
     )
-    spy = mocker.patch("people_sync.lifedata.sql", side_effect=sql)
-    mocker.patch("people_sync.lifedata.insert")
+    spy = mocker.patch("people_sync.somadata.sql", side_effect=sql)
+    mocker.patch("people_sync.somadata.insert")
 
     out = upsert([rec()])
 

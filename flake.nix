@@ -1,5 +1,5 @@
 {
-  description = "people-sync: consolidate contact sources into the life-data people estate";
+  description = "people-sync: consolidate contact sources into the soma people estate";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 

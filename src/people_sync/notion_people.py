@@ -1,6 +1,6 @@
 """New person ids, with Notion as an optional anchor.
 
-When a Notion People data source is configured, a new person's life-data id
+When a Notion People data source is configured, a new person's soma id
 IS their Notion page id (dash-stripped): that keeps Notion-side relations
 (gifts, quotes, trips) resolvable. Without one, the id is minted locally in
 the same 32-hex shape and Notion is never contacted.
@@ -39,7 +39,7 @@ def create_stub(name: str) -> str:
 
 
 def new_person_id(name: str) -> tuple[str, str | None]:
-    """(life-data person id, Notion page id or None). Notion only when configured."""
+    """(soma person id, Notion page id or None). Notion only when configured."""
     if not os.environ.get(DATA_SOURCE_ENV):
         return uuid.uuid4().hex, None
     page_id = create_stub(name)

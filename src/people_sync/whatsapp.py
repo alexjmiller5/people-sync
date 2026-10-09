@@ -19,7 +19,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from people_sync import captures, ledger, lifedata, photos, sources
+from people_sync import captures, ledger, somadata, photos, sources
 from people_sync.scrape.profile import Profile, upsert_profiles
 
 SOURCE = "whatsapp"
@@ -162,14 +162,14 @@ def chat_links() -> dict[str, str]:
     in the local address book, reached through the contact pointers kept at ingest.
     Numbers are read in memory only; the caller writes the result to a private file
     for the review page, never to the estate."""
-    from people_sync import lifedata
+    from people_sync import somadata
 
     numbers = {}
     for hits in sources.phone_index().values():
         for hit in hits:
             numbers.setdefault(f"apple_contacts:{hit['apple']}", hit["number"])
     out = {}
-    for row in lifedata.sql(
+    for row in somadata.sql(
         "SELECT id, raw FROM people_sync_records WHERE source = 'whatsapp' AND deleted_at IS NULL"
     ):
         try:
@@ -345,9 +345,9 @@ def ingest(snapshot_path, media_dir, *, self_id=None, state_dir=None, contacts=N
 
     prior = {
         row["record_id"]: row
-        for row in lifedata.sql(
+        for row in somadata.sql(
             "SELECT record_id, avatar_r2_key, avatar_sha256 FROM people_sync_profiles "
-            f"WHERE platform = {lifedata.sq(SOURCE)} AND deleted_at IS NULL"
+            f"WHERE platform = {somadata.sq(SOURCE)} AND deleted_at IS NULL"
         )
     }
     avatars, uploaded = {}, 0

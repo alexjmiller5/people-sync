@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from people_sync import lifedata
+from people_sync import somadata
 
 FOLLOW_PLATFORMS = ("instagram", "facebook", "linkedin", "snapchat", "venmo", "spotify", "strava")
 # Export-only sources keep no profile URL in `raw`; their handle is the URL.
@@ -19,7 +19,7 @@ URL_FROM_HANDLE = {
 
 
 def pending() -> list[dict]:
-    rows = lifedata.sql(
+    rows = somadata.sql(
         "SELECT id, source, name, handle, i_follow, json_extract(raw, '$.url') AS url, "
         "json_extract(raw, '$.people_sync_relationship.operation') AS removed_operation, "
         "json_extract(raw, '$.people_sync_relationship.state') AS relationship_state "

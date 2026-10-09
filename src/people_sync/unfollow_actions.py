@@ -19,7 +19,7 @@ import time
 import unicodedata
 from dataclasses import asdict, dataclass
 
-from people_sync import captures, lifedata
+from people_sync import captures, somadata
 from people_sync.scrape import cdp, facebook_action, instagram_action, venmo_action
 from people_sync.scrape.pace import Pacer
 
@@ -201,7 +201,7 @@ def load_plan(path, *, expired_ok=False):
 
 
 def _rows(ids):
-    rows = lifedata.sql(f"{SELECT} WHERE id IN ({','.join(lifedata.sq(i) for i in ids)})")
+    rows = somadata.sql(f"{SELECT} WHERE id IN ({','.join(somadata.sq(i) for i in ids)})")
     require(len(rows) == len(ids) and {r["id"] for r in rows} == set(ids), "missing ledger target")
     return {r["id"]: r for r in rows}
 
@@ -500,7 +500,7 @@ def _relationship_completed(plan, row):
 
 
 def _finish(db, plan, target, row, key, result):
-    timestamp = lifedata.now_iso()
+    timestamp = somadata.now_iso()
     prior = db.execute("SELECT ledger_at FROM actions WHERE key=?", (key,)).fetchone()
     ledger_written = (
         prior["ledger_at"] is not None
@@ -524,7 +524,7 @@ def _finish(db, plan, target, row, key, result):
                 column, column
             )
             value = row[column]
-            literal = str(value) if type(value) is int else lifedata.sq(value)
+            literal = str(value) if type(value) is int else somadata.sq(value)
             guards.append(f"{expression} IS {literal}")
         change = "i_follow=0"
         if plan.operation != "unfollow":
@@ -539,14 +539,14 @@ def _finish(db, plan, target, row, key, result):
             )
             change = (
                 "raw=json_set(coalesce(raw, '{}'), '$.people_sync_relationship', json("
-                + lifedata.sq(marker)
+                + somadata.sq(marker)
                 + "))"
             )
-        updated = lifedata.sql(
+        updated = somadata.sql(
             "UPDATE people_sync_records SET "
             + change
             + ", updated_at="
-            + lifedata.sq(timestamp)
+            + somadata.sq(timestamp)
             + " WHERE "
             + " AND ".join(guards)
             + " RETURNING id"
@@ -556,15 +556,15 @@ def _finish(db, plan, target, row, key, result):
             "ledger changed after live verification; journal retained",
         )
     edge_id = "unfollow:" + digest([plan.digest, target.record_id])
-    evidence = lifedata.sql(
-        f"SELECT id, deleted_at FROM provenance WHERE id={lifedata.sq(edge_id)}"
+    evidence = somadata.sql(
+        f"SELECT id, deleted_at FROM provenance WHERE id={somadata.sq(edge_id)}"
     )
     require(
         not evidence or (len(evidence) == 1 and evidence[0]["deleted_at"] is None),
         "existing evidence is deleted; journal retained",
     )
     if not evidence:
-        lifedata.insert(
+        somadata.insert(
             "provenance",
             [
                 {

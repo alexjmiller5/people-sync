@@ -30,8 +30,8 @@ def record(key, **kw):
 
 
 def test_promoted_observations_reference_their_own_capture(mocker):
-    inserts = mocker.patch.object(promote.lifedata, "insert")
-    mocker.patch.object(promote.lifedata, "sql", return_value=[])
+    inserts = mocker.patch.object(promote.somadata, "insert")
+    mocker.patch.object(promote.somadata, "sql", return_value=[])
     edges = []
     for ordinal in (1, 2):
         key = f"profiles/spotify/captures/observation-{ordinal}.json"
@@ -72,7 +72,7 @@ def test_duplicate_records_keep_all_keys_and_retry_repairs_edges(estate, monkeyp
             ),
         ),
     ]
-    insert = ledger.lifedata.insert
+    insert = ledger.somadata.insert
 
     def fail_edges(table, batch):
         if table == "provenance":
@@ -80,10 +80,10 @@ def test_duplicate_records_keep_all_keys_and_retry_repairs_edges(estate, monkeyp
             raise RuntimeError("synthetic edge failure")
         insert(table, batch)
 
-    monkeypatch.setattr(ledger.lifedata, "insert", fail_edges)
+    monkeypatch.setattr(ledger.somadata, "insert", fail_edges)
     with pytest.raises(RuntimeError, match="synthetic edge failure"):
         ledger.upsert(rows)
-    monkeypatch.setattr(ledger.lifedata, "insert", insert)
+    monkeypatch.setattr(ledger.somadata, "insert", insert)
     ledger.upsert(rows)
     edges = list(estate.execute("SELECT * FROM provenance"))
     assert {e["from_ref"] for e in edges} == set(keys)
@@ -162,17 +162,17 @@ def test_facebook_handle_write_and_retry_have_exact_evidence(estate, mocker, cap
             }
         ],
     )
-    insert = ledger.lifedata.insert
+    insert = ledger.somadata.insert
 
     def fail(table, rows):
         if table == "provenance":
             raise RuntimeError("synthetic edge failure")
         insert(table, rows)
 
-    mocker.patch.object(ledger.lifedata, "insert", side_effect=fail)
+    mocker.patch.object(ledger.somadata, "insert", side_effect=fail)
     with pytest.raises(RuntimeError, match="synthetic edge failure"):
         cli.main(["list", "facebook", "--endpoint", "127.0.0.1:1"])
-    mocker.patch.object(ledger.lifedata, "insert", side_effect=insert)
+    mocker.patch.object(ledger.somadata, "insert", side_effect=insert)
     cli.main(["list", "facebook", "--endpoint", "127.0.0.1:1"])
     edge = dict(estate.execute("SELECT * FROM provenance").fetchone())
     assert edge["from_ref"] == "profiles/facebook/captures/list.json"
@@ -185,7 +185,7 @@ def test_facebook_handle_write_and_retry_have_exact_evidence(estate, mocker, cap
 def test_profile_retry_repairs_missing_edge_with_assertion_override(estate, monkeypatch):
     p = Profile(record_id="spotify:example", platform="spotify", display_name="Example Person")
     key = "profiles/spotify/captures/observation-1.json"
-    insert = ledger.lifedata.insert
+    insert = ledger.somadata.insert
 
     def fail(table, rows):
         if table == "provenance":
@@ -195,10 +195,10 @@ def test_profile_retry_repairs_missing_edge_with_assertion_override(estate, monk
             raise RuntimeError("synthetic edge failure")
         insert(table, rows)
 
-    monkeypatch.setattr(ledger.lifedata, "insert", fail)
+    monkeypatch.setattr(ledger.somadata, "insert", fail)
     with pytest.raises(RuntimeError, match="synthetic edge failure"):
         upsert_profile(p, raw_r2_key=key)
-    monkeypatch.setattr(ledger.lifedata, "insert", insert)
+    monkeypatch.setattr(ledger.somadata, "insert", insert)
     monkeypatch.setenv("PEOPLE_SYNC_ASSERTED_BY", "script:synthetic-import")
     upsert_profile(p, raw_r2_key=key)
     upsert_profile(p, raw_r2_key="profiles/spotify/captures/observation-2.json")
@@ -219,9 +219,9 @@ def test_replay_preserves_original_observation_without_importing(mocker):
         captured_at="2026-01-02T03:04:05.006Z",
     )
     # Any attempt to import a replay, or re-stamp it as a fresh visit, fails here.
-    mocker.patch.object(ledger.lifedata, "sql", side_effect=AssertionError("replay wrote"))
-    mocker.patch.object(ledger.lifedata, "insert", side_effect=AssertionError("replay wrote"))
-    mocker.patch.object(ledger.lifedata, "now_iso", side_effect=AssertionError("fresh visit"))
+    mocker.patch.object(ledger.somadata, "sql", side_effect=AssertionError("replay wrote"))
+    mocker.patch.object(ledger.somadata, "insert", side_effect=AssertionError("replay wrote"))
+    mocker.patch.object(ledger.somadata, "now_iso", side_effect=AssertionError("fresh visit"))
     result = replay.replay_capture(original)
     assert result["status"] == "ok"
     assert result["capture_id"] == original["capture_id"]
@@ -231,12 +231,12 @@ def test_replay_preserves_original_observation_without_importing(mocker):
 
 def _counting(monkeypatch, estate):
     calls = []
-    real_sql, real_insert = ledger.lifedata.sql, ledger.lifedata.insert
+    real_sql, real_insert = ledger.somadata.sql, ledger.somadata.insert
     monkeypatch.setattr(
-        ledger.lifedata, "sql", lambda q: (calls.append(q.split()[0]), real_sql(q))[1]
+        ledger.somadata, "sql", lambda q: (calls.append(q.split()[0]), real_sql(q))[1]
     )
     monkeypatch.setattr(
-        ledger.lifedata, "insert", lambda t, r: (calls.append("INSERT:" + t), real_insert(t, r))[1]
+        ledger.somadata, "insert", lambda t, r: (calls.append("INSERT:" + t), real_insert(t, r))[1]
     )
     return calls
 

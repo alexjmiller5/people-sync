@@ -91,7 +91,7 @@ def test_cmd_queue_runs_fixed_query_and_prints_result(mocker, capsys):
             "suggested_name": "Alice Smith",
         }
     ]
-    sql = mocker.patch("people_sync.lifedata.sql", return_value=rows)
+    sql = mocker.patch("people_sync.somadata.sql", return_value=rows)
 
     cli.main(["queue"])
 
@@ -131,7 +131,7 @@ def test_new_person_creates_stub_inserts_dashstripped_row_and_prints_id(
         "people_sync.notion_people.create_stub",
         return_value="1a80-3953-a8af-80ab-000bfe407316",
     )
-    insert = mocker.patch("people_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     cli.main(["new-person", "--name", "Test Person"])
 
@@ -144,7 +144,7 @@ def test_new_person_creates_stub_inserts_dashstripped_row_and_prints_id(
 
 def test_new_person_exits_with_clear_error_when_token_missing(monkeypatch, mocker):
     monkeypatch.delenv("NOTION_API_TOKEN", raising=False)
-    insert = mocker.patch("people_sync.lifedata.insert")
+    insert = mocker.patch("people_sync.somadata.insert")
 
     with pytest.raises(SystemExit):
         cli.main(["new-person", "--name", "Test Person"])
@@ -160,19 +160,19 @@ def test_new_person_reports_orphaned_page_and_reraises_when_insert_fails(
         "people_sync.notion_people.create_stub",
         return_value="1a80-3953-a8af-80ab-000bfe407316",
     )
-    mocker.patch("people_sync.lifedata.insert", side_effect=RuntimeError("life insert failed"))
+    mocker.patch("people_sync.somadata.insert", side_effect=RuntimeError("soma insert failed"))
 
-    with pytest.raises(RuntimeError, match="life insert failed"):
+    with pytest.raises(RuntimeError, match="soma insert failed"):
         cli.main(["new-person", "--name", "Test Person"])
 
     err = capsys.readouterr().err
     assert "1a80-3953-a8af-80ab-000bfe407316" in err
-    assert "life-data insert failed" in err
+    assert "soma insert failed" in err
 
 
 def test_scrape_passes_endpoint_data_dir_and_approve_command_through(mocker, capsys, monkeypatch):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "token-synthetic")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "token-synthetic")
     scrape = mocker.patch(
         "people_sync.scrape.run.scrape",
         return_value={"done": 1, "skipped": 0, "halted": None},
@@ -203,8 +203,8 @@ def test_scrape_passes_endpoint_data_dir_and_approve_command_through(mocker, cap
 
 
 def test_scrape_defaults_endpoint_and_data_dir_to_none(mocker, capsys, monkeypatch):
-    monkeypatch.setenv("LIFE_HUB_URL", "https://hub.test")
-    monkeypatch.setenv("LIFE_HUB_TOKEN", "token-synthetic")
+    monkeypatch.setenv("SOMA_HUB_URL", "https://hub.test")
+    monkeypatch.setenv("SOMA_HUB_TOKEN", "token-synthetic")
     scrape = mocker.patch(
         "people_sync.scrape.run.scrape",
         return_value={"done": 0, "skipped": 0, "halted": None},
@@ -314,13 +314,13 @@ def test_approve_command_help_names_its_environment_fallback(command, capsys):
 
 
 def test_scrape_refuses_to_start_without_the_r2_token(mocker, monkeypatch):
-    monkeypatch.delenv("LIFE_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("SOMA_HUB_TOKEN", raising=False)
     scrape = mocker.patch("people_sync.scrape.run.scrape")
 
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["scrape", "instagram"])
 
-    assert "LIFE_HUB_TOKEN" in str(exit_info.value.code)
+    assert "SOMA_HUB_TOKEN" in str(exit_info.value.code)
     scrape.assert_not_called()
 
 

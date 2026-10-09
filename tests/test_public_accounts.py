@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from people_sync import cli, ledger, lifedata, match, reconcile, unfollow
+from people_sync import cli, ledger, somadata, match, reconcile, unfollow
 
 
 @pytest.fixture
@@ -43,8 +43,8 @@ def db(monkeypatch):
                 list(row.values()),
             )
 
-    monkeypatch.setattr(lifedata, "sql", sql)
-    monkeypatch.setattr(lifedata, "insert", insert)
+    monkeypatch.setattr(somadata, "sql", sql)
+    monkeypatch.setattr(somadata, "insert", insert)
     monkeypatch.setattr(ledger, "imported_from_many", lambda *a: None)
     yield conn
     conn.close()
@@ -165,7 +165,7 @@ def test_public_record_never_matches_even_with_identical_person_name(db):
         "INSERT INTO people VALUES ('person-1','Synthetic Coffee Van','Synthetic','Van',NULL,NULL)"
     )
     classify("--organization", "org-1", "--apply")
-    assert lifedata.sql(cli.QUEUE_QUERY) == []
+    assert somadata.sql(cli.QUEUE_QUERY) == []
     assert match.run_match() == {"auto": 0, "suggested": 0, "left_pending": 0}
     assert db.execute("SELECT count(*) FROM person_accounts").fetchone()[0] == 0
 
@@ -184,7 +184,7 @@ def test_interrupted_public_classification_refuses_personal_writes(db, monkeypat
         pytest.fail("personal side effect before public ownership was checked")
 
     monkeypatch.setattr(reconcile.notion_people, "new_person_id", forbidden)
-    monkeypatch.setattr(lifedata, "insert", forbidden)
+    monkeypatch.setattr(somadata, "insert", forbidden)
     if operation == "create":
         args = ["create", "instagram:synthetic_van", "--name", "Synthetic Coffee Van", "--apply"]
     else:

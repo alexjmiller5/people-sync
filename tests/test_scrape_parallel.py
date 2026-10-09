@@ -40,7 +40,7 @@ def test_tabs_share_queue_budget_and_serialize_writes(tmp_path, mocker, workers)
         )
 
     def store(*args):
-        assert writing.acquire(blocking=False), "concurrent writes to life-data"
+        assert writing.acquire(blocking=False), "concurrent writes to soma"
         writing.release()
 
     mocker.patch.object(run.Browser, "connect", side_effect=connect)

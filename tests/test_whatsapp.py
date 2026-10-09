@@ -8,7 +8,7 @@ import sqlite3
 
 import pytest
 
-from people_sync import captures, cli, lifedata, photos, replay, whatsapp
+from people_sync import captures, cli, somadata, photos, replay, whatsapp
 from tests.test_capture_ingest import synthetic_ledger  # noqa: F401
 
 JPEG = b"\xff\xd8\xff\xe0" + bytes(20) + b"\xff\xd9"
@@ -205,11 +205,11 @@ def estate(monkeypatch, tmp_path, synthetic_ledger):  # noqa: F811 - shared pyte
         events.append(("put", key))
         stored[key] = data
 
-    real_insert = lifedata.insert
+    real_insert = somadata.insert
     monkeypatch.setattr(photos, "put_object", put)
     monkeypatch.setattr(photos, "get_object", stored.__getitem__)
     monkeypatch.setattr(
-        lifedata, "insert", lambda t, rows: (events.append(("insert", t)), real_insert(t, rows))
+        somadata, "insert", lambda t, rows: (events.append(("insert", t)), real_insert(t, rows))
     )
     return {"db": db, "events": events, "stored": stored}
 
@@ -379,7 +379,7 @@ def test_chat_links_resolve_numbers_from_contact_pointers(mocker):
         },
     )
     mocker.patch(
-        "people_sync.lifedata.sql",
+        "people_sync.somadata.sql",
         return_value=[
             {
                 "id": "whatsapp:lid-1",
