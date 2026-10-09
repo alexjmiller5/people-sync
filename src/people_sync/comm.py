@@ -1046,6 +1046,12 @@ def hub_aggregates() -> list[dict]:
         for value in _json_values(proc.stdout):
             if isinstance(value, list):
                 rows.extend(r for r in value if isinstance(r, dict) and "participant_ref" in r)
+    for row in rows:
+        # DuckDB reads `at` as a TIMESTAMP and prints it as "YYYY-MM-DD HH:MM:SS[.fff]".
+        when = datetime.fromisoformat(row["last_at"].replace("Z", "+00:00"))
+        row["last_at"] = _iso(
+            (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).timestamp()
+        )
     return rows
 
 
