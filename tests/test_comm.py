@@ -868,3 +868,16 @@ def test_comm_hub_calls_keep_the_ambient_token_without_one(monkeypatch):
     monkeypatch.setattr(comm.subprocess, "run", rec)
     comm.soma_append("comm_apple_calls", [{"event_id": "x"}])
     assert rec.calls[0][1]["env"]["SOMA_HUB_TOKEN"] == "files-token"
+
+
+def test_a_reader_never_blocks_the_importer(tmp_path, monkeypatch):
+    monkeypatch.setattr(comm, "BUSY_TIMEOUT_S", 0.2)
+    state = comm.State(tmp_path / "state")
+    with state.db:
+        state.add("comm_apple_calls", {"event_id": "e1"})
+    reader = sqlite3.connect(tmp_path / "state" / "comm.sqlite")
+    reader.execute("BEGIN")
+    assert reader.execute("SELECT count(*) FROM events").fetchone()[0] == 1  # holds a read
+    state.mark_landed("comm_apple_calls", ["e1"])
+    reader.rollback()
+    assert state.waiting() == 0
