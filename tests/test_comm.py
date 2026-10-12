@@ -804,6 +804,25 @@ def test_an_unresolvable_ref_keeps_its_import_time_person():
     assert out[0]["person_id"] == PERSON_B and out[0]["needs_review"] is None
 
 
+def test_a_deleted_import_time_person_gets_no_summary():
+    rows = [
+        {
+            "participant_ref": "f" * 64,
+            "person_id": PERSON_B,
+            "channel": "sms",
+            "kind": "message",
+            "direction": "inbound",
+            "outcome": None,
+            "n": 1,
+            "last_at": iso(T0),
+        },
+    ]
+    now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert comm.summarize(rows, comm.Resolver({}), {}, now, live={PERSON_A}) == []
+    kept = comm.summarize(rows, comm.Resolver({}), {}, now, live={PERSON_B})
+    assert [s["person_id"] for s in kept] == [PERSON_B]
+
+
 def test_channel_coverage_intersects_whatsapp_messages_and_calls():
     imports = [
         {

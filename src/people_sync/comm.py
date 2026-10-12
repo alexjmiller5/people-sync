@@ -1110,15 +1110,18 @@ _LAST = (
 )
 
 
-def summarize(rows, resolver: Resolver, coverage: dict, now: datetime) -> list[dict]:
+def summarize(
+    rows, resolver: Resolver, coverage: dict, now: datetime, live: set[str] | None = None
+) -> list[dict]:
     """One summary per (person, channel) from direct events only. A participant resolves
-    through today's confirmed links, else keeps the person it resolved to at import."""
+    through today's confirmed links, else keeps the person it resolved to at import.
+    With `live` (the people ids that still exist), a deleted person gets no summary."""
     refreshed = _iso(now.timestamp())
     out: dict[tuple[str, str], dict] = {}
     moved: Counter = Counter()
     for r in rows:
         person = resolver.person(r["participant_ref"]) or r.get("person_id")
-        if not person:
+        if not person or (live is not None and person not in live):
             continue
         key = (person, r["channel"])
         if key not in out:
@@ -1373,7 +1376,8 @@ def cmd_refresh(args) -> None:
         "WHERE deleted_at IS NULL"
     )
     now = datetime.now(timezone.utc)
-    summaries = summarize(rows, resolver, channel_coverage(imports), now)
+    live = {r["id"] for r in somadata.sql("SELECT id FROM people WHERE deleted_at IS NULL")}
+    summaries = summarize(rows, resolver, channel_coverage(imports), now, live)
     written = write_summaries(summaries)
     refs = {r["participant_ref"] for r in rows}
     resolved = sum(1 for r in refs if resolver.person(r))
