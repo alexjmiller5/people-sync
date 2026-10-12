@@ -816,3 +816,18 @@ def test_read_external_data_over_ssh_runs_a_script_that_finds_the_file(
     assert seen[0][:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
     assert "other-mac" in seen[0]
     assert comm.read_external_data("EEEEEEEE-0000-0000-0000-000000000005") is None
+
+
+def test_a_google_profile_photo_is_not_the_contacts_own():
+    profile = {"metadata": {"source": {"type": "PROFILE"}, "primary": True}}
+    assert not port.own_photo({"photos": [profile, DEFAULT_PHOTO]})
+    assert port.own_photo({"photos": [OWN_PHOTO]})
+    assert not port.own_photo({})
+
+
+def test_upload_refuses_anything_but_a_contact_resource(mocker):
+    patch = mocker.patch("people_sync.port.httpx.patch")
+    for resource in ("people/c1/../../x", "contactGroups/1", "people/me"):
+        with pytest.raises(port.PhotoError, match="not a contact resource"):
+            port.upload_photo(resource, IMAGE, TOKEN)
+    assert not patch.called
