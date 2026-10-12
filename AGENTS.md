@@ -37,6 +37,7 @@ tests/             pytest, synthetic fixtures only
   google_cleanup.py Google write-back cleanup (`people-sync google-cleanup`)
   port.py          Apple-only people into Google contacts (`people-sync port google`)
   push.py          People's company + contact photo onto linked Google contacts (`push google`)
+  pick.py          default contact pictures by source order (`photos pick`)
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
   venmo_payments.py links txns_venmo payments to counterparty ledger records

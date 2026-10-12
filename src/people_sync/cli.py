@@ -18,6 +18,7 @@ from people_sync import (
     changes,
     comm,
     google_cleanup,
+    pick,
     port,
     propose,
     push,
@@ -574,6 +575,9 @@ def build_parser() -> argparse.ArgumentParser:
     store.add_argument("--platform", required=True)
     store.add_argument("--file", required=True)
     store.set_defaults(func=cmd_photos_store)
+    photos_sub.add_parser(
+        "pick", help="give people a contact picture by source order (dry run)", add_help=False
+    )
     rekey = photos_sub.add_parser(
         "rekey", help="move stored photos whose key a client cannot request (dry run)"
     )
@@ -600,6 +604,9 @@ DELEGATES = {
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:2] == ["photos", "pick"]:
+        pick.main(argv[2:])
+        return
     if argv and argv[0] in DELEGATES:
         DELEGATES[argv[0]][0](argv[1:])
         return

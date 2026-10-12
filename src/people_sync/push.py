@@ -6,8 +6,11 @@ writes them one way.
   hold (not a circle, an employment, or a value this command wrote) blocks the write
   and is printed as a SKIP: record it in People first, so nothing is lost.
 - **Photo** = the `person_photos` row `people.contact_photo_id` names. Nothing is
-  uploaded for a person without one. The upload goes through port's
-  `updateContactPhoto` call and its read-back.
+  uploaded for a person without one. A picture Google already shows (the same bytes at
+  full size) is only marked; anything else goes through port's `updateContactPhoto`
+  call and its read-back.
+
+`--field company` / `--field photo` limits a run to one field (default: both).
 
 What this command wrote is marked in the contact's own `clientData`
 (`people-sync.company`, `people-sync.photo` = the picture's sha256), so a rerun writes
@@ -19,6 +22,7 @@ batches of 200 (`getBatchGet`, `batchUpdateContacts`). Dry run by default.
 import argparse
 import hashlib
 import json
+import re
 
 from people_sync import photos, port, somadata
 from people_sync.google_cleanup import company
@@ -43,8 +47,29 @@ BATCH = 200
 API = ["api", "call", "people", "v1"]
 
 
+FIELDS = ("company", "photo")
+
+
 def _norm(value: str | None) -> str:
-    return (value or "").strip().casefold()
+    return (value or "").replace("\u2019", "'").strip().casefold()
+
+
+def full_size(url: str) -> str:
+    """A Google photo URL at its original size (`=s0` replaces any size suffix)."""
+    return re.sub(r"=s\d+(-c)?$", "", url) + "=s0"
+
+
+def google_photo(contact: dict, source: str = "CONTACT") -> str | None:
+    """The full-size URL of the contact's own (non-default) photo from `source`
+    (CONTACT = set on the contact, PROFILE = the person's own Google profile)."""
+    for p in contact.get("photos") or []:
+        if (
+            not p.get("default")
+            and ((p.get("metadata") or {}).get("source") or {}).get("type") == source
+            and p.get("url")
+        ):
+            return full_size(p["url"])
+    return None
 
 
 def _client(contact: dict) -> dict[str, str]:
@@ -64,7 +89,9 @@ def company_gaps(want, contact, names: set[str], titles: set[str]) -> list[str]:
     ours = _client(contact).get(COMPANY_KEY)
     gaps = []
     for name, title in _orgs(contact):
-        held = name in (want, ours) or all(_norm(p) in names for p in name.split(", "))
+        held = _norm(name) in (_norm(want), _norm(ours)) or all(
+            _norm(p) in names for p in name.split(", ")
+        )
         if name and not held:
             gaps.append(f"Google company {name!r} is not in People")
         if title and _norm(title) not in titles:
@@ -136,7 +163,7 @@ def _update(writes: list[dict], contacts: dict[str, dict]) -> None:
                     print(f"  WROTE {w['resource']}")
 
 
-def run(people: list[str], apply: bool) -> None:
+def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> None:
     rows = somadata.sql(PEOPLE_SQL)
     if people:
         rows = [r for r in rows if r["id"] in people]
@@ -160,7 +187,9 @@ def run(people: list[str], apply: bool) -> None:
         change: dict = {"resource": resource, "client": {}}
         lines = []
         have = [n for n, _ in _orgs(contact)]
-        if have != ([want] if want else []) or any(t for _, t in _orgs(contact)):
+        if "company" in fields and (
+            have != ([want] if want else []) or any(t for _, t in _orgs(contact))
+        ):
             gaps = company_gaps(
                 want, contact, circles | names.get(row["id"], set()), titles.get(row["id"], set())
             )
@@ -174,19 +203,27 @@ def run(people: list[str], apply: bool) -> None:
                     f"{n!r}" + (f" (title {t!r})" if t else "") for n, t in _orgs(contact)
                 )
                 lines.append(f"  company: {shown or 'none'} -> {repr(want) if want else 'none'}")
-        if row["contact_photo_id"] and not row["photo_sha"]:
+        if "photo" not in fields:
+            pass
+        elif row["contact_photo_id"] and not row["photo_sha"]:
             lines.append("  photo: skipped (contact_photo_id names no live photo of theirs)")
         elif row["photo_sha"] and not (
             port.own_photo(contact) and _client(contact).get(PHOTO_KEY) == row["photo_sha"]
         ):
-            lines.append("  photo: yes (will upload)")
-            uploads.append((change, row))
+            url = google_photo(contact)
+            shown = url and photos.fetch_url_photo(url)
+            if shown and hashlib.sha256(shown).hexdigest() == row["photo_sha"]:
+                lines.append("  photo: already in Google (mark only)")
+                change["client"][PHOTO_KEY] = row["photo_sha"]
+            else:
+                lines.append("  photo: yes (will upload)")
+                uploads.append((change, row))
         if not lines:
             synced += 1
             continue
         print(f"PUSH {who} -> {resource}")
         print("\n".join(lines))
-        if "company" in change or (uploads and uploads[-1][0] is change):
+        if "company" in change or change["client"] or (uploads and uploads[-1][0] is change):
             writes.append(change)
     if apply:
         done = [c["resource"] for c, row in uploads if _upload(c["resource"], row)]
@@ -212,6 +249,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--person", action="append", default=[], help="limit to a people.id (repeatable)"
     )
+    parser.add_argument(
+        "--field", action="append", choices=FIELDS, help="limit to one field (repeatable)"
+    )
     parser.add_argument("--apply", action="store_true", help="write (default: preview)")
     args = parser.parse_args(argv)
-    run(args.person, args.apply)
+    run(args.person, args.apply, tuple(args.field or FIELDS))

@@ -379,3 +379,53 @@ def test_an_unrecorded_company_blocks_only_the_company_not_the_photo(world, caps
     assert gog.uploads == ["people/c1"]
     assert _orgs(gog) == [("G Court Neighbor", None)]
     assert _client(gog) == {push.PHOTO_KEY: SHA}
+
+
+# --- fields, same picture, apostrophes ------------------------------------------
+
+OWN_WITH_URL = OWN_PHOTO | {"url": "https://lh3.googleusercontent.com/contacts/AAA=s100"}
+
+
+def test_field_photo_leaves_the_company_alone(world, capsys):
+    gog = world([_with_photo()], {"people/c1": _contact(org="Springfield")})
+    push.main(["google", "--field", "photo", "--apply"])
+    assert gog.uploads == ["people/c1"]
+    assert _orgs(gog) == [("Springfield", None)]
+    assert _client(gog) == {push.PHOTO_KEY: SHA}
+
+
+def test_field_company_leaves_the_photo_alone(world, capsys):
+    gog = world([_with_photo()], {"people/c1": _contact(org="Springfield")})
+    push.main(["google", "--field", "company", "--apply"])
+    assert gog.uploads == []
+    assert _client(gog) == {push.COMPANY_KEY: "Springfield, Lakeside"}
+
+
+def test_the_same_picture_already_in_google_is_only_marked(world, mocker, capsys):
+    fetch = mocker.patch("people_sync.photos.fetch_url_photo", return_value=IMAGE)
+    book = {"people/c1": _contact(org="Springfield, Lakeside", photos=[OWN_WITH_URL])}
+    gog = world([_with_photo()], book)
+    push.main(["google", "--apply"])
+    out = capsys.readouterr().out
+    assert gog.uploads == [] and _client(gog) == {push.PHOTO_KEY: SHA}
+    fetch.assert_called_once_with("https://lh3.googleusercontent.com/contacts/AAA=s0")
+    assert "photo: already in Google (mark only)" in out
+
+
+def test_a_different_picture_in_google_is_replaced(world, mocker, capsys):
+    mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"another image")
+    book = {"people/c1": _contact(org="Springfield, Lakeside", photos=[OWN_WITH_URL])}
+    gog = world([_with_photo()], book)
+    push.main(["google", "--apply"])
+    assert gog.uploads == ["people/c1"]
+
+
+def test_curly_and_straight_apostrophes_are_the_same_value(world, capsys):
+    gog = world([_row(circles='["Kim’s sister"]')], {"people/c1": _contact(org="Kim's Sister")})
+    push.main(["google", "--apply"])
+    assert _orgs(gog) == [("Kim’s sister", None)]
+
+
+def test_full_size_url():
+    assert push.full_size("https://x/contacts/AAA=s100") == "https://x/contacts/AAA=s0"
+    assert push.full_size("https://x/a-/BBB") == "https://x/a-/BBB=s0"

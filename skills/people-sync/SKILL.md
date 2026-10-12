@@ -262,7 +262,13 @@ people-sync push google --apply            # after the user approved the preview
   `push` wrote) is a `SKIP` naming it: record it in People, then rerun.
 - **Photo** = the `person_photos` row `people.contact_photo_id` names (set it to one
   of the person's own live photos when the user picks their contact picture).
-  No contact picture = Google's photo is left alone.
+  No contact picture = Google's photo is left alone. `people-sync photos pick`
+  (dry run, then `--apply`) fills missing ones: the photo already on the Google
+  contact, else the first source in `--order` (default Instagram, the person's
+  Google profile picture, then the other platforms); a pick never replaces one.
+  A picture Google already shows is only marked by the push, never re-uploaded.
+
+`--field company` / `--field photo` limits a push to one field.
 
 The preview prints `PUSH <name> (<id>) -> <resource>` with `company: old -> new`
 and `photo: yes (will upload)`. Apply uploads photos, then writes each contact in

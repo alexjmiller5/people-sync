@@ -69,7 +69,8 @@ uv run python -m people_sync <command>
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
 | `port google [--person <id> ...] [--apply]` | Previews, then creates, a Google contact for every person with an Apple Contacts card and no Google contact: reviewed People name, typed phones, emails, birthday; read back, recorded and linked |
-| `push google [--person <id> ...] [--apply]` | Previews, then writes, People's company (the person's circles) and chosen contact photo onto every linked Google contact, one way; a Google value People does not hold is never overwritten |
+| `photos pick [--order <sources>] [--person <id> ...] [--apply]` | Gives every Google-linked person without a contact picture one: the photo already on their Google contact, else the first source in the order (default: Instagram, their Google profile picture, then the other platforms) |
+| `push google [--person <id> ...] [--field company\|photo] [--apply]` | Previews, then writes, People's company (the person's circles) and chosen contact photo onto every linked Google contact, one way; a Google value People does not hold is never overwritten |
 | `comm import <source\|all> [--full] [--store <db\|db.gz>] [--instance <label>]` | Appends new metadata-only communication events (Apple Messages, Apple calls, WhatsApp messages and calls) to their soma streams and records the run in `communication_imports`; `--store` reads a retained backup |
 | `comm refresh [--local]` | Recomputes `communication_summaries` (one row per person and channel) from the streams, or from the local mirror when the hub is unreachable |
 | `comm coverage` | Prints the import runs and how many events wait in the local outbox |
@@ -134,8 +135,11 @@ same for people already in Google whose contact shows only the default photo.
   `person_employments` company/title, or a value this command wrote earlier is a
   `SKIP` naming the value: record it in People first.
 - **Photo** = the `person_photos` row `people.contact_photo_id` names, uploaded
-  through `updateContactPhoto` and read back. A person without one keeps whatever
-  photo Google has.
+  through `updateContactPhoto` and read back. A picture Google already shows (the same
+  bytes at full size) is only marked. A person without one keeps whatever photo
+  Google has; `photos pick` fills the gaps by source order.
+
+`--field company` or `--field photo` limits a run to one field.
 
 What it wrote is marked in the contact's `clientData` (`people-sync.company`, and
 `people-sync.photo` = the picture's sha256), so a rerun writes only what changed in
