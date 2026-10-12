@@ -537,8 +537,10 @@ removal. Unsupported and partial batches cannot print success.
 `port.py` reads each candidate's linked Apple cards through
 `comm.read_address_books` (the same local + `PEOPLE_SYNC_ADDRESSBOOK_HOST` reader
 comm uses) with `_CARD_SQL`, which returns the values written, the org/title and
-nickname text the preview shows as context, and presence flags for the note,
-postal addresses and photo. Contact
+nickname text the preview shows as context, presence flags for the note and
+postal addresses, and the image blobs as hex (`card_photo` decodes Core Data's marker:
+0x01 inline bytes, 0x02 an `_EXTERNAL_DATA` file name that `comm.read_external_data`
+reads locally or over the same ssh host). Contact
 values stay in memory: tests assert canary numbers, emails and birthdays never
 reach stdout, ledger rows or provenance. The written name is always the People
 row's parts (`name_parts`); Apple name fields are only compared and flagged.
@@ -556,6 +558,14 @@ person's Apple records is resumed, never re-created. A create that gog does not
 confirm stops the run naming the resource it may have made. `changes` treats
 `ported_from` as bookkeeping (`RAW_NOISE`), since the next Google ingest
 replaces that raw.
+
+Photos: after a verified link, `_put_photo` runs `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND`
+once per run (`functools.cache`), PATCHes `updateContactPhoto` with httpx and confirms
+with `gog contacts raw` that a non-default CONTACT-source photo shows. A photo failure
+never undoes the port; it names the `--photos-only` retry. `run_photos` (`--photos-only`)
+reads ported people (`PORTED_SQL`), skips contacts that already have their own photo and
+writes nothing to soma. Tests assert the canary token and image bytes never reach stdout
+or inserted rows.
 
 ## Updates to known contacts
 

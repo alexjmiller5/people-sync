@@ -21,6 +21,7 @@ events the hub has not taken yet, the per-source checkpoint, and the source of
 """
 
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -1254,28 +1255,61 @@ def read_address_books(sql: str) -> tuple[list[dict], list[str]]:
                 read.append("local")
         except sqlite3.Error:
             continue
-    host = os.environ.get(ADDRESSBOOK_HOST_ENV)
-    if host:
-        script = (
-            'for db in "$HOME"/Library/Application\\ Support/AddressBook/Sources/*/'
-            "AddressBook-v22.abcddb; do\n"
-            f"  sqlite3 -json \"file:$db?mode=ro\" <<'SQL'\n{sql};\nSQL\ndone\n"
-        )
+    out = _on_book_host(
+        'for db in "$HOME"/Library/Application\\ Support/AddressBook/Sources/*/'
+        "AddressBook-v22.abcddb; do\n"
+        f"  sqlite3 -json \"file:$db?mode=ro\" <<'SQL'\n{sql};\nSQL\ndone\n"
+    )
+    if out is not None:
         try:
-            proc = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "sh", "-s"],
-                input=script,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            if proc.returncode == 0:
-                for value in _json_values(proc.stdout):
-                    rows += value
-                read.append("remote")
-        except (OSError, subprocess.TimeoutExpired, ValueError):
+            for value in _json_values(out):
+                rows += value
+            read.append("remote")
+        except ValueError:
             pass
     return rows, read
+
+
+def _on_book_host(script: str) -> str | None:
+    """stdout of a shell `script` run on PEOPLE_SYNC_ADDRESSBOOK_HOST, or None when the
+    host is unset, unreachable or the script fails."""
+    host = os.environ.get(ADDRESSBOOK_HOST_ENV)
+    if not host:
+        return None
+    try:
+        proc = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "sh", "-s"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+_EXTERNAL_NAME = re.compile(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}")
+
+
+def read_external_data(name: str) -> bytes | None:
+    """A file Core Data keeps beside an address book instead of inline (a large contact
+    image), by its UUID name, from this Mac's books or the book host's. In memory only."""
+    if not _EXTERNAL_NAME.fullmatch(name):
+        return None
+    for path in sources._db_paths():
+        file = Path(path).parent / ".AddressBook-v22_SUPPORT" / "_EXTERNAL_DATA" / name
+        if file.is_file():
+            return file.read_bytes()
+    out = _on_book_host(
+        'for f in "$HOME"/Library/Application\\ Support/AddressBook/Sources/*/'
+        f".AddressBook-v22_SUPPORT/_EXTERNAL_DATA/{name}; do\n"
+        '  if [ -f "$f" ]; then base64 < "$f"; exit 0; fi\ndone\nexit 1\n'
+    )
+    try:
+        return base64.b64decode(out or "") or None
+    except ValueError:
+        return None
 
 
 def address_book() -> tuple[list[dict], list[str]]:

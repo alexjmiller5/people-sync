@@ -6,8 +6,8 @@ one. Each linked Apple card is read from the address books (this Mac's and, with
 PEOPLE_SYNC_ADDRESSBOOK_HOST, another Mac's over ssh) and held in memory only: phone
 numbers, emails and the birthday never reach soma, a log, a capture or stdout. The name
 written is the reviewed one in `people`, never the Apple name fields, which often carry
-context ("X's Friend", a role). Org, notes, nickname, addresses and the photo stay out
-of Google and are listed as skipped.
+context ("X's Friend", a role). Org, notes, nickname and addresses stay out of Google
+and are listed as skipped.
 
 Dry run by default. `--apply` creates one contact per People API batch call (gog
 documents no input/output order inside a batch), records `google_contacts:<resource>`
@@ -15,15 +15,26 @@ in the ledger right away (pending, raw = the Apple record ids it was ported from
 an imported_from edge from each), reads the contact back, and links it through
 `reconcile link` only when the read-back matches. A rerun resumes a recorded but
 unlinked port instead of creating a duplicate. The Apple card is never touched.
+
+The card's photo (the full image, else the thumbnail; the larger across cards) follows
+the linked contact through the People API's updateContactPhoto, which gog does not wrap:
+PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND prints an OAuth access token with the contacts scope.
+Unset, the photo is listed as skipped. `--photos-only` gives already-ported people whose
+Google contact shows only the default photo their Apple photo. Image bytes stay in
+memory, like the contact values.
 """
 
 import argparse
+import base64
+import functools
 import json
 import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+
+import httpx
 
 from people_sync import comm, reconcile, somadata
 
@@ -36,6 +47,17 @@ WHERE p.deleted_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM person_accounts g WHERE g.person_id = p.id
                   AND g.platform = 'google_contacts' AND g.deleted_at IS NULL)
 ORDER BY p.name, p.id, a.source_id
+"""
+# --photos-only: people whose Apple card was already ported (or matched) to Google.
+PORTED_SQL = """
+SELECT p.id, p.name, a.source_id AS apple_id, g.source_id AS google_id
+FROM people p
+JOIN person_accounts a ON a.person_id = p.id AND a.platform = 'apple_contacts'
+  AND a.deleted_at IS NULL AND a.source_id IS NOT NULL
+JOIN person_accounts g ON g.person_id = p.id AND g.platform = 'google_contacts'
+  AND g.deleted_at IS NULL AND g.source_id IS NOT NULL
+WHERE p.deleted_at IS NULL
+ORDER BY p.name, p.id, a.source_id, g.source_id
 """
 
 _APPLE_ID = re.compile(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}:ABPerson")
@@ -57,7 +79,7 @@ SELECT r.ZUNIQUEID AS apple, r.ZFIRSTNAME AS first, r.ZMIDDLENAME AS middle,
   EXISTS (SELECT 1 FROM ZABCDNOTE WHERE ZCONTACT = r.Z_PK AND COALESCE(ZTEXT, '') <> '')
     AS has_note,
   (SELECT count(*) FROM ZABCDPOSTALADDRESS WHERE ZOWNER = r.Z_PK) AS addresses,
-  (r.ZIMAGEDATA IS NOT NULL OR r.ZTHUMBNAILIMAGEDATA IS NOT NULL) AS photo
+  nullif(hex(r.ZIMAGEDATA), '') AS image, nullif(hex(r.ZTHUMBNAILIMAGEDATA), '') AS thumbnail
 FROM ZABCDRECORD r WHERE r.ZUNIQUEID IN ({{ids}})
 """
 
@@ -81,12 +103,19 @@ NAME_KEYS = (
     ("last_name", "familyName"),
 )
 ASSERTED_BY = "script:people-sync port google"
+TOKEN_COMMAND_ENV = "PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND"
+PHOTO_API = "https://people.googleapis.com/v1/{}:updateContactPhoto"
+_RESOURCE = re.compile(r"people/c[0-9A-Za-z_-]+")
 
 
 class GogError(RuntimeError):
     def __init__(self, what: str, resource: str | None = None):
         self.resource = resource
         super().__init__(what + (f" (it may have created {resource})" if resource else ""))
+
+
+class PhotoError(RuntimeError):
+    """A photo that was not set; the message names no token, value or image byte."""
 
 
 def phone_type(label: str | None) -> tuple[str, bool]:
@@ -113,6 +142,28 @@ def read_cards(apple_ids: list[str]) -> tuple[list[dict], list[str]]:
     if not ids:
         return [], []
     return comm.read_address_books(_CARD_SQL.format(ids=",".join(f"'{i}'" for i in ids)))
+
+
+def card_photo(card: dict) -> tuple[bytes, bool] | None:
+    """(image bytes, is the full image) of a card: the full image, else the thumbnail.
+    Core Data puts a marker byte before each blob: 0x01 = the bytes follow inline,
+    0x02 = they live in an external file named by the NUL-terminated UUID that follows."""
+    for key, full in (("image", True), ("thumbnail", False)):
+        blob = bytes.fromhex(card.get(key) or "")
+        if blob[:1] == b"\x01" and len(blob) > 1:
+            return blob[1:], full
+        if blob[:1] == b"\x02":
+            data = comm.read_external_data(blob[1:].split(b"\0")[0].decode("ascii", "replace"))
+            if data:
+                return data, full
+    return None
+
+
+def _pick_photo(cards: list[dict]) -> tuple[bool, bytes | None]:
+    """(any card has a photo, the bytes to upload): full images first, then the larger."""
+    photos = [p for p in map(card_photo, cards) if p]
+    best = max(photos, key=lambda p: (p[1], len(p[0])))[0] if photos else None
+    return any(c.get("image") or c.get("thumbnail") for c in cards), best
 
 
 def name_parts(person: dict, cards: list[dict]) -> tuple[dict, list[str]]:
@@ -145,6 +196,7 @@ class Plan:
     body: dict = field(default_factory=dict)
     phone_labels: list[str] = field(default_factory=list)
     photo: bool = False
+    image: bytes | None = field(default=None, repr=False)
     flags: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     skip: str | None = None
@@ -230,7 +282,7 @@ def plan_person(rows: list[dict], cards: list[dict], books: list[str] = ()) -> P
         plan.body["birthdays"] = [{"date": date}]
     if conflict:
         plan.flags.append("the Apple cards disagree on the birthday; none is written")
-    plan.photo = any(c.get("photo") for c in found)
+    plan.photo, plan.image = _pick_photo(found)
     org = _distinct(found, "org", "title")
     if org:
         plan.skipped.append(f"org/title {', '.join(map(repr, org))} (context stays in People)")
@@ -243,8 +295,6 @@ def plan_person(rows: list[dict], cards: list[dict], books: list[str] = ()) -> P
     if addresses:
         noun = "address" if addresses == 1 else "addresses"
         plan.skipped.append(f"{addresses} postal {noun} (not ported; add in Google by hand)")
-    if plan.photo:
-        plan.skipped.append("photo (not ported; add in Google by hand)")
     return plan
 
 
@@ -296,6 +346,80 @@ def verify(body: dict, person: dict) -> list[str]:
     if got != [b["date"] for b in body.get("birthdays") or []]:
         problems.append("birthday")
     return problems
+
+
+def own_photo(person: dict) -> bool:
+    """A photo set on the contact itself, not Google's generated default."""
+    return any(
+        not p.get("default")
+        and ((p.get("metadata") or {}).get("source") or {}).get("type") == "CONTACT"
+        for p in person.get("photos") or []
+    )
+
+
+def google_token() -> str:
+    """Run PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND; its stderr passes through, its stdout (the
+    token) is never echoed or named in an error."""
+    command = os.environ.get(TOKEN_COMMAND_ENV)
+    if not command:
+        raise PhotoError(f"{TOKEN_COMMAND_ENV} is not set")
+    try:
+        proc = subprocess.run(["sh", "-c", command], stdout=subprocess.PIPE, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise PhotoError(f"{TOKEN_COMMAND_ENV} timed out") from None
+    if proc.returncode != 0:
+        raise PhotoError(f"{TOKEN_COMMAND_ENV} failed")
+    token = proc.stdout.strip()
+    if not token:
+        raise PhotoError(f"{TOKEN_COMMAND_ENV} printed nothing")
+    return token
+
+
+def upload_photo(resource: str, image: bytes, token: str) -> None:
+    """Set the contact's photo, then read it back through gog: done only when a
+    non-default contact photo shows."""
+    if not _RESOURCE.fullmatch(resource):
+        raise PhotoError(f"{resource!r} is not a contact resource")
+    try:
+        resp = httpx.patch(
+            PHOTO_API.format(resource),
+            headers={"Authorization": f"Bearer {token}"},
+            json={"photoBytes": base64.b64encode(image).decode(), "personFields": "photos"},
+            timeout=60,
+        )
+    except httpx.HTTPError as exc:
+        raise PhotoError(f"updateContactPhoto failed ({type(exc).__name__})") from None
+    if resp.status_code != 200:
+        try:
+            status = resp.json()["error"]["status"]
+        except (ValueError, KeyError, TypeError):
+            status = ""
+        raise PhotoError(f"updateContactPhoto returned HTTP {resp.status_code} {status}".rstrip())
+    if not own_photo(json.loads(_gog(["contacts", "raw", resource]))):
+        raise PhotoError("the read-back shows only the default photo")
+
+
+def _photo_status(photo: bool, image: bytes | None) -> str:
+    if not photo:
+        return "no"
+    if image is None:
+        return "skipped (the Apple image could not be read; add it in Google by hand)"
+    if not os.environ.get(TOKEN_COMMAND_ENV):
+        return f"skipped ({TOKEN_COMMAND_ENV} is not set; add it in Google by hand)"
+    return "yes (will upload)"
+
+
+def _put_photo(person_id: str, resource: str, image: bytes, token) -> bool:
+    try:
+        upload_photo(resource, image, token())
+    except (PhotoError, GogError) as exc:
+        print(
+            f"  PHOTO FAILED {resource}: {exc}; retry with `people-sync port google "
+            f"--photos-only --person {person_id} --apply`"
+        )
+        return False
+    print(f"  PHOTO {resource}: uploaded and read back")
+    return True
 
 
 def _record_port(plan: Plan, resource: str) -> str:
@@ -376,14 +500,14 @@ def _show(plan: Plan) -> None:
     print(f"  phones: {len(plan.phone_labels)}{labels}")
     print(f"  emails: {len(plan.body.get('emailAddresses') or [])}")
     print(f"  birthday: {'yes' if plan.body.get('birthdays') else 'no'}")
-    print(f"  photo: {'yes' if plan.photo else 'no'}")
+    print(f"  photo: {_photo_status(plan.photo, plan.image)}")
     for flag in plan.flags:
         print(f"  flag: {flag}")
     for what in plan.skipped:
         print(f"  skip: {what}")
 
 
-def _apply(plan: Plan, resume: dict | None) -> None:
+def _apply(plan: Plan, resume: dict | None, token) -> None:
     if resume:
         resource, record_id = resume["source_id"], resume["id"]
         print(f"  resuming {resource}: created earlier, not linked yet")
@@ -408,6 +532,8 @@ def _apply(plan: Plan, resume: dict | None) -> None:
         return
     print(f"  CREATED {resource}: read back and verified")
     reconcile.link(plan.person_id, record_id, False, reconcile.Ops(apply=True))
+    if plan.image and os.environ.get(TOKEN_COMMAND_ENV):
+        _put_photo(plan.person_id, resource, plan.image, token)
 
 
 def run(people: list[str], apply: bool) -> None:
@@ -420,6 +546,7 @@ def run(people: list[str], apply: bool) -> None:
     cards, books = read_cards([r["apple_id"] for r in rows])
     print(f"address books read: {', '.join(books) or 'none'}")
     resumable = _resumable() if by_person else {}
+    token = functools.cache(google_token)
     ported = skipped = 0
     for person_rows in by_person.values():
         plan = plan_person(person_rows, cards, books)
@@ -432,7 +559,7 @@ def run(people: list[str], apply: bool) -> None:
         resume = next((resumable[r] for r in plan.record_ids if r in resumable), None)
         if apply:
             try:
-                _apply(plan, resume)
+                _apply(plan, resume, token)
             except GogError as exc:
                 sys.exit(f"{plan.name} ({plan.person_id}): {exc}; inspect Google before rerunning")
         elif resume:
@@ -441,6 +568,63 @@ def run(people: list[str], apply: bool) -> None:
             )
     verb = "ported" if apply else "to port"
     print(f"\n{ported} {verb}, {skipped} skipped")
+
+
+def run_photos(people: list[str], apply: bool) -> None:
+    """Apple card photos onto already-ported people's Google contacts that show only the
+    default photo. Nothing is recorded in soma."""
+    if apply and not os.environ.get(TOKEN_COMMAND_ENV):
+        sys.exit(f"{TOKEN_COMMAND_ENV} is not set: nothing can upload a photo")
+    rows = somadata.sql(PORTED_SQL)
+    if people:
+        rows = [r for r in rows if r["id"] in people]
+    by_person: dict[str, list[dict]] = {}
+    for row in rows:
+        by_person.setdefault(row["id"], []).append(row)
+    cards, books = read_cards(list(dict.fromkeys(r["apple_id"] for r in rows)))
+    print(f"address books read: {', '.join(books) or 'none'}")
+    token = functools.cache(google_token)
+    todo = present = none = unread = 0
+    for person_rows in by_person.values():
+        who = f"{person_rows[0]['name']} ({person_rows[0]['id']})"
+        apple = set(r["apple_id"] for r in person_rows)
+        found = [c for c in cards if c["apple"] in apple]
+        if len(found) < len(apple):
+            unread += 1
+            read = ", ".join(books) or "none"
+            print(
+                f"SKIP {who}: {len(apple) - len(found)} of {len(apple)} Apple cards "
+                f"not in the books read ({read})"
+            )
+            continue
+        photo, image = _pick_photo(found)
+        if not photo:
+            none += 1
+            continue
+        for resource in dict.fromkeys(r["google_id"] for r in person_rows):
+            try:
+                has_own = own_photo(json.loads(_gog(["contacts", "raw", resource])))
+            except GogError as exc:
+                unread += 1
+                print(f"SKIP {who} -> {resource}: {exc}")
+                continue
+            if has_own:
+                present += 1
+                print(f"SKIP {who} -> {resource}: Google already has its own photo")
+                continue
+            status = _photo_status(photo, image)
+            print(f"PHOTO {who} -> {resource}: {status}")
+            if status.startswith("yes"):
+                if not apply:
+                    todo += 1
+                elif _put_photo(person_rows[0]["id"], resource, image, token):
+                    todo += 1
+    verb = "uploaded" if apply else "to upload"
+    tail = f", {unread} unreadable" if unread else ""
+    print(
+        f"\n{todo} photo{'' if todo == 1 else 's'} {verb}, {present} already in Google, "
+        f"{none} without an Apple photo{tail}"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -456,5 +640,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--apply", action="store_true", help="create, verify and link (default: preview)"
     )
+    parser.add_argument(
+        "--photos-only",
+        action="store_true",
+        help="only copy Apple card photos to ported people whose Google contact shows "
+        "the default photo",
+    )
     args = parser.parse_args(argv)
-    run(args.person, args.apply)
+    (run_photos if args.photos_only else run)(args.person, args.apply)

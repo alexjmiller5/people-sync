@@ -2,12 +2,15 @@
 book or account. The canary values below must never reach stdout, the ledger or the
 provenance edge."""
 
+import base64
 import json
 import re
+import subprocess
 
+import httpx
 import pytest
 
-from people_sync import port
+from people_sync import comm, port
 
 APPLE_A = "AAAAAAAA-0000-0000-0000-000000000001:ABPerson"
 APPLE_B = "BBBBBBBB-0000-0000-0000-000000000002:ABPerson"
@@ -17,6 +20,23 @@ CANARY_PHONE_2 = "5550107788"  # the same number without its country code
 CANARY_OTHER = "+44 20 7946 0999"
 CANARY_EMAIL = "canary.mail@example.org"
 CANARY_BIRTHDAY = "1991-07-14"
+IMAGE = b"\xff\xd8\xff synthetic full image"
+THUMB = b"\xff\xd8\xff synthetic thumbnail, larger than the full image"
+EXT_REF = "DDDDDDDD-0000-0000-0000-000000000004"
+TOKEN = "ya29.canary-token"
+API = "https://people.googleapis.com/v1/"
+DEFAULT_PHOTO = {"default": True, "metadata": {"source": {"type": "CONTACT"}}}
+OWN_PHOTO = {"metadata": {"source": {"type": "CONTACT"}, "primary": True}}
+
+
+def _inline(data: bytes) -> str:
+    """A Core Data blob as `hex()` returns it: marker 0x01, then the bytes."""
+    return ("01" + data.hex()).upper()
+
+
+def _external(name: str) -> str:
+    """Marker 0x02, then the external file's name, NUL-terminated."""
+    return (b"\x02" + name.encode() + b"\x00").hex().upper()
 
 
 def _card(apple=APPLE_A, **over):
@@ -33,7 +53,8 @@ def _card(apple=APPLE_A, **over):
         "nick": None,
         "has_note": 0,
         "addresses": 0,
-        "photo": 0,
+        "image": None,
+        "thumbnail": None,
     }
     card.update(over)
     return card
@@ -164,7 +185,14 @@ def test_unknown_label_is_assumed_mobile():
 
 
 def test_body_never_carries_context_fields():
-    card = _card(org="Sam's friend", title="Chef", nick="Q", has_note=1, addresses=2, photo=1)
+    card = _card(
+        org="Sam's friend",
+        title="Chef",
+        nick="Q",
+        has_note=1,
+        addresses=2,
+        image=_inline(IMAGE),
+    )
     second = _card(APPLE_B, org="Sam's friend")
     plan = port.plan_person([_candidate(), _candidate(apple=APPLE_B)], [card, second])
     assert set(plan.body) <= {"names", "phoneNumbers", "emailAddresses", "birthdays"}
@@ -175,7 +203,8 @@ def test_body_never_carries_context_fields():
     assert any("note" in s for s in plan.skipped)
     assert "nickname 'Q' (People holds nicknames)" in plan.skipped
     assert any("2 postal addresses" in s for s in plan.skipped)
-    assert any("photo" in s for s in plan.skipped)
+    # the photo is not a body field: it is uploaded separately after the create
+    assert not any("photo" in s for s in plan.skipped) and plan.image == IMAGE
 
 
 def test_a_missing_card_skips_the_person():
@@ -217,6 +246,7 @@ class Gog:
 
     def __init__(self, readback_edit=None, fail_create=False):
         self.created: list[dict] = []
+        self.photos: dict[str, list[dict]] = {}
         self.calls: list[list[str]] = []
         self.readback_edit = readback_edit
         self.fail_create = fail_create
@@ -255,6 +285,7 @@ class Gog:
                 )
             for phone in person.get("phoneNumbers", []):
                 phone["formattedType"] = phone["type"].capitalize()
+            person["photos"] = self.photos.get(args[2], [DEFAULT_PHOTO])
             if self.readback_edit:
                 self.readback_edit(person)
             return json.dumps(person)
@@ -262,7 +293,9 @@ class Gog:
 
 
 @pytest.fixture
-def world(mocker):
+def world(mocker, monkeypatch):
+    monkeypatch.delenv(port.TOKEN_COMMAND_ENV, raising=False)
+
     def make(candidates, cards, ledger=(), gog=None, books=("local", "remote")):
         estate = Estate(candidates, ledger)
         gog = gog or Gog()
@@ -277,7 +310,18 @@ def world(mocker):
     return make
 
 
-CANARIES = (CANARY_PHONE, CANARY_PHONE_2, "0107788", CANARY_EMAIL, CANARY_BIRTHDAY, "1991")
+CANARIES = (
+    CANARY_PHONE,
+    CANARY_PHONE_2,
+    "0107788",
+    CANARY_EMAIL,
+    CANARY_BIRTHDAY,
+    "1991",
+    TOKEN,
+    base64.b64encode(IMAGE).decode(),
+    IMAGE.hex(),
+    "synthetic full image",
+)
 
 
 def _assert_no_canary(text: str):
@@ -438,8 +482,16 @@ def test_card_sql_reads_a_synthetic_book(tmp_path, mocker, monkeypatch):
     a, b = by_id[APPLE_A], by_id[APPLE_B]
     assert json.loads(a["phones"]) == [{"value": CANARY_PHONE, "label": "_$!<Mobile>!$_"}]
     assert a["birthday"] == "1991-07-14" and b["birthday"] == "--07-14"
-    assert (a["org"], a["has_note"], a["addresses"], a["photo"]) == ("Acme", 1, 1, 1)
-    assert (b["org"], b["has_note"], b["addresses"], b["photo"]) == (None, 0, 0, 0)
+    assert (a["org"], a["has_note"], a["addresses"]) == ("Acme", 1, 1)
+    # image blobs arrive as hex, marker byte included; decoding is card_photo's job
+    assert (a["image"], a["thumbnail"]) == (None, "01FF")
+    assert (b["org"], b["has_note"], b["addresses"], b["image"], b["thumbnail"]) == (
+        None,
+        0,
+        0,
+        None,
+        None,
+    )
     assert "canary club" not in json.dumps(cards)
     assert json.loads(b["emails"]) == [{"value": CANARY_EMAIL, "label": None}]
 
@@ -481,3 +533,286 @@ def test_birthdays_agree_when_only_the_year_is_unknown():
     cards[0]["birthday"] = "--07-15"
     plan = port.plan_person([_candidate(), _candidate(apple=APPLE_B)], cards)
     assert "birthdays" not in plan.body and any("disagree" in f for f in plan.flags)
+
+
+# --- photos -------------------------------------------------------------------
+
+
+def test_card_photo_prefers_the_full_image_over_a_larger_thumbnail():
+    card = _card(image=_inline(IMAGE), thumbnail=_inline(THUMB))
+    assert port.card_photo(card) == (IMAGE, True)
+
+
+def test_card_photo_falls_back_to_the_thumbnail():
+    assert port.card_photo(_card(thumbnail=_inline(THUMB))) == (THUMB, False)
+
+
+def test_card_photo_reads_an_external_file(mocker):
+    read = mocker.patch("people_sync.comm.read_external_data", return_value=IMAGE)
+    assert port.card_photo(_card(image=_external(EXT_REF))) == (IMAGE, True)
+    read.assert_called_once_with(EXT_REF)
+
+
+def test_an_unreadable_external_image_falls_back_to_the_thumbnail(mocker):
+    mocker.patch("people_sync.comm.read_external_data", return_value=None)
+    card = _card(image=_external(EXT_REF), thumbnail=_inline(THUMB))
+    assert port.card_photo(card) == (THUMB, False)
+
+
+def test_no_photo_and_an_unknown_storage_marker_read_as_none():
+    assert port.card_photo(_card()) is None
+    assert port.card_photo(_card(image="FFD8FF00")) is None
+
+
+def test_two_cards_take_the_full_image_then_the_larger():
+    rows = [_candidate(), _candidate(apple=APPLE_B)]
+    bigger = IMAGE + b" and more"
+    cards = [_card(image=_inline(IMAGE)), _card(APPLE_B, image=_inline(bigger))]
+    assert port.plan_person(rows, cards).image == bigger
+    cards = [_card(thumbnail=_inline(THUMB)), _card(APPLE_B, image=_inline(IMAGE))]
+    assert port.plan_person(rows, cards).image == IMAGE
+
+
+def test_a_photo_that_cannot_be_read_is_skipped_with_the_reason(world, capsys, mocker):
+    mocker.patch("people_sync.comm.read_external_data", return_value=None)
+    world([_candidate()], [_card(image=_external(EXT_REF))])
+    port.main(["google"])
+    assert "photo: skipped (the Apple image could not be read" in capsys.readouterr().out
+
+
+def test_dry_run_says_the_photo_will_upload_when_a_token_command_is_set(world, capsys, monkeypatch):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, "exit 7")  # a dry run never runs it
+    world([_candidate()], [_card(image=_inline(IMAGE))])
+    port.main(["google"])
+    out = capsys.readouterr().out
+    assert "photo: yes (will upload)" in out
+    _assert_no_canary(out)
+
+
+def test_without_a_token_command_the_photo_is_skipped_and_says_why(world, capsys):
+    world([_candidate()], [_card(image=_inline(IMAGE))])
+    port.main(["google"])
+    assert f"photo: skipped ({port.TOKEN_COMMAND_ENV} is not set" in capsys.readouterr().out
+
+
+class PhotoApi:
+    """httpx.patch double for updateContactPhoto; a 200 sets the contact's own photo."""
+
+    def __init__(self, gog, status=200, sets_photo=True):
+        self.gog, self.status, self.sets_photo = gog, status, sets_photo
+        self.calls: list[dict] = []
+
+    def __call__(self, url, headers=None, json=None, timeout=None):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        resource = url.removeprefix(API).removesuffix(":updateContactPhoto")
+        if self.status == 200 and self.sets_photo:
+            self.gog.photos[resource] = [OWN_PHOTO, DEFAULT_PHOTO | {"metadata": {}}]
+        body = {"person": {}} if self.status == 200 else {"error": {"status": "INVALID"}}
+        return httpx.Response(self.status, json=body, request=httpx.Request("PATCH", url))
+
+
+@pytest.fixture
+def photo_api(mocker):
+    def make(gog, **kw):
+        api = PhotoApi(gog, **kw)
+        mocker.patch("people_sync.port.httpx.patch", side_effect=api)
+        return api
+
+    return make
+
+
+def test_apply_uploads_the_photo_after_linking_and_reads_it_back(
+    world, photo_api, capsys, monkeypatch
+):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf '%s\\n' {TOKEN}")
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
+    api = photo_api(gog)
+    order = []
+    link.side_effect = lambda *a, **k: order.append("link")
+    api_call = api.__call__
+
+    def patch(*a, **k):
+        order.append("photo")
+        return api_call(*a, **k)
+
+    port.httpx.patch.side_effect = patch
+    port.main(["google", "--apply"])
+    out = capsys.readouterr().out
+    (call,) = api.calls
+    assert call["url"] == API + "people/c1:updateContactPhoto"
+    assert call["headers"] == {"Authorization": f"Bearer {TOKEN}"}
+    assert base64.b64decode(call["json"]["photoBytes"]) == IMAGE
+    assert call["json"]["personFields"] == "photos"
+    assert order == ["link", "photo"]
+    assert "PHOTO people/c1: uploaded and read back" in out
+    _assert_no_canary(out)
+    _assert_no_canary(json.dumps(estate.inserted))
+
+
+def test_a_refused_upload_keeps_the_link_and_says_how_to_retry(
+    world, photo_api, capsys, monkeypatch
+):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
+    photo_api(gog, status=400)
+    port.main(["google", "--apply"])
+    out = capsys.readouterr().out
+    assert "PHOTO FAILED people/c1: updateContactPhoto returned HTTP 400 INVALID" in out
+    assert "--photos-only --person p1 --apply" in out
+    link.assert_called_once()
+    _assert_no_canary(out)
+
+
+def test_an_upload_the_read_back_does_not_show_is_reported(world, photo_api, capsys, monkeypatch):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
+    photo_api(gog, sets_photo=False)
+    port.main(["google", "--apply"])
+    assert "PHOTO FAILED people/c1: the read-back shows only the default photo" in (
+        capsys.readouterr().out
+    )
+
+
+def test_a_failing_token_command_never_calls_the_api(world, photo_api, capsys, monkeypatch):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"echo {TOKEN}; exit 3")
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
+    api = photo_api(gog)
+    port.main(["google", "--apply"])
+    out = capsys.readouterr().out
+    assert f"PHOTO FAILED people/c1: {port.TOKEN_COMMAND_ENV} failed" in out
+    assert api.calls == [] and TOKEN not in out
+    link.assert_called_once()
+
+
+def test_apply_without_a_token_command_ports_without_the_photo(world, photo_api, capsys):
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
+    api = photo_api(gog)
+    port.main(["google", "--apply"])
+    assert api.calls == [] and "PHOTO" not in capsys.readouterr().out
+    link.assert_called_once()
+
+
+def test_google_token_strips_output_and_never_names_it(monkeypatch):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf '  {TOKEN} \\n'")
+    assert port.google_token() == TOKEN
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, "printf ''")
+    with pytest.raises(port.PhotoError, match="printed nothing"):
+        port.google_token()
+    monkeypatch.delenv(port.TOKEN_COMMAND_ENV)
+    with pytest.raises(port.PhotoError, match="is not set"):
+        port.google_token()
+
+
+def _ported(person, apple, google, **names):
+    return _candidate(person, apple, **names) | {"google_id": google}
+
+
+def test_photos_only_uploads_where_google_shows_only_the_default_photo(
+    world, photo_api, capsys, monkeypatch
+):
+    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
+    gog = Gog()
+    gog.created += [{"names": [{"givenName": "x"}]}] * 3
+    gog.photos["people/c2"] = [OWN_PHOTO]
+    ira = {"name": "Ira Vance", "first_name": "Ira", "last_name": "Vance"}
+    candidates = [
+        _ported("p1", APPLE_A, "people/c1"),
+        _ported("p2", APPLE_B, "people/c2", **ira),
+        _ported("p3", APPLE_C, "people/c3", name="Lux", first_name="Lux", last_name=None),
+    ]
+    cards = [
+        _card(image=_inline(IMAGE)),
+        _card(APPLE_B, image=_inline(IMAGE)),
+        _card(APPLE_C),
+    ]
+    estate, gog, link = world(candidates, cards, gog=gog)
+    api = photo_api(gog)
+    port.main(["google", "--photos-only"])
+    out = capsys.readouterr().out
+    assert "PHOTO Nova Quill (p1) -> people/c1: yes (will upload)" in out
+    assert "SKIP Ira Vance (p2) -> people/c2: Google already has its own photo" in out
+    assert "Lux" not in out
+    assert "1 photo to upload, 1 already in Google, 1 without an Apple photo" in out
+    assert api.calls == [] and estate.inserted == {}
+    port.main(["google", "--photos-only", "--apply"])
+    out = capsys.readouterr().out
+    assert [c["url"] for c in api.calls] == [API + "people/c1:updateContactPhoto"]
+    assert "PHOTO people/c1: uploaded and read back" in out
+    assert estate.inserted == {} and not link.called
+    _assert_no_canary(out)
+    port.main(["google", "--photos-only"])
+    assert "0 photos to upload, 2 already in Google" in capsys.readouterr().out
+
+
+def test_photos_only_apply_needs_the_token_command(world, photo_api, capsys):
+    gog = Gog()
+    gog.created.append({"names": [{"givenName": "x"}]})
+    world([_ported("p1", APPLE_A, "people/c1")], [_card(image=_inline(IMAGE))], gog=gog)
+    port.main(["google", "--photos-only"])
+    assert f"skipped ({port.TOKEN_COMMAND_ENV} is not set" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        port.main(["google", "--photos-only", "--apply"])
+    assert port.TOKEN_COMMAND_ENV in str(exc.value)
+
+
+def test_photos_only_respects_the_person_filter(world, photo_api, capsys):
+    gog = Gog()
+    gog.created += [{"names": [{"givenName": "x"}]}] * 2
+    ira = {"name": "Ira Vance", "first_name": "Ira", "last_name": "Vance"}
+    candidates = [_ported("p1", APPLE_A, "people/c1"), _ported("p2", APPLE_B, "people/c2", **ira)]
+    cards = [_card(image=_inline(IMAGE)), _card(APPLE_B, image=_inline(IMAGE))]
+    world(candidates, cards, gog=gog)
+    port.main(["google", "--photos-only", "--person", "p2"])
+    out = capsys.readouterr().out
+    assert "Ira Vance" in out and "Nova Quill" not in out
+
+
+# --- external image files -----------------------------------------------------
+
+
+def test_read_external_data_finds_the_file_beside_a_local_book(tmp_path, mocker, monkeypatch):
+    source = tmp_path / "Sources" / "S1"
+    external = source / ".AddressBook-v22_SUPPORT" / "_EXTERNAL_DATA"
+    external.mkdir(parents=True)
+    (external / EXT_REF).write_bytes(IMAGE)
+    mocker.patch(
+        "people_sync.sources._db_paths", return_value=[str(source / "AddressBook-v22.abcddb")]
+    )
+    monkeypatch.delenv(comm.ADDRESSBOOK_HOST_ENV, raising=False)
+    assert comm.read_external_data(EXT_REF) == IMAGE
+    assert comm.read_external_data("EEEEEEEE-0000-0000-0000-000000000005") is None
+
+
+def test_read_external_data_never_looks_up_a_name_that_is_not_a_uuid(mocker, monkeypatch):
+    monkeypatch.setenv(comm.ADDRESSBOOK_HOST_ENV, "other-mac")
+    paths = mocker.patch("people_sync.sources._db_paths", return_value=[])
+    run = mocker.patch("people_sync.comm.subprocess.run")
+    assert comm.read_external_data("../../secret") is None
+    assert not run.called and not paths.called
+
+
+def test_read_external_data_over_ssh_runs_a_script_that_finds_the_file(
+    tmp_path, mocker, monkeypatch
+):
+    """The remote script, captured from the ssh call and run here against a fake HOME."""
+    monkeypatch.setenv(comm.ADDRESSBOOK_HOST_ENV, "other-mac")
+    mocker.patch("people_sync.sources._db_paths", return_value=[])
+    external = (
+        tmp_path
+        / "Library/Application Support/AddressBook/Sources/S1"
+        / ".AddressBook-v22_SUPPORT/_EXTERNAL_DATA"
+    )
+    external.mkdir(parents=True)
+    (external / EXT_REF).write_bytes(IMAGE)
+    real_run = subprocess.run
+    seen = []
+
+    def ssh(argv, **kw):
+        seen.append(argv)
+        return real_run(["sh", "-s"], **kw, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+
+    mocker.patch("people_sync.comm.subprocess.run", side_effect=ssh)
+    assert comm.read_external_data(EXT_REF) == IMAGE
+    assert seen[0][:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    assert "other-mac" in seen[0]
+    assert comm.read_external_data("EEEEEEEE-0000-0000-0000-000000000005") is None

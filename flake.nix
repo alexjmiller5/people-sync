@@ -54,6 +54,7 @@
             PEOPLE_SYNC_SMS_CODE_COMMAND = cfg.smsCodeCommand;
             PEOPLE_SYNC_NOTION_PEOPLE_DS = cfg.notion.peopleDataSource;
             PEOPLE_SYNC_ADDRESSBOOK_HOST = cfg.addressBookHost;
+            PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND = cfg.googleTokenCommand;
             PEOPLE_SYNC_NOTION_RELATIONS =
               if cfg.notion.relations == { } then null else builtins.toJSON cfg.notion.relations;
           };
@@ -108,6 +109,11 @@
               default = null;
               example = "other-mac";
               description = "ssh host whose macOS address book `comm` and `port google` also read (read-only, in memory) to resolve communication participants and to read the Apple cards they port.";
+            };
+            googleTokenCommand = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Command printing a Google OAuth access token with the contacts scope; `port google` uses it to copy Apple card photos into Google (People API updateContactPhoto). Unset: photos are listed as skipped.";
             };
             notion.peopleDataSource = lib.mkOption {
               type = lib.types.nullOr lib.types.str;

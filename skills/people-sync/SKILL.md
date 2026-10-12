@@ -56,6 +56,7 @@ Environment variables, all optional except where a command needs them:
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND`, `PEOPLE_SYNC_EMAIL_CODE_COMMAND`, `PEOPLE_SYNC_SMS_CODE_COMMAND` | `login` | commands that print a login's credentials / one-time codes; unset = `login` only verifies an existing session |
 | `SOMA_COMM_HUB_TOKEN` | `comm import`, `comm refresh` only | the hub token comm's `soma` calls use instead of `SOMA_HUB_TOKEN`: it must batch-append to the four `comm_*` streams (`/v1/streams/<name>/batch`) and query them (`soma archive query --raw`), which today takes `full`; unset = `SOMA_HUB_TOKEN`, and a refused append leaves events in the local outbox while `refresh` uses the local mirror |
 | `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm`, `port google` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants and read the cards to port; unset = this Mac's address book only |
+| `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` | `port google` | a command that prints a Google OAuth access token with the contacts scope, used to copy the Apple card's photo into Google; unset = photos are listed as skipped |
 | `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map, `comm/comm.sqlite`) |
 
 The home-manager module (`homeModules.default`) turns these into options and
@@ -209,13 +210,14 @@ contact:
 people-sync port google                    # preview - always first, with the user
 people-sync port google --person <id> ...  # limit to some people (repeatable)
 people-sync port google --apply            # after the user approved the preview
+people-sync port google --photos-only      # ported people whose Google contact has only the default photo
 ```
 
 The preview prints, per person, the People id and the name parts that will be
 written (always the reviewed `people` name, never the Apple name fields), phone
-count and types, email count, birthday and photo yes/no, flags, and what stays
-out of Google; never a number, email or birthday. Go through every flag before
-`--apply`:
+count and types, email count, birthday yes/no, the photo (`yes (will upload)`,
+`skipped (<reason>)` or `no`), flags, and what stays out of Google; never a
+number, email, birthday or image. Go through every flag before `--apply`:
 
 - `Apple card name '...' differs from People` - the card's name fields often
   carry context ("X's Friend", a role): record it in People (circles,
@@ -226,15 +228,24 @@ out of Google; never a number, email or birthday. Go through every flag before
   wrong.
 - `assumed mobile` - the card gave no known label; personal numbers are
   mobiles, so confirm the exceptions.
-- `skip:` lines (org/title, nickname, note, postal addresses, photo) are not
+- `skip:` lines (org/title, nickname, note, postal addresses) are not
   written. The org/title and nickname text is shown: it is usually context
-  ("Y's friend"), so check People holds it. An address or photo the user wants
-  in Google is added there by hand.
+  ("Y's friend"), so check People holds it. An address the user wants in
+  Google is added there by hand.
+- `photo: skipped (...)` - the image could not be read, or
+  `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` is unset; add it in Google by hand or fix
+  the cause and run `--photos-only` later.
 
 A `SKIP` person has an unreadable card (the Mac holding it is asleep:
 `PEOPLE_SYNC_ADDRESSBOOK_HOST`) or nothing to port. `--apply` creates, reads
-back, records the `google_contacts` ledger row and links it; a rerun finds
-nothing to do or resumes a half-done port. The Apple card is never edited or
+back, records the `google_contacts` ledger row and links it, then uploads the
+card's photo (the full image, else the thumbnail; the larger of two cards) and
+reads it back; a rerun finds nothing to do or resumes a half-done port. A
+`PHOTO FAILED` line leaves the link in place and names the `--photos-only`
+rerun that retries it. `--photos-only` lists every ported person whose Apple
+card has a photo: `PHOTO ... yes (will upload)` where the Google contact shows
+only the default photo, `SKIP` where it already has its own; it writes nothing
+to soma. The Apple card is never edited or
 deleted; that is the user's call. The next `ingest google` refreshes the new
 record's `raw`.
 

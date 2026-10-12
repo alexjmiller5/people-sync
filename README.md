@@ -30,8 +30,11 @@ person in the loop.
 Runtime dependencies outside Python:
 
 - The `soma` CLI - the only write path to the people estate.
-- The `gog` CLI - Google People API access for `ingest google` and Google
-  photo fetches.
+- The `gog` CLI - Google People API access for `ingest google`, `port google`
+  and Google photo fetches.
+- For copying Apple card photos into Google, a command that prints a Google
+  OAuth access token with the contacts scope (`PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND`;
+  gog does not wrap the People API's `updateContactPhoto`).
 - macOS with Contacts data for `ingest apple` (reads the local AddressBook
   SQLite copies read-only).
 - A soma hub URL and a scoped file token for `photos store`.
@@ -104,10 +107,10 @@ books, plus `PEOPLE_SYNC_ADDRESSBOOK_HOST`'s over ssh, and held in memory: numbe
 emails and birthdays never reach soma, a capture or the output. The preview shows
 per person the People name parts to write, phone count and types (an unlabeled or
 custom-labeled number is written as `mobile` and shown as "assumed mobile"), email
-count, birthday and photo yes/no, flags (an Apple name that differs from People,
-name parts that do not spell the People name) and what stays out of Google (org,
-title, nickname, note, postal addresses, photo). A person whose cards are not all
-readable is skipped.
+count, birthday yes/no, the photo (`yes (will upload)`, `skipped (<reason>)` or `no`),
+flags (an Apple name that differs from People, name parts that do not spell the
+People name) and what stays out of Google (org, title, nickname, note, postal
+addresses). A person whose cards are not all readable is skipped.
 
 `--apply` creates one contact per People API batch call through `gog`, records
 `google_contacts:<resourceName>` as a pending ledger row whose `raw` is only
@@ -115,6 +118,14 @@ readable is skipped.
 from each Apple record, reads the contact back, and runs `reconcile link` only when
 name, phone count and types, emails and birthday match. A rerun resumes a recorded
 but unlinked port; nothing is created twice. Apple cards are never edited.
+
+After the link, the card's photo goes to the new contact through the People API's
+`updateContactPhoto` with the token `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` prints, and is
+read back through `gog`. The full image wins over the thumbnail, and the larger of two
+cards' images wins; an image Core Data keeps outside the database (a 0x02 marker naming
+a file under the book's `.AddressBook-v22_SUPPORT/_EXTERNAL_DATA/`) is read from the
+same local or ssh book. Image bytes stay in memory. `port google --photos-only` does the
+same for people already in Google whose contact shows only the default photo.
 
 The edges need `people_sync_records` among `provenance.from_kind`'s catalog options
 (from_ref = the ledger record id `<source>:<source_id>`); add it to your estate's
@@ -217,6 +228,7 @@ programs.people-sync = {
   notion.peopleDataSource = "<data_source_id>";
   notion.relations.Gifts = [ "<data_source_id>" "<relation property id>" ];
   addressBookHost = "other-mac";          # optional: resolve `comm` participants with that Mac's contacts too
+  googleTokenCommand = "my-google-token"; # optional: `port google` copies Apple photos; unset = skipped
 };
 ```
 
