@@ -60,6 +60,7 @@ uv run python -m people_sync <command>
 | `queue` | Prints the pending triage queue as JSON, suggestions first |
 | `new-person --name <name>` | Creates the soma `people` row; with a Notion People data source configured, a Notion stub page comes first and its id becomes the row id |
 | `photos store --person <id> --platform <p> --file <path>` | Stores a profile photo in R2 and appends a `person_photos` row, deduped by sha256 |
+| `photos rekey [--apply]` | Copies photos stored under a key a client cannot request (legacy `?`, `=`, quotes) to the safe key, verifies the sha256, and repoints their rows with provenance; dry run by default, the old object stays |
 | `login <platform>` | Signs the browser's profile into a platform at human pace (TOTP / SMS / mailed codes via the wired commands); idempotent |
 | `scrape <platform> [--max N]` | Visits pending and matched records' profile pages (paced, without a daily cap by default) and writes `people_sync_profiles` rows + pictures |
 | `list facebook` | Scrolls the friends list and gives the export's name-only records their profile handles (unique exact names only) |

@@ -20,7 +20,7 @@ product code never creates user tables or installs a schedule.
 ```
 src/people_sync/
   cli.py           argparse surface: ingest / match / queue / changes / new-person / scrape /
-                   login / photos store
+                   login / photos store / photos rekey
   somadata.py      the ONLY soma write path (shells out to the `soma` CLI)
   ledger.py        people_sync_records upserts, keyed <source>:<source_id>
   parsers.py       instagram / facebook / snapchat / linkedin export parsers
@@ -200,9 +200,14 @@ files; unavailable placeholders link to them. Already received permitted API
 input and collected DOM survive later failures with explicit failure metadata.
 Archive failure stops the run, including the coordinated queue. Unreceived
 responses and process death before retention remain outside this guarantee.
-Unsafe avatar record-key components use full SHA256; safe existing keys remain
-compatible, and invalid prior keys never satisfy the same-image reuse shortcut.
-Existing retained objects are never renamed or deleted.
+Avatar keys name the record by `photos.record_key`: the record id slugged to
+`[a-z0-9_-]` (`facebook:profile.php?id=1` -> `facebook_id_1`; nothing left -> its
+full SHA256), so every stored key is a plain path a client can request. A prior
+key failing `photos.safe_key` (URL syntax, quotes, escapes) never satisfies the
+same-image reuse shortcut. `photos rekey` copies a live legacy object to its safe
+key (sha256 verified before and after), then repoints `person_photos.r2_key` and
+`people_sync_profiles.avatar_r2_key` with `evidence_of` edges; retained objects are
+never renamed or deleted.
 Signed avatar URLs use a separate transient acquisition handoff after verified
 retention; they never enter the retained payload, parsed Profile or persisted
 rows. Ordinary/coordinated storage consumes that handoff; Partiful harvest

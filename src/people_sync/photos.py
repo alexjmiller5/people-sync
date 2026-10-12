@@ -2,21 +2,40 @@
 
 Only the hub URL and a scoped file token are needed. Photo history is
 append-only: identical bytes for a person are skipped, changed pictures
-get a new row. Existing object keys remain stable.
+get a new row. Every key is a plain path a client can request
+(`record_key`); `rekey` moves legacy keys that are not.
 """
 
 import base64
 import hashlib
 import json
 import os
+import re
 from urllib.parse import quote
 
 import httpx
 import structlog
 
-from people_sync import somadata, sources
+from people_sync import ledger, somadata, sources
 
 log = structlog.get_logger(__name__)
+
+
+def record_key(record_id: str) -> str:
+    """A ledger record's storage-key segment, [a-z0-9_-] only, so the stored key needs
+    no escaping anywhere ('facebook:profile.php?id=1' -> 'facebook_id_1')."""
+    slug = re.sub(r"profile\.php\?id=", "id_", record_id.lower())
+    slug = re.sub(r"[^a-z0-9_-]+", "_", slug).strip("_")
+    return slug or hashlib.sha256(record_id.encode()).hexdigest()
+
+
+def safe_key(key: str | None) -> bool:
+    """Whether a stored key is a plain path: no URL syntax, quote, escape or empty part."""
+    return (
+        bool(key)
+        and not re.search(r"[%\\?#='\"\x00-\x1f\x7f]", key)
+        and all(p not in {"", ".", ".."} for p in key.split("/"))
+    )
 
 
 def _headers() -> dict:
@@ -188,3 +207,98 @@ def fetch_apple_photo(source_id: str) -> bytes | None:
             "photo fetch failed", source="apple_contacts", index=-1, reason="no photo in vcard"
         )
     return photo
+
+
+# Every column holding a stored photo key, with the row id and the bytes' sha256.
+PHOTO_KEY_COLUMNS = (
+    ("person_photos", "id", "r2_key", "sha256"),
+    ("people_sync_profiles", "record_id", "avatar_r2_key", "avatar_sha256"),
+)
+
+
+def _safe_variant(key: str) -> str:
+    """The key `record_key` makes for a legacy one: '<folder>/<record>-<sha8>.<ext>'
+    with the record segment slugged, the content-hash suffix and extension kept."""
+    folder, _, name = key.rpartition("/")
+    stem, _, ext = name.rpartition(".")
+    record, _, sha8 = stem.rpartition("-")
+    return f"{folder}/{record_key(record)}-{sha8}.{ext}"
+
+
+def rekey(apply_writes: bool = False) -> dict:
+    """Move live photos whose key a client cannot request to the safe key: copy the
+    object through the file service, verify its sha256 before and after, then repoint
+    every live row with an `evidence_of` edge to the new object. Dry run by default;
+    idempotent. The old object stays: this client's file grant cannot delete."""
+    moves: dict[str, dict] = {}
+    for table, id_col, key_col, sha_col in PHOTO_KEY_COLUMNS:
+        rows = somadata.sql(
+            f"SELECT {id_col} AS id, {key_col} AS key, {sha_col} AS sha256 FROM {table} "
+            f"WHERE deleted_at IS NULL AND {key_col} IS NOT NULL"
+        )
+        for row in rows:
+            if safe_key(row["key"]):
+                continue
+            move = moves.setdefault(
+                row["key"],
+                {
+                    "from": row["key"],
+                    "to": _safe_variant(row["key"]),
+                    "sha256": row["sha256"],
+                    "rows": [],
+                },
+            )
+            if move["sha256"] != row["sha256"] or not safe_key(move["to"]):
+                raise ValueError(f"cannot rekey {row['key']!r}")
+            move["rows"].append({"table": table, "id": row["id"], "field": key_col})
+    if not apply_writes:
+        return {"applied": False, "moves": list(moves.values())}
+
+    for move in moves.values():
+        data = get_object(move["from"])
+        if hashlib.sha256(data).hexdigest() != move["sha256"]:
+            raise ValueError(f"{move['from']!r} does not match its sha256")
+        put_object(move["to"], data, content_type=f"image/{move['to'].rpartition('.')[2]}")
+        if hashlib.sha256(get_object(move["to"])).hexdigest() != move["sha256"]:
+            raise ValueError(f"{move['to']!r} did not read back")
+
+    # Edges first: a crash before the row update leaves the key unsafe, so a rerun
+    # copies again (same bytes) and only updates.
+    detail = json.dumps(
+        {"cue": f"safe photo key migration {somadata.now_iso()[:10]}", "confidence": "high"}
+    )
+    asserted_by = os.environ.get("PEOPLE_SYNC_ASSERTED_BY") or "script:people-sync photos rekey"
+    edges = [
+        {
+            "id": ledger.capture_edge_id(m["to"], r["table"], r["id"], "evidence_of", r["field"]),
+            "from_kind": "takeout",
+            "from_ref": m["to"],
+            "to_kind": r["table"],
+            "to_ref": r["id"],
+            "field": r["field"],
+            "rel": "evidence_of",
+            "detail": detail,
+            "asserted_by": asserted_by,
+        }
+        for m in moves.values()
+        for r in m["rows"]
+    ]
+    if edges:
+        have = {
+            e["id"]
+            for e in somadata.sql(
+                "SELECT id FROM provenance WHERE id IN "
+                f"({','.join(somadata.sq(e['id']) for e in edges)})"
+            )
+        }
+        somadata.insert("provenance", [e for e in edges if e["id"] not in have])
+    for table, id_col, key_col, _ in PHOTO_KEY_COLUMNS:
+        updates = {
+            r["id"]: {key_col: somadata.sq(m["to"])}
+            for m in moves.values()
+            for r in m["rows"]
+            if r["table"] == table
+        }
+        if updates:
+            ledger.batch_update(table, id_col, updates)
+    return {"applied": True, "moves": list(moves.values())}

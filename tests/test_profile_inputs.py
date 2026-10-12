@@ -355,31 +355,21 @@ def test_legacy_venmo_replay_keeps_join_date_out_of_birthday():
 
 
 @pytest.mark.parametrize(
-    "record_id",
-    ["spotify:example%20person", "spotify:bad%252fpath", "spotify:bad\\path", "spotify:bad\npath"],
+    "prior",
+    [
+        "photos/records/spotify/old%20key.jpg",
+        "photos/records/spotify/spotify_profile.php?id=1-abcd1234.jpg",
+        "photos/records/spotify/spotify_o'name-abcd1234.jpg",
+    ],
 )
-def test_unsafe_avatar_keys_are_opaque_and_invalid_prior_key_not_reused(mocker, record_id):
-    key = run._record_key(record_id)
-    assert key == hashlib.sha256(record_id.encode()).hexdigest()
+def test_an_avatar_key_a_client_cannot_request_is_never_reused(mocker, prior):
+    key = photos.record_key("spotify:example")
     mocker.patch.object(photos, "fetch_url_photo", return_value=b"image")
     put = mocker.patch.object(photos, "put_object")
     sha = hashlib.sha256(b"image").hexdigest()
-    new, _ = run._resolve_avatar(
-        None,
-        "spotify",
-        0,
-        key,
-        "https://example.test/a.jpg",
-        "photos/records/spotify/old%20key.jpg",
-        sha,
-    )
+    new, _ = run._resolve_avatar(None, "spotify", 0, key, "https://example.test/a.jpg", prior, sha)
     assert new == f"photos/records/spotify/{key}-{sha[:8]}.jpg"
     assert put.call_count == 1
-
-
-def test_safe_avatar_keys_stay_compatible():
-    assert run._record_key("instagram:example.person") == "instagram_example.person"
-    assert run._record_key("facebook:profile.php?id=123") == "facebook_profile.php?id=123"
 
 
 @pytest.fixture

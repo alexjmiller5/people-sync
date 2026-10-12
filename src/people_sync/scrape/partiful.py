@@ -323,7 +323,7 @@ def ingest_entry(entry: dict, browser=None, index: int = 0) -> str | None:
             browser,
             "partiful",
             index,
-            scrape_run._record_key(record.row_id),
+            photos.record_key(record.row_id),
             avatar_url or profile.avatar_url,
             None,
             None,

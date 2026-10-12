@@ -332,7 +332,8 @@ promoted only when its capture classified the top-card org as a company
 (older captures cannot tell a school from an employer). `--platform` and
 `--kind` (repeatable) limit the plan; Partiful attendance is planned only
 when `partiful` is included. Address-book pictures
-come from their APIs (`photos store`). A matched Partiful profile also lists
+come from their APIs (`photos store`). `photos rekey` (dry run; `--apply`)
+moves any photo still stored under a legacy key a client cannot request. A matched Partiful profile also lists
 the person's own Instagram / Snapchat / LinkedIn (plus TikTok and Twitter,
 kept as links only while those are not platform values); the ones the person
 lacks come back under `accounts` with their ledger record, if any. Each one

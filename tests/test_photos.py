@@ -319,3 +319,235 @@ def test_upload_refuses_a_reply_naming_another_key(mocker, monkeypatch):
     )
     with pytest.raises(ValueError):
         photos.put_object("profiles/spotify/spotify_name#1/2026-09-09T19:48:54.159Z.json", b"raw")
+
+
+@pytest.mark.parametrize(
+    ("record_id", "segment"),
+    [
+        ("facebook:profile.php?id=123", "facebook_id_123"),
+        ("facebook:example_o'name", "facebook_example_o_name"),
+        ("instagram:example.person", "instagram_example_person"),
+        ("linkedin:example-person-1a2b", "linkedin_example-person-1a2b"),
+        ("spotify:example%20person", "spotify_example_20person"),
+        ("partiful:AbC123", "partiful_abc123"),
+    ],
+)
+def test_a_record_key_is_a_plain_path_segment(record_id, segment):
+    assert photos.record_key(record_id) == segment
+
+
+def test_a_record_id_with_nothing_to_slug_keys_by_its_hash():
+    assert photos.record_key("é:ü") == hashlib.sha256("é:ü".encode()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "photos/records/facebook/facebook_profile.php?id=1-abcd1234.jpg",
+        "photos/records/facebook/facebook_o'name-abcd1234.jpg",
+        'photos/records/facebook/facebook_o"name-abcd1234.jpg',
+        "photos/records/facebook/a=b-abcd1234.jpg",
+        "photos/records/facebook/a?b-abcd1234.jpg",
+        "photos/records/facebook/a#b-abcd1234.jpg",
+        "photos/records/spotify/old%20key.jpg",
+        "photos/records/spotify/bad\\key.jpg",
+        "photos//a.jpg",
+        "",
+        None,
+    ],
+)
+def test_a_key_a_client_cannot_request_is_not_safe(key):
+    assert not photos.safe_key(key)
+
+
+def test_existing_dotted_keys_stay_safe():
+    assert photos.safe_key("photos/records/instagram/instagram_example.person-abcd1234.jpg")
+
+
+@pytest.fixture
+def estate(monkeypatch):
+    """person_photos, people_sync_profiles and provenance in sqlite, behind somadata."""
+    import sqlite3
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        "CREATE TABLE person_photos(id, person_id, platform, r2_key, sha256, deleted_at);"
+        "CREATE TABLE people_sync_profiles(record_id, avatar_r2_key, avatar_sha256, deleted_at);"
+        "CREATE TABLE provenance(id, from_kind, from_ref, to_kind, to_ref, field, rel, detail, asserted_by);"
+    )
+    monkeypatch.setattr(photos.somadata, "sql", lambda q: [dict(r) for r in db.execute(q)])
+
+    def insert(table, rows):
+        for row in rows:
+            cols = ",".join(row)
+            db.execute(
+                f"INSERT INTO {table}({cols}) VALUES ({','.join('?' * len(row))})",
+                list(row.values()),
+            )
+
+    monkeypatch.setattr(photos.somadata, "insert", insert)
+    monkeypatch.setenv("PEOPLE_SYNC_ASSERTED_BY", "agent:test-session")
+    yield db
+    db.close()
+
+
+OLD = "photos/records/facebook/facebook_profile.php?id=123-{sha8}.jpg"
+NEW = "photos/records/facebook/facebook_id_123-{sha8}.jpg"
+
+
+def _seed(db, image=b"image"):
+    sha = hashlib.sha256(image).hexdigest()
+    old, new = OLD.format(sha8=sha[:8]), NEW.format(sha8=sha[:8])
+    db.execute(
+        "INSERT INTO person_photos VALUES ('photo:p1:r1','p1','facebook',?,?,NULL)", (old, sha)
+    )
+    db.execute(
+        "INSERT INTO person_photos VALUES ('photo:p2:r2','p2','facebook','photos/records/facebook/facebook_ok-1.jpg','x',NULL)"
+    )
+    db.execute(
+        "INSERT INTO people_sync_profiles VALUES ('facebook:profile.php?id=123',?,?,NULL)",
+        (old, sha),
+    )
+    db.execute(
+        "INSERT INTO people_sync_profiles VALUES ('facebook:gone',?,?,'2026-01-01')", (old, sha)
+    )
+    return old, new, sha
+
+
+def _store(mocker, objects):
+    mocker.patch.object(photos, "get_object", side_effect=lambda k: objects[k])
+    mocker.patch.object(
+        photos, "put_object", side_effect=lambda k, d, content_type=None: objects.__setitem__(k, d)
+    )
+
+
+def test_rekey_dry_run_lists_the_moves_and_touches_nothing(mocker, estate):
+    old, new, sha = _seed(estate)
+    objects = {old: b"image"}
+    _store(mocker, objects)
+
+    result = photos.rekey(apply_writes=False)
+
+    assert result["moves"] == [
+        {
+            "from": old,
+            "to": new,
+            "sha256": sha,
+            "rows": [
+                {"table": "person_photos", "id": "photo:p1:r1", "field": "r2_key"},
+                {
+                    "table": "people_sync_profiles",
+                    "id": "facebook:profile.php?id=123",
+                    "field": "avatar_r2_key",
+                },
+            ],
+        }
+    ]
+    assert list(objects) == [old]
+    assert estate.execute("SELECT count(*) FROM provenance").fetchone()[0] == 0
+
+
+def test_rekey_copies_verifies_and_repoints_every_live_row_with_an_edge(mocker, estate):
+    old, new, sha = _seed(estate)
+    objects = {old: b"image"}
+    _store(mocker, objects)
+
+    photos.rekey(apply_writes=True)
+
+    assert objects == {old: b"image", new: b"image"}  # the old object stays
+    assert (
+        estate.execute("SELECT r2_key FROM person_photos WHERE id='photo:p1:r1'").fetchone()[0]
+        == new
+    )
+    keys = dict(
+        estate.execute("SELECT record_id, avatar_r2_key FROM people_sync_profiles").fetchall()
+    )
+    assert keys == {"facebook:profile.php?id=123": new, "facebook:gone": old}
+    edges = [dict(r) for r in estate.execute("SELECT * FROM provenance ORDER BY to_kind")]
+    assert [
+        (
+            e["from_kind"],
+            e["from_ref"],
+            e["to_kind"],
+            e["to_ref"],
+            e["field"],
+            e["rel"],
+            e["asserted_by"],
+        )
+        for e in edges
+    ] == [
+        (
+            "takeout",
+            new,
+            "people_sync_profiles",
+            "facebook:profile.php?id=123",
+            "avatar_r2_key",
+            "evidence_of",
+            "agent:test-session",
+        ),
+        (
+            "takeout",
+            new,
+            "person_photos",
+            "photo:p1:r1",
+            "r2_key",
+            "evidence_of",
+            "agent:test-session",
+        ),
+    ]
+    assert json.loads(edges[0]["detail"])["cue"].startswith("safe photo key migration ")
+
+    assert photos.rekey(apply_writes=True)["moves"] == []  # idempotent
+
+
+def test_rekey_refuses_bytes_that_do_not_match_their_sha256(mocker, estate):
+    old, new, _ = _seed(estate)
+    objects = {old: b"other bytes"}
+    _store(mocker, objects)
+
+    with pytest.raises(ValueError):
+        photos.rekey(apply_writes=True)
+
+    assert new not in objects
+    assert (
+        estate.execute("SELECT r2_key FROM person_photos WHERE id='photo:p1:r1'").fetchone()[0]
+        == old
+    )
+
+
+def test_rekey_refuses_a_copy_that_does_not_read_back(mocker, estate):
+    old, new, _ = _seed(estate)
+    objects = {old: b"image"}
+    mocker.patch.object(
+        photos, "get_object", side_effect=lambda k: objects[k] if k == old else b"torn"
+    )
+    mocker.patch.object(photos, "put_object")
+
+    with pytest.raises(ValueError):
+        photos.rekey(apply_writes=True)
+
+    assert (
+        estate.execute("SELECT r2_key FROM person_photos WHERE id='photo:p1:r1'").fetchone()[0]
+        == old
+    )
+    assert estate.execute("SELECT count(*) FROM provenance").fetchone()[0] == 0
+
+
+def test_rekey_after_a_crash_before_the_row_update_adds_no_second_edge(mocker, estate):
+    old, new, _ = _seed(estate)
+    objects = {old: b"image"}
+    _store(mocker, objects)
+    real_update = photos.ledger.batch_update
+    mocker.patch.object(photos.ledger, "batch_update", side_effect=RuntimeError("crash"))
+    with pytest.raises(RuntimeError):
+        photos.rekey(apply_writes=True)
+    mocker.patch.object(photos.ledger, "batch_update", side_effect=real_update)
+
+    photos.rekey(apply_writes=True)
+
+    assert estate.execute("SELECT count(*) FROM provenance").fetchone()[0] == 2
+    assert (
+        estate.execute("SELECT r2_key FROM person_photos WHERE id='photo:p1:r1'").fetchone()[0]
+        == new
+    )

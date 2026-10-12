@@ -397,6 +397,10 @@ def cmd_photos_store(args: argparse.Namespace) -> None:
     print(result if result else "duplicate")
 
 
+def cmd_photos_rekey(args: argparse.Namespace) -> None:
+    print(json.dumps(photos.rekey(apply_writes=args.apply), indent=2))
+
+
 def _add_browser_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--endpoint",
@@ -568,6 +572,11 @@ def build_parser() -> argparse.ArgumentParser:
     store.add_argument("--platform", required=True)
     store.add_argument("--file", required=True)
     store.set_defaults(func=cmd_photos_store)
+    rekey = photos_sub.add_parser(
+        "rekey", help="move stored photos whose key a client cannot request (dry run)"
+    )
+    rekey.add_argument("--apply", action="store_true", help="copy, verify and repoint")
+    rekey.set_defaults(func=cmd_photos_rekey)
 
     return parser
 

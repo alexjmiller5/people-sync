@@ -238,6 +238,14 @@ def test_photos_store_prints_r2_key_on_new_photo(mocker, tmp_path, capsys):
     assert capsys.readouterr().out.strip() == "photos/people/p1/instagram-abcd1234.jpg"
 
 
+@pytest.mark.parametrize(("argv", "applied"), [([], False), (["--apply"], True)])
+def test_photos_rekey_is_a_dry_run_unless_applied(mocker, capsys, argv, applied):
+    rekey = mocker.patch("people_sync.photos.rekey", return_value={"applied": applied, "moves": []})
+    cli.main(["photos", "rekey", *argv])
+    rekey.assert_called_once_with(apply_writes=applied)
+    assert json.loads(capsys.readouterr().out) == {"applied": applied, "moves": []}
+
+
 def test_photos_store_prints_duplicate_when_store_returns_none(mocker, tmp_path, capsys):
     file_path = tmp_path / "avatar.png"
     file_path.write_bytes(b"image-bytes")

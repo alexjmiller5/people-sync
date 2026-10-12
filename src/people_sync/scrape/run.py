@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import hashlib
 import json
 import os
-import re
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -75,19 +74,6 @@ def _select_records(platform: str, record_id: str | None = None) -> list[dict]:
     return records
 
 
-def _record_key(record_id: str) -> str:
-    key = record_id.replace(":", "_").replace("/", "_")
-    return key if _safe_key(key) else hashlib.sha256(record_id.encode()).hexdigest()
-
-
-def _safe_key(key: str | None) -> bool:
-    return (
-        bool(key)
-        and not re.search(r"[%\\\x00-\x1f\x7f]", key)
-        and all(p not in {"", ".", ".."} for p in key.split("/"))
-    )
-
-
 def _ext_from_url(url: str) -> str:
     ext = os.path.splitext(url.split("?", 1)[0])[1].lstrip(".").lower()
     return ext if ext in {"jpg", "jpeg", "png", "webp", "gif", "avif"} else "jpg"
@@ -119,7 +105,7 @@ def _resolve_avatar(
     existing_key: str | None,
     existing_sha: str | None,
 ) -> tuple[str | None, str | None]:
-    if not _safe_key(existing_key):
+    if not photos.safe_key(existing_key):
         existing_key, existing_sha = None, None
     if not avatar_url:
         return existing_key, existing_sha
@@ -249,7 +235,7 @@ def _collect_profile(browser, module, platform, index, record):
 
 
 def _store_profile(browser, platform, index, record, profile, raw_key, avatar_url=None):
-    record_key = _record_key(record["id"])
+    record_key = photos.record_key(record["id"])
 
     avatar_key, avatar_sha = _resolve_avatar(
         browser,
