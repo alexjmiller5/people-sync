@@ -6,7 +6,8 @@ construction: fills empty values and adds rows, never overwrites or
 closes anything - a conflict (a different birthday, a different current
 city or employer) is reported for triage, not resolved. A more or less
 specific form of a known value ("Boston, Massachusetts, United States" for
-"Boston, Massachusetts") counts as known. A bare country is not a city, and a LinkedIn
+"Boston, Massachusetts") counts as known, and so do a city's LinkedIn metro name and
+a state written out or abbreviated (`_city`). A bare country is not a city, and a LinkedIn
 job needs a capture that classified it as a company.
 
 Facts and where they go:
@@ -61,6 +62,34 @@ def _norm(s: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
 
+STATES = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar", "california": "ca",
+    "colorado": "co", "connecticut": "ct", "delaware": "de", "florida": "fl", "georgia": "ga",
+    "hawaii": "hi", "idaho": "id", "illinois": "il", "indiana": "in", "iowa": "ia",
+    "kansas": "ks", "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
+    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn", "mississippi": "ms",
+    "missouri": "mo", "montana": "mt", "nebraska": "ne", "nevada": "nv", "new hampshire": "nh",
+    "new jersey": "nj", "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or", "pennsylvania": "pa",
+    "rhode island": "ri", "south carolina": "sc", "south dakota": "sd", "tennessee": "tn",
+    "texas": "tx", "utah": "ut", "vermont": "vt", "virginia": "va", "washington": "wa",
+    "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
+    "d c": "dc",
+}  # fmt: skip
+_STATE_RE = re.compile(r"\b(" + "|".join(STATES) + r")\b")
+
+
+def _city(s: str | None) -> str:
+    """A city in one spelling: LinkedIn's metro forms ("Greater Boston", "New York City
+    Metropolitan Area") name their city, ", United States" is dropped, and a state name
+    is its abbreviation ("Washington, District of Columbia" = "Washington D.C.").
+    Both sides go through this, so a city named like a state still compares equal."""
+    v = re.sub(r" united states$", "", _norm(s))
+    v = re.sub(r"^greater | metropolitan area$| area$", "", v)
+    v = re.sub(r"^new york city\b", "new york", v)
+    return _STATE_RE.sub(lambda m: STATES[m[1]], v)
+
+
 def _known(value: str, known: set[str]) -> bool:
     """A normalized value is known when it equals a known one or one of them
     is a word-prefix of the other ("boston massachusetts" and "boston
@@ -88,10 +117,12 @@ def plan(
     edges: set[str],
 ) -> list[Op]:
     """Pure: what would be written, given the current estate."""
-    open_locs: dict[str, set[str]] = {}
+    open_locs: dict[str, dict[str, str]] = {}  # person -> {_city form: stored spelling}
     for row in locations:
         if row.get("end") is None:
-            open_locs.setdefault(row["person_id"], set()).add(_norm(row.get("city")))
+            open_locs.setdefault(row["person_id"], {})[_city(row.get("city"))] = (
+                row.get("city") or ""
+            )
     open_jobs: dict[str, set[str]] = {}
     for row in employments:
         if row.get("end") is None:
@@ -116,7 +147,7 @@ def plan(
 
         city = (p.get("location") or "").strip()
         if city and _norm(city) not in countries:
-            if _known(_norm(city), open_locs.get(pid, set())):
+            if _known(_city(city), set(open_locs.get(pid, {}))):
                 pass
             elif open_locs.get(pid):
                 ops.append(
@@ -126,7 +157,7 @@ def plan(
                         rid,
                         plat,
                         city,
-                        {"field": "city", "existing": sorted(open_locs[pid])},
+                        {"field": "city", "existing": sorted(open_locs[pid].values())},
                     )
                 )
             else:

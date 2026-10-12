@@ -324,8 +324,10 @@ city / employer / birthday / picture onto matched people where the field is
 empty, each with an `evidence_of` provenance edge to the retained capture;
 conflicts are printed, never resolved automatically (a different current
 city or employer, or a Partiful birthday month that disagrees with a known
-birthday). A more or less specific form of a known value is not a conflict,
-and a location that only names a country is not a city. A LinkedIn job is
+birthday). A more or less specific form of a known value is not a conflict
+(a city also matches its LinkedIn metro name - "Greater Boston", "New York
+City Metropolitan Area" - and a state written out or abbreviated; a suburb
+is still a different city), and a location that only names a country is not a city. A LinkedIn job is
 promoted only when its capture classified the top-card org as a company
 (older captures cannot tell a school from an employer). `--platform` and
 `--kind` (repeatable) limit the plan; Partiful attendance is planned only

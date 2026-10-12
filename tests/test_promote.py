@@ -339,6 +339,68 @@ def test_plan_treats_a_more_or_less_specific_form_of_a_known_value_as_known(scra
     assert [o.kind for o in ops if o.kind in ("location", "employment", "conflict")] == []
 
 
+@pytest.mark.parametrize(
+    ("scraped", "known"),
+    [
+        ("Testville, Michigan Metropolitan Area", "Testville, MI"),
+        ("Greater Testville", "Testville, Michigan"),
+        ("Greater Testville Area", "testville michigan"),
+        ("New York City Metropolitan Area", "New York, New York"),
+        ("New York, United States", "New York, New York"),
+        ("Testville, Michigan, United States", "Testville, MI"),
+        ("Washington, District of Columbia, United States", "Washington D.C."),
+        ("Washington, DC", "washington d c"),
+        ("New York City", "NY, NY"),
+    ],
+)
+def test_plan_treats_a_metro_or_state_spelling_of_a_known_city_as_known(scraped, known):
+    ops = promote.plan(
+        [_profile(location=scraped)],
+        PEOPLE,
+        [{"person_id": "p1", "city": known, "end": None}],
+        [],
+        [],
+        set(),
+    )
+    assert [o for o in ops if o.kind in ("location", "conflict")] == []
+
+
+@pytest.mark.parametrize(
+    ("scraped", "known"),
+    [
+        ("Greater Testville", "Othertown"),
+        ("Othertown, Michigan, United States", "Testville, Michigan"),
+        ("Testville, Ohio", "Testville, Michigan"),
+        ("Testburg City", "Testburg, Michigan"),
+        ("Washington, United Kingdom", "Washington D.C."),
+    ],
+)
+def test_plan_still_reports_a_different_city_in_any_spelling(scraped, known):
+    ops = promote.plan(
+        [_profile(location=scraped)],
+        PEOPLE,
+        [{"person_id": "p1", "city": known, "end": None}],
+        [],
+        [],
+        set(),
+    )
+    assert [(o.kind, o.value) for o in ops if o.kind in ("location", "conflict")] == [
+        ("conflict", scraped)
+    ]
+
+
+def test_a_city_conflict_shows_the_stored_spellings():
+    ops = promote.plan(
+        [_profile(location="Othertown, Ohio")],
+        PEOPLE,
+        [{"person_id": "p1", "city": "Testville, Michigan", "end": None}],
+        [],
+        [],
+        set(),
+    )
+    assert [o.detail["existing"] for o in ops if o.kind == "conflict"] == [["Testville, Michigan"]]
+
+
 def test_run_limited_to_other_platforms_plans_no_partiful_events(mocker):
     rows = mocker.patch("people_sync.promote.load_event_rows", return_value=[])
     mocker.patch(
