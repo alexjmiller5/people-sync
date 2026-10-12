@@ -31,7 +31,7 @@ Runtime dependencies outside Python:
 
 - The `soma` CLI - the only write path to the people estate.
 - The `gog` CLI - Google People API access for `ingest google`, `port google`
-  (contacts and their photos) and Google photo fetches.
+  (contacts and their photos), `push google` and Google photo fetches.
 - macOS with Contacts data for `ingest apple` (reads the local AddressBook
   SQLite copies read-only).
 - A soma hub URL and a scoped file token for `photos store`.
@@ -69,6 +69,7 @@ uv run python -m people_sync <command>
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
 | `port google [--person <id> ...] [--apply]` | Previews, then creates, a Google contact for every person with an Apple Contacts card and no Google contact: reviewed People name, typed phones, emails, birthday; read back, recorded and linked |
+| `push google [--person <id> ...] [--apply]` | Previews, then writes, People's company (the person's circles) and chosen contact photo onto every linked Google contact, one way; a Google value People does not hold is never overwritten |
 | `comm import <source\|all> [--full] [--store <db\|db.gz>] [--instance <label>]` | Appends new metadata-only communication events (Apple Messages, Apple calls, WhatsApp messages and calls) to their soma streams and records the run in `communication_imports`; `--store` reads a retained backup |
 | `comm refresh [--local]` | Recomputes `communication_summaries` (one row per person and channel) from the streams, or from the local mirror when the hub is unreachable |
 | `comm coverage` | Prints the import runs and how many events wait in the local outbox |
@@ -123,6 +124,26 @@ cards' images wins; an image Core Data keeps outside the database (a 0x02 marker
 a file under the book's `.AddressBook-v22_SUPPORT/_EXTERNAL_DATA/`) is read from the
 same local or ssh book. Image bytes stay in memory and never reach argv or disk. `port google --photos-only` does the
 same for people already in Google whose contact shows only the default photo.
+
+## Pushing People onto Google contacts
+
+`push google` keeps two fields of every linked Google contact equal to People:
+
+- **Company** = the person's `people.circles` in order, joined with ", " (no circles,
+  no company). A current Google company or title that is not a circle, a
+  `person_employments` company/title, or a value this command wrote earlier is a
+  `SKIP` naming the value: record it in People first.
+- **Photo** = the `person_photos` row `people.contact_photo_id` names, uploaded
+  through `updateContactPhoto` and read back. A person without one keeps whatever
+  photo Google has.
+
+What it wrote is marked in the contact's `clientData` (`people-sync.company`, and
+`people-sync.photo` = the picture's sha256), so a rerun writes only what changed in
+People and re-uploads a picture deleted in Google. Reads and writes go in People API
+batches of 200 (`getBatchGet`, `batchUpdateContacts` with the contact's etag) and
+every write is checked against the returned contact. The estate needs a
+`people.contact_photo_id` ref column to `person_photos` (`soma sql "ALTER TABLE ..."`
+plus `soma property set people.contact_photo_id --type ref --ref-table person_photos`).
 
 The edges need `people_sync_records` among `provenance.from_kind`'s catalog options
 (from_ref = the ledger record id `<source>:<source_id>`); add it to your estate's

@@ -9,7 +9,8 @@ every org name/title must already be a person_employments row. A contact with
 any gap is printed and skipped - nothing is cleared from Google before its
 soma replacement is verified. The org is additionally re-read from Google
 immediately before it is cleared, so a value that changed since the last ingest
-(and was therefore never verified) is left alone.
+(and was therefore never verified) is left alone. The company `push google` writes
+(the circles, `company()`) is People's own value: never cleared, never a gap.
 
     uv run python scripts/google_cleanup.py             # dry run (the default)
     uv run python scripts/google_cleanup.py --apply     # with a human watching
@@ -30,6 +31,12 @@ RECORDS_QUERY = """
       AND c.source = 'google_contacts' AND c.status = 'matched'
     ORDER BY c.source_id
 """
+
+
+def company(circles: str | None) -> str | None:
+    """The Google company People owns (`push google` writes it): the circles, in order."""
+    values = [c.strip() for c in json.loads(circles or "[]") if c and c.strip()]
+    return ", ".join(dict.fromkeys(values)) or None
 
 
 def norm(s: str | None) -> str:
@@ -74,7 +81,13 @@ def decide(raw: dict, circles: list[str], employments: list[dict], groups: dict[
         if rn in groups:
             labels.append((rn, groups[rn]))
 
-    orgs = [o for o in (raw.get("org") or []) if o.get("name") or o.get("title")]
+    # The company `push google` writes is People's own value: neither cleared nor a gap.
+    pushed = company(json.dumps(circles))
+    orgs = [
+        o
+        for o in (raw.get("org") or [])
+        if (o.get("name") or o.get("title")) and (o.get("title") or o.get("name") != pushed)
+    ]
     have_circles = {norm(c) for c in circles}
     have_companies = {norm(e.get("company")) for e in employments}
     have_titles = {norm(e.get("title")) for e in employments}

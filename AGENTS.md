@@ -36,6 +36,7 @@ tests/             pytest, synthetic fixtures only
   reconcile.py     triage link/merge/create (`people-sync reconcile`)
   google_cleanup.py Google write-back cleanup (`people-sync google-cleanup`)
   port.py          Apple-only people into Google contacts (`people-sync port google`)
+  push.py          People's company + contact photo onto linked Google contacts (`push google`)
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
   venmo_payments.py links txns_venmo payments to counterparty ledger records
@@ -531,6 +532,16 @@ both writes. Recovery preserves an acknowledged `ledger_at` and skips the
 completed ledger write; repeated provenance failures cannot make it stale.
 Unfollowed records remain eligible for an explicitly selected friendship
 removal. Unsupported and partial batches cannot print success.
+
+## People onto Google (`people-sync push google`)
+
+`push.py` is the one-way writer for the fields People owns on a linked Google
+contact: company = `google_cleanup.company(circles)`, photo = the `contact_photo_id` row. It never
+overwrites a Google org name/title People does not hold (`company_gaps`: a circle,
+an employment, or the `people-sync.company` value it wrote). Its own writes are
+marked in the contact's `clientData`; that marker, not a soma column, is the sync
+state. `google-cleanup` leaves that company in place. Uploads reuse `port.upload_photo`, then the uploaded contacts are re-read for
+a fresh etag before the `batchUpdateContacts` call, one per update mask.
 
 ## Address-book port (`people-sync port google`)
 

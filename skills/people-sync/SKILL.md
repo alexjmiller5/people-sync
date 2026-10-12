@@ -247,6 +247,29 @@ to soma. The Apple card is never edited or
 deleted; that is the user's call. The next `ingest google` refreshes the new
 record's `raw`.
 
+## Step 4b - push People onto Google
+
+People owns two fields of every linked Google contact, written one way:
+
+```bash
+people-sync push google                    # preview - always first, with the user
+people-sync push google --person <id> ...  # limit to some people (repeatable)
+people-sync push google --apply            # after the user approved the preview
+```
+
+- **Company** = the person's circles in order, joined with ", ". A Google company
+  or title People does not hold (not a circle, not an employment, not a value
+  `push` wrote) is a `SKIP` naming it: record it in People, then rerun.
+- **Photo** = the `person_photos` row `people.contact_photo_id` names (set it to one
+  of the person's own live photos when the user picks their contact picture).
+  No contact picture = Google's photo is left alone.
+
+The preview prints `PUSH <name> (<id>) -> <resource>` with `company: old -> new`
+and `photo: yes (will upload)`. Apply uploads photos, then writes each contact in
+People API batches with its etag and reads the result back (`WROTE`, `VERIFY
+FAILED`, `PHOTO FAILED`). Its writes are marked in the contact's `clientData`, so a
+rerun only writes what changed and re-uploads a picture deleted in Google.
+
 ## Step 5 - Google write-back cleanup
 
 Once a Google contact's labels are circles and its org is an employment
@@ -258,7 +281,7 @@ people-sync google-cleanup --apply     # with the user watching
 ```
 
 It clears a label or org only when that exact value is already in
-soma, re-reads the live contact before clearing an org, and prints
+soma (the company `push google` writes is never cleared), re-reads the live contact before clearing an org, and prints
 `SKIP <name>: ...` for anything else. A SKIP is a triage to-do, not an error.
 
 ## Step 6 - profile enrichment
