@@ -28,8 +28,9 @@ def _card(apple=APPLE_A, **over):
         "birthday": None,
         "phones": json.dumps([{"value": CANARY_PHONE, "label": "_$!<Mobile>!$_"}]),
         "emails": json.dumps([]),
-        "has_org": 0,
-        "has_nick": 0,
+        "org": None,
+        "title": None,
+        "nick": None,
         "has_note": 0,
         "addresses": 0,
         "photo": 0,
@@ -85,6 +86,11 @@ def test_name_comes_from_people_and_a_context_surname_is_flagged():
     parts, flags = port.name_parts(person, [_card(first="Zed", last="Pat's Friend")])
     assert parts == {"givenName": "Zed"}
     assert any("Pat's Friend" in f and "differs" in f for f in flags)
+
+
+def test_two_cards_with_the_same_name_flag_it_once():
+    _, flags = port.name_parts(_candidate(), [_card(last=None), _card(APPLE_B, last=None)])
+    assert len(flags) == 1
 
 
 def test_people_name_parts_win_without_a_flag_when_apple_agrees():
@@ -158,12 +164,16 @@ def test_unknown_label_is_assumed_mobile():
 
 
 def test_body_never_carries_context_fields():
-    card = _card(has_org=1, has_nick=1, has_note=1, addresses=2, photo=1)
-    plan = port.plan_person([_candidate()], [card])
+    card = _card(org="Sam's friend", title="Chef", nick="Q", has_note=1, addresses=2, photo=1)
+    second = _card(APPLE_B, org="Sam's friend")
+    plan = port.plan_person([_candidate(), _candidate(apple=APPLE_B)], [card, second])
     assert set(plan.body) <= {"names", "phoneNumbers", "emailAddresses", "birthdays"}
-    assert any("org" in s for s in plan.skipped)
+    # the context is shown so the reviewer can check People holds it, once per value
+    assert [s for s in plan.skipped if s.startswith("org")] == [
+        "org/title \"Sam's friend\", 'Chef' (context stays in People)"
+    ]
     assert any("note" in s for s in plan.skipped)
-    assert any("nickname" in s for s in plan.skipped)
+    assert "nickname 'Q' (People holds nicknames)" in plan.skipped
     assert any("2 postal addresses" in s for s in plan.skipped)
     assert any("photo" in s for s in plan.skipped)
 
@@ -428,8 +438,9 @@ def test_card_sql_reads_a_synthetic_book(tmp_path, mocker, monkeypatch):
     a, b = by_id[APPLE_A], by_id[APPLE_B]
     assert json.loads(a["phones"]) == [{"value": CANARY_PHONE, "label": "_$!<Mobile>!$_"}]
     assert a["birthday"] == "1991-07-14" and b["birthday"] == "--07-14"
-    assert (a["has_org"], a["has_note"], a["addresses"], a["photo"]) == (1, 1, 1, 1)
-    assert (b["has_org"], b["has_note"], b["addresses"], b["photo"]) == (0, 0, 0, 0)
+    assert (a["org"], a["has_note"], a["addresses"], a["photo"]) == ("Acme", 1, 1, 1)
+    assert (b["org"], b["has_note"], b["addresses"], b["photo"]) == (None, 0, 0, 0)
+    assert "canary club" not in json.dumps(cards)
     assert json.loads(b["emails"]) == [{"value": CANARY_EMAIL, "label": None}]
 
 

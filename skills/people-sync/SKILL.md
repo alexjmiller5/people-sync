@@ -227,7 +227,8 @@ out of Google; never a number, email or birthday. Go through every flag before
 - `assumed mobile` - the card gave no known label; personal numbers are
   mobiles, so confirm the exceptions.
 - `skip:` lines (org/title, nickname, note, postal addresses, photo) are not
-  written; org and notes belong in People, an address or photo the user wants
+  written. The org/title and nickname text is shown: it is usually context
+  ("Y's friend"), so check People holds it. An address or photo the user wants
   in Google is added there by hand.
 
 A `SKIP` person has an unreadable card (the Mac holding it is asleep:

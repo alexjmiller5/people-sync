@@ -40,7 +40,7 @@ ORDER BY p.name, p.id, a.source_id
 
 _APPLE_ID = re.compile(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}:ABPerson")
 _DATE = "r.ZBIRTHDAY + 978307200, 'unixepoch', 'localtime'"
-# Values leave SQLite only for what is written; context fields only as presence flags.
+# Values leave SQLite only for what is written or previewed; a note only as a presence flag.
 _CARD_SQL = f"""
 SELECT r.ZUNIQUEID AS apple, r.ZFIRSTNAME AS first, r.ZMIDDLENAME AS middle,
   r.ZLASTNAME AS last,
@@ -53,8 +53,7 @@ SELECT r.ZUNIQUEID AS apple, r.ZFIRSTNAME AS first, r.ZMIDDLENAME AS middle,
   (SELECT json_group_array(json_object('value', v, 'label', l)) FROM
      (SELECT ZADDRESS AS v, ZLABEL AS l FROM ZABCDEMAILADDRESS
       WHERE ZOWNER = r.Z_PK AND ZADDRESS <> '' ORDER BY ZORDERINGINDEX)) AS emails,
-  (COALESCE(r.ZORGANIZATION, '') <> '' OR COALESCE(r.ZJOBTITLE, '') <> '') AS has_org,
-  (COALESCE(r.ZNICKNAME, '') <> '') AS has_nick,
+  r.ZORGANIZATION AS org, r.ZJOBTITLE AS title, r.ZNICKNAME AS nick,
   EXISTS (SELECT 1 FROM ZABCDNOTE WHERE ZCONTACT = r.Z_PK AND COALESCE(ZTEXT, '') <> '')
     AS has_note,
   (SELECT count(*) FROM ZABCDPOSTALADDRESS WHERE ZOWNER = r.Z_PK) AS addresses,
@@ -131,9 +130,10 @@ def name_parts(person: dict, cards: list[dict]) -> tuple[dict, list[str]]:
         flags.append(f"name parts {spelled!r} do not spell the People name {person.get('name')!r}")
     for card in cards:
         apple = [card.get(k) or None for k in ("first", "middle", "last")]
-        if apple != [parts.get(k) for _, k in NAME_KEYS]:
-            shown = " ".join(p for p in apple if p)
-            flags.append(f"Apple card name {shown!r} differs from People; People's is written")
+        shown = " ".join(p for p in apple if p)
+        flag = f"Apple card name {shown!r} differs from People; People's is written"
+        if apple != [parts.get(k) for _, k in NAME_KEYS] and flag not in flags:
+            flags.append(flag)
     return parts, flags
 
 
@@ -169,6 +169,16 @@ def _birthday(values: list[str]) -> tuple[dict | None, bool]:
         return None, False
     month, day = (int(x) for x in days.pop().split("-"))
     return ({"year": int(years.pop())} if years else {}) | {"month": month, "day": day}, False
+
+
+def _distinct(cards: list[dict], *keys: str) -> list[str]:
+    out = []
+    for card in cards:
+        for key in keys:
+            value = _clean(card.get(key) or "")
+            if value and value not in out:
+                out.append(value)
+    return out
 
 
 def plan_person(rows: list[dict], cards: list[dict], books: list[str] = ()) -> Plan:
@@ -221,10 +231,12 @@ def plan_person(rows: list[dict], cards: list[dict], books: list[str] = ()) -> P
     if conflict:
         plan.flags.append("the Apple cards disagree on the birthday; none is written")
     plan.photo = any(c.get("photo") for c in found)
-    if any(c.get("has_org") for c in found):
-        plan.skipped.append("org/title (context stays in People)")
-    if any(c.get("has_nick") for c in found):
-        plan.skipped.append("nickname (People holds nicknames)")
+    org = _distinct(found, "org", "title")
+    if org:
+        plan.skipped.append(f"org/title {', '.join(map(repr, org))} (context stays in People)")
+    nick = _distinct(found, "nick")
+    if nick:
+        plan.skipped.append(f"nickname {', '.join(map(repr, nick))} (People holds nicknames)")
     if any(c.get("has_note") for c in found):
         plan.skipped.append("note (context stays in People)")
     addresses = sum(c.get("addresses") or 0 for c in found)

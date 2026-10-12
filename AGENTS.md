@@ -536,8 +536,9 @@ removal. Unsupported and partial batches cannot print success.
 
 `port.py` reads each candidate's linked Apple cards through
 `comm.read_address_books` (the same local + `PEOPLE_SYNC_ADDRESSBOOK_HOST` reader
-comm uses) with `_CARD_SQL`, which returns only the values written plus presence
-flags for the context fields (org, nickname, note, addresses, photo). Contact
+comm uses) with `_CARD_SQL`, which returns the values written, the org/title and
+nickname text the preview shows as context, and presence flags for the note,
+postal addresses and photo. Contact
 values stay in memory: tests assert canary numbers, emails and birthdays never
 reach stdout, ledger rows or provenance. The written name is always the People
 row's parts (`name_parts`); Apple name fields are only compared and flagged.
