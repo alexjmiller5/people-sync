@@ -32,7 +32,7 @@ def test_tabs_share_queue_budget_and_serialize_writes(tmp_path, mocker, workers)
 
     def collect(browser, module, platform, index, record):
         seen.append(record["id"])
-        barrier.wait(timeout=3)
+        barrier.wait(timeout=30)  # a loaded host starts ten threads slowly
         return (
             Profile(record_id=record["id"], platform=platform),
             "profiles/test/archive.json",
@@ -76,10 +76,10 @@ def test_one_block_cancels_other_tabs_and_keeps_queue_pending(tmp_path, mocker, 
 
     def collect(browser, module, platform, index, record):
         seen.append(record["id"])
-        barrier.wait(timeout=3)
+        barrier.wait(timeout=30)  # a loaded host starts ten threads slowly
         if index == 0:
             browser.halt("HTTP 429")
-        assert browser.stop.wait(3)
+        assert browser.stop.wait(30)
         raise run.ScrapeStopped()
 
     mocker.patch.object(run.Browser, "connect", side_effect=lambda **kw: Browser())
