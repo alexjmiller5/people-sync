@@ -23,8 +23,9 @@ PROFILE_COLS = (
     "profile_url",
 )
 # raw keys that are bookkeeping, not facts about the person: Partiful attendance
-# accumulates on every event walk, and its mutual-row context is relative.
-RAW_NOISE = {"events", "last_seen", "shared_events", "thumb"}
+# accumulates on every event walk, its mutual-row context is relative, and a ported
+# Google contact's origin is replaced by the contact itself at the next ingest.
+RAW_NOISE = {"events", "last_seen", "shared_events", "thumb", "ported_from"}
 EMPTY = (None, "", [], {})
 
 

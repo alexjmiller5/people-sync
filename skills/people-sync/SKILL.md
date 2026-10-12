@@ -55,7 +55,7 @@ Environment variables, all optional except where a command needs them:
 | `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | attach on a real profile | a command that answers the browser's remote-debugging prompt |
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND`, `PEOPLE_SYNC_EMAIL_CODE_COMMAND`, `PEOPLE_SYNC_SMS_CODE_COMMAND` | `login` | commands that print a login's credentials / one-time codes; unset = `login` only verifies an existing session |
 | `SOMA_COMM_HUB_TOKEN` | `comm import`, `comm refresh` only | the hub token comm's `soma` calls use instead of `SOMA_HUB_TOKEN`: it must batch-append to the four `comm_*` streams (`/v1/streams/<name>/batch`) and query them (`soma archive query --raw`), which today takes `full`; unset = `SOMA_HUB_TOKEN`, and a refused append leaves events in the local outbox while `refresh` uses the local mirror |
-| `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants; unset = this Mac's address book only |
+| `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm`, `port google` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants and read the cards to port; unset = this Mac's address book only |
 | `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map, `comm/comm.sqlite`) |
 
 The home-manager module (`homeModules.default`) turns these into options and
@@ -201,11 +201,41 @@ review page (below) first: photos and scraped context are what disambiguate.
 
 ## Step 4 - address-book port
 
-Apple Contacts is an inbox; Google is the canonical address book. List
-people with an `apple_contacts` account and no `google_contacts` one, clean
-each up with the user, create it in Google (`gog contacts create`, then
-`update --birthday`), insert the `google_contacts` account row, and keep the
-Apple row too. Semantic fields (labels, org, notes) stay out of Google.
+Apple Contacts is an inbox; Google is the canonical address book. Every person
+with an `apple_contacts` account and no `google_contacts` one gets a Google
+contact:
+
+```bash
+people-sync port google                    # preview - always first, with the user
+people-sync port google --person <id> ...  # limit to some people (repeatable)
+people-sync port google --apply            # after the user approved the preview
+```
+
+The preview prints, per person, the People id and the name parts that will be
+written (always the reviewed `people` name, never the Apple name fields), phone
+count and types, email count, birthday and photo yes/no, flags, and what stays
+out of Google; never a number, email or birthday. Go through every flag before
+`--apply`:
+
+- `Apple card name '...' differs from People` - the card's name fields often
+  carry context ("X's Friend", a role): record it in People (circles,
+  `person_relations` `met_through`, notes) if it is not there yet. People's
+  name is what Google gets.
+- `People has no name parts; split from its name` / `name parts ... do not
+  spell the People name` - fix the People name or parts first if the split is
+  wrong.
+- `assumed mobile` - the card gave no known label; personal numbers are
+  mobiles, so confirm the exceptions.
+- `skip:` lines (org/title, nickname, note, postal addresses, photo) are not
+  written; org and notes belong in People, an address or photo the user wants
+  in Google is added there by hand.
+
+A `SKIP` person has an unreadable card (the Mac holding it is asleep:
+`PEOPLE_SYNC_ADDRESSBOOK_HOST`) or nothing to port. `--apply` creates, reads
+back, records the `google_contacts` ledger row and links it; a rerun finds
+nothing to do or resumes a half-done port. The Apple card is never edited or
+deleted; that is the user's call. The next `ingest google` refreshes the new
+record's `raw`.
 
 ## Step 5 - Google write-back cleanup
 
@@ -376,7 +406,10 @@ soma sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND (circles IS N
 soma sql "SELECT id, name FROM people WHERE deleted_at IS NULL AND notify_birthday = 1 AND birthday IS NULL"
 soma sql "SELECT a.person_id, a.platform, a.handle FROM person_accounts a WHERE a.deleted_at IS NULL AND a.active = 1 AND NOT EXISTS (SELECT 1 FROM person_photos ph WHERE ph.deleted_at IS NULL AND ph.person_id = a.person_id AND ph.platform = a.platform)"
 soma sql "SELECT value, count(*) n FROM people, json_each(people.circles) WHERE people.deleted_at IS NULL GROUP BY value ORDER BY value"
+soma sql "SELECT p.id, p.name FROM people p WHERE p.deleted_at IS NULL AND EXISTS (SELECT 1 FROM person_accounts a WHERE a.person_id = p.id AND a.platform = 'apple_contacts' AND a.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM person_accounts g WHERE g.person_id = p.id AND g.platform = 'google_contacts' AND g.deleted_at IS NULL) ORDER BY p.name"
 ```
+
+The last list is Apple-only people: each is a `port google` candidate (Step 4).
 
 A vocabulary fix is an estate-wide rename with the user's approval, never a
 half-migrated pair of spellings.

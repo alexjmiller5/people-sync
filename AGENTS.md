@@ -35,6 +35,7 @@ src/people_sync/
 tests/             pytest, synthetic fixtures only
   reconcile.py     triage link/merge/create (`people-sync reconcile`)
   google_cleanup.py Google write-back cleanup (`people-sync google-cleanup`)
+  port.py          Apple-only people into Google contacts (`people-sync port google`)
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
   venmo_payments.py links txns_venmo payments to counterparty ledger records
@@ -530,6 +531,30 @@ both writes. Recovery preserves an acknowledged `ledger_at` and skips the
 completed ledger write; repeated provenance failures cannot make it stale.
 Unfollowed records remain eligible for an explicitly selected friendship
 removal. Unsupported and partial batches cannot print success.
+
+## Address-book port (`people-sync port google`)
+
+`port.py` reads each candidate's linked Apple cards through
+`comm.read_address_books` (the same local + `PEOPLE_SYNC_ADDRESSBOOK_HOST` reader
+comm uses) with `_CARD_SQL`, which returns only the values written plus presence
+flags for the context fields (org, nickname, note, addresses, photo). Contact
+values stay in memory: tests assert canary numbers, emails and birthdays never
+reach stdout, ledger rows or provenance. The written name is always the People
+row's parts (`name_parts`); Apple name fields are only compared and flagged.
+Phone types come from `PHONE_TYPES`; anything else is `mobile`, reported as
+assumed. Distinct values from several cards merge by digits (NANP leading 1
+ignored) and casefolded email.
+
+Apply creates ONE contact per `gog contacts batch create --from-file -` call
+(gog promises no input/output order inside a batch; stdin keeps the body off
+disk), inserts the pending ledger row before anything else can fail, then the
+provenance edges (insert-missing, so a rerun repairs them), reads back with
+`gog contacts raw`, and links via `reconcile.link` only on a clean `verify`.
+A pending `google_contacts` row whose `raw.ported_from` names one of the
+person's Apple records is resumed, never re-created. A create that gog does not
+confirm stops the run naming the resource it may have made. `changes` treats
+`ported_from` as bookkeeping (`RAW_NOISE`), since the next Google ingest
+replaces that raw.
 
 ## Updates to known contacts
 

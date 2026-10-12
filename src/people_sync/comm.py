@@ -1239,17 +1239,19 @@ def _book_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
-def address_book() -> tuple[list[dict], list[str]]:
-    """Contact ids with their numbers and emails, read only: this Mac's address book and,
-    with PEOPLE_SYNC_ADDRESSBOOK_HOST set, another Mac's over ssh. Held in memory only."""
-    contacts, read = [], []
+def read_address_books(sql: str) -> tuple[list[dict], list[str]]:
+    """Rows of a read-only `sql` over this Mac's address books and, with
+    PEOPLE_SYNC_ADDRESSBOOK_HOST set, another Mac's over ssh, plus which books were
+    read (`local`, `remote`). Held in memory only."""
+    rows, read = [], []
     for path in sources._db_paths():
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
-            contacts += _book_rows([dict(r) for r in conn.execute(_BOOK_SQL)])
+            rows += [dict(r) for r in conn.execute(sql)]
             conn.close()
-            read.append("local")
+            if "local" not in read:
+                read.append("local")
         except sqlite3.Error:
             continue
     host = os.environ.get(ADDRESSBOOK_HOST_ENV)
@@ -1257,7 +1259,7 @@ def address_book() -> tuple[list[dict], list[str]]:
         script = (
             'for db in "$HOME"/Library/Application\\ Support/AddressBook/Sources/*/'
             "AddressBook-v22.abcddb; do\n"
-            f"  sqlite3 -json \"file:$db?mode=ro\" <<'SQL'\n{_BOOK_SQL};\nSQL\ndone\n"
+            f"  sqlite3 -json \"file:$db?mode=ro\" <<'SQL'\n{sql};\nSQL\ndone\n"
         )
         try:
             proc = subprocess.run(
@@ -1269,11 +1271,17 @@ def address_book() -> tuple[list[dict], list[str]]:
             )
             if proc.returncode == 0:
                 for value in _json_values(proc.stdout):
-                    contacts += _book_rows(value)
+                    rows += value
                 read.append("remote")
         except (OSError, subprocess.TimeoutExpired, ValueError):
             pass
-    return contacts, read
+    return rows, read
+
+
+def address_book() -> tuple[list[dict], list[str]]:
+    """Contact ids with their numbers and emails, from every address book read."""
+    rows, read = read_address_books(_BOOK_SQL)
+    return _book_rows(rows), read
 
 
 def live_whatsapp_pairs(stores: dict) -> dict[str, str]:

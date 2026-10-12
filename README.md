@@ -68,6 +68,7 @@ uv run python -m people_sync <command>
 | `list partiful-events [--since DATE] [--refresh] [--event-id ID ...]` | Walks the guest lists of past events the user went to or hosted, skipping events whose guest list is already retained (`--refresh` re-walks them), and prints each walked event with its guest and record counts |
 | `list strava` | Followers and following of the signed-in athlete into the ledger |
 | `list spotify` | Followers and followed user accounts, with totals checked against the profile |
+| `port google [--person <id> ...] [--apply]` | Previews, then creates, a Google contact for every person with an Apple Contacts card and no Google contact: reviewed People name, typed phones, emails, birthday; read back, recorded and linked |
 | `comm import <source\|all> [--full] [--store <db\|db.gz>] [--instance <label>]` | Appends new metadata-only communication events (Apple Messages, Apple calls, WhatsApp messages and calls) to their soma streams and records the run in `communication_imports`; `--store` reads a retained backup |
 | `comm refresh [--local]` | Recomputes `communication_summaries` (one row per person and channel) from the streams, or from the local mirror when the hub is unreachable |
 | `comm coverage` | Prints the import runs and how many events wait in the local outbox |
@@ -93,6 +94,31 @@ so a partial run is always safe to repeat.
 That memory is what makes runs incremental: a `matched` record is never
 re-asked and an `ignored` one never resurfaces, so a monthly run only ever
 surfaces what is genuinely new.
+
+## Porting Apple-only people into Google
+
+`port google` treats Apple Contacts as an inbox and Google as the address book.
+A candidate is a live person with an `apple_contacts` account and no
+`google_contacts` one. Every linked Apple card is read from the local address
+books, plus `PEOPLE_SYNC_ADDRESSBOOK_HOST`'s over ssh, and held in memory: numbers,
+emails and birthdays never reach soma, a capture or the output. The preview shows
+per person the People name parts to write, phone count and types (an unlabeled or
+custom-labeled number is written as `mobile` and shown as "assumed mobile"), email
+count, birthday and photo yes/no, flags (an Apple name that differs from People,
+name parts that do not spell the People name) and what stays out of Google (org,
+title, nickname, note, postal addresses, photo). A person whose cards are not all
+readable is skipped.
+
+`--apply` creates one contact per People API batch call through `gog`, records
+`google_contacts:<resourceName>` as a pending ledger row whose `raw` is only
+`{"ported_from": [<apple record ids>]}`, adds an `imported_from` provenance edge
+from each Apple record, reads the contact back, and runs `reconcile link` only when
+name, phone count and types, emails and birthday match. A rerun resumes a recorded
+but unlinked port; nothing is created twice. Apple cards are never edited.
+
+The edges need `people_sync_records` among `provenance.from_kind`'s catalog options
+(from_ref = the ledger record id `<source>:<source_id>`); add it to your estate's
+catalog through `soma property set` before the first apply.
 
 ## Data layout
 

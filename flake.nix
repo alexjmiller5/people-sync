@@ -107,7 +107,7 @@
               type = lib.types.nullOr lib.types.str;
               default = null;
               example = "other-mac";
-              description = "ssh host whose macOS address book `comm` also reads (read-only, in memory) to resolve communication participants to people.";
+              description = "ssh host whose macOS address book `comm` and `port google` also read (read-only, in memory) to resolve communication participants and to read the Apple cards they port.";
             };
             notion.peopleDataSource = lib.mkOption {
               type = lib.types.nullOr lib.types.str;

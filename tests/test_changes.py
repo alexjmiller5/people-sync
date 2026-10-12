@@ -40,6 +40,14 @@ def test_raw_is_diffed_per_key_and_bookkeeping_keys_are_dropped():
     }
 
 
+def test_the_first_ingest_after_a_port_is_not_a_change():
+    """`port google` records only where a contact came from; the next Google ingest
+    replaces that raw with the contact's own fields."""
+    old = {"ported_from": ["apple_contacts:A:ABPerson"]}
+    new = {"names": [{"givenName": "Alice"}], "labels": [], "org": []}
+    assert changes.diff([h("people_sync_records", "raw", json.dumps(old), json.dumps(new))]) == []
+
+
 def test_a_first_fill_is_enrichment_not_a_change():
     """null -> value is promote's job (fill an empty field); this report is for a
     value that was known and is now different."""
