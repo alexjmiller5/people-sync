@@ -387,7 +387,7 @@ expecting the other, and note that `FROM people` is a prefix of
 `FROM people_sync_records` - match table names on a word boundary.
 
 **Every soma write goes through `somadata.py`, which shells out to the
-`soma` CLI. Never open `life.db` with sqlite directly** - the hub's sync
+`soma` CLI. Never open `soma.db` with sqlite directly** - the hub's sync
 depends on the CLI's bookkeeping, and a raw write is invisible to it. Soft
 deletes only (`SET deleted_at = updated_at`); a hard delete is resurrected by
 the next sync.
