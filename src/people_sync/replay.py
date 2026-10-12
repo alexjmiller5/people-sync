@@ -163,11 +163,13 @@ def replay_capture(capture) -> dict:
             result["limitations"].append("skipped ordinals include malformed or superseded rows")
             return result
         if c["kind"] == "contacts":
-            from people_sync import sources, whatsapp
+            from people_sync import apple_photos, sources, whatsapp
 
             with redirect_stdout(io.StringIO()):
                 if c["source"] == "whatsapp":
                     records = whatsapp.parse_records(c["payload"])
+                elif c["source"] == "apple_photos":
+                    records = apple_photos.parse_records(c["payload"])
                 else:
                     records = getattr(sources, "parse_" + c["source"].removesuffix("_contacts"))(
                         c["payload"]

@@ -40,6 +40,7 @@ tests/             pytest, synthetic fixtures only
   pick.py          default contact pictures by source order (`photos pick`)
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
+  apple_photos.py  named Apple Photos people into the ledger (`ingest apple_photos`)
   venmo_payments.py links txns_venmo payments to counterparty ledger records
   comm.py          communication-history metadata: store adapters, streams, summaries (`people-sync comm`)
 skills/people-sync/ the generic agent runbook, shipped with the package

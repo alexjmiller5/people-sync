@@ -90,6 +90,7 @@ people-sync ingest snapchat  --path <friends.json>
 people-sync ingest linkedin  --path <Connections.csv>
 people-sync ingest google              # one gog call per contact, ~10 min per 1k
 people-sync ingest apple               # local AddressBook sqlite, read-only (needs Full Disk Access)
+people-sync ingest apple_photos        # named Photos people (UUID, name, face count), read-only; --library <path>
 people-sync ingest whatsapp --snapshot <metadata.sqlite> --media-dir <group-container> --self-id <own JID>
 ```
 
@@ -105,6 +106,15 @@ id is the handle, so the new handle arrives as a new pending record). A known
 follow flag on an absent record drops to 0, which is also what clears an
 unfollowed stranger from `unfollow`; nothing else about the row changes. Go
 through the matched ones with the user. A partial read reports no `absent`.
+
+**Apple Photos** people link a person to the face cluster Photos keeps for them:
+`ingest apple_photos` reads the library database read-only and records each named,
+unmerged Photos person (`apple_photos:<person UUID>`, name, display name, face count,
+the Contacts card Photos linked, if any). `match` links exact names like any source;
+the rest is triage, and a link is a `person_accounts` row with platform
+`apple_photos`. "Photos of X" is then a query of the library by that UUID (osxphotos
+or Photos.sqlite faces), never stored rows, so a deleted photo simply drops out. A
+Photos person merged into another leaves the next read and shows under `absent`.
 
 **WhatsApp** takes an operator-prepared snapshot, never the live store: copy
 `ChatStorage.sqlite` with its `-wal`/`-shm` to a private 0700 directory,

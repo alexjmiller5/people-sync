@@ -124,6 +124,11 @@ def validate(capture) -> dict:
 
                 whatsapp.validate_payload(p)
                 policy = whatsapp.POLICY
+            elif c["source"] == "apple_photos":
+                from people_sync import apple_photos
+
+                apple_photos.validate_payload(p)
+                policy = apple_photos.POLICY
             else:
                 from people_sync.sources import CONTACT_POLICY, validate_contacts
 

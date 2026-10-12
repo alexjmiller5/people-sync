@@ -14,6 +14,7 @@ from pathlib import Path
 
 from people_sync import ledger, somadata, match, notion_people, photos, sources
 from people_sync import (
+    apple_photos,
     captures,
     changes,
     comm,
@@ -176,7 +177,9 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             )
             print(json.dumps(report))
             return
-        if args.source in captures.EXPORT_SOURCES:
+        if args.source == "apple_photos":
+            records, complete = apple_photos.fetch(args.library)
+        elif args.source in captures.EXPORT_SOURCES:
             records = sources.retained_records(captures.capture_export(args.source, args.path))
             complete = True  # an export is the whole friends/followers inventory
         else:
@@ -468,6 +471,13 @@ def build_parser() -> argparse.ArgumentParser:
     for name in _FETCH_NO_PATH:
         p = ingest_sub.add_parser(name)
         p.set_defaults(func=cmd_ingest)
+    ap = ingest_sub.add_parser(
+        "apple_photos", help="named Photos people (metadata only), read-only"
+    )
+    ap.add_argument(
+        "--library", help="the .photoslibrary (default: $PEOPLE_SYNC_PHOTOS_LIBRARY or ~/Pictures)"
+    )
+    ap.set_defaults(func=cmd_ingest)
     vp = ingest_sub.add_parser(
         "venmo-payments", help="link soma's Venmo payments to counterparty records"
     )

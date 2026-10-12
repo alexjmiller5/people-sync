@@ -50,6 +50,7 @@ uv run python -m people_sync <command>
 | `ingest linkedin --path <file>` | Parses a LinkedIn `Connections.csv` from the full-archive export |
 | `ingest google` | Enumerates Google Contacts via `gog` and pulls each contact's full People API record |
 | `ingest apple` | Reads the local Apple Contacts databases |
+| `ingest apple_photos [--library <path>]` | Reads the named, unmerged people of an Apple Photos library (UUID, name, face count, linked Contacts card; never assets, faces or locations) into the ledger, read-only; default library `$PEOPLE_SYNC_PHOTOS_LIBRARY`, else `~/Pictures/Photos Library.photoslibrary` |
 | `ingest whatsapp --snapshot <sqlite> --media-dir <dir> --self-id <jid>` | Reads an operator-prepared, metadata-only WhatsApp snapshot read-only: active direct chats become pending records with their cached profile pictures; self, groups, status and broadcast rows are excluded, phone numbers never leave the machine |
 | `propose --batch <label> <context.json> ... --output <proposals.json>` | Proposes identity clusters for the review page from names, handles, spellings, place/school/era cues, iMessage cues and shared phone numbers; unconnected entries become separate proposed people |
 | `capture <source> --path <p>` | Retains a privacy-filtered export as an immutable capture without ingesting it |
