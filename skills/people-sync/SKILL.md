@@ -56,7 +56,6 @@ Environment variables, all optional except where a command needs them:
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND`, `PEOPLE_SYNC_EMAIL_CODE_COMMAND`, `PEOPLE_SYNC_SMS_CODE_COMMAND` | `login` | commands that print a login's credentials / one-time codes; unset = `login` only verifies an existing session |
 | `SOMA_COMM_HUB_TOKEN` | `comm import`, `comm refresh` only | the hub token comm's `soma` calls use instead of `SOMA_HUB_TOKEN`: it must batch-append to the four `comm_*` streams (`/v1/streams/<name>/batch`) and query them (`soma archive query --raw`), which today takes `full`; unset = `SOMA_HUB_TOKEN`, and a refused append leaves events in the local outbox while `refresh` uses the local mirror |
 | `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm`, `port google` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants and read the cards to port; unset = this Mac's address book only |
-| `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` | `port google` | a command that prints a Google OAuth access token with the contacts scope, used to copy the Apple card's photo into Google; unset = photos are listed as skipped |
 | `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map, `comm/comm.sqlite`) |
 
 The home-manager module (`homeModules.default`) turns these into options and
@@ -232,15 +231,14 @@ number, email, birthday or image. Go through every flag before `--apply`:
   written. The org/title and nickname text is shown: it is usually context
   ("Y's friend"), so check People holds it. An address the user wants in
   Google is added there by hand.
-- `photo: skipped (...)` - the image could not be read, or
-  `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` is unset; add it in Google by hand or fix
-  the cause and run `--photos-only` later.
+- `photo: skipped (...)` - the image could not be read; add it in Google by
+  hand or fix the cause and run `--photos-only` later.
 
 A `SKIP` person has an unreadable card (the Mac holding it is asleep:
 `PEOPLE_SYNC_ADDRESSBOOK_HOST`) or nothing to port. `--apply` creates, reads
 back, records the `google_contacts` ledger row and links it, then uploads the
-card's photo (the full image, else the thumbnail; the larger of two cards) and
-reads it back; a rerun finds nothing to do or resumes a half-done port. A
+card's photo through `gog api call` (the full image, else the thumbnail; the
+larger of two cards) and reads it back; a rerun finds nothing to do or resumes a half-done port. A
 `PHOTO FAILED` line leaves the link in place and names the `--photos-only`
 rerun that retries it. `--photos-only` lists every ported person whose Apple
 card has a photo: `PHOTO ... yes (will upload)` where the Google contact shows

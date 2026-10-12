@@ -17,24 +17,20 @@ an imported_from edge from each), reads the contact back, and links it through
 unlinked port instead of creating a duplicate. The Apple card is never touched.
 
 The card's photo (the full image, else the thumbnail; the larger across cards) follows
-the linked contact through the People API's updateContactPhoto, which gog does not wrap:
-PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND prints an OAuth access token with the contacts scope.
-Unset, the photo is listed as skipped. `--photos-only` gives already-ported people whose
-Google contact shows only the default photo their Apple photo. Image bytes stay in
-memory, like the contact values.
+the linked contact through the People API's updateContactPhoto, called with gog's
+generic `gog api call`; the request body reaches gog on stdin. `--photos-only` gives
+already-ported people whose Google contact shows only the default photo their Apple
+photo. Image bytes stay in memory and on that pipe, never on argv, stdout or disk.
 """
 
 import argparse
 import base64
-import functools
 import json
 import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-
-import httpx
 
 from people_sync import comm, reconcile, somadata
 
@@ -103,8 +99,7 @@ NAME_KEYS = (
     ("last_name", "familyName"),
 )
 ASSERTED_BY = "script:people-sync port google"
-TOKEN_COMMAND_ENV = "PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND"
-PHOTO_API = "https://people.googleapis.com/v1/{}:updateContactPhoto"
+PHOTO_METHOD = ["api", "call", "people", "v1", "people.updateContactPhoto"]
 _RESOURCE = re.compile(r"people/c[0-9A-Za-z_-]+")
 
 
@@ -115,7 +110,7 @@ class GogError(RuntimeError):
 
 
 class PhotoError(RuntimeError):
-    """A photo that was not set; the message names no token, value or image byte."""
+    """A photo that was not set; the message names no value or image byte."""
 
 
 def phone_type(label: str | None) -> tuple[str, bool]:
@@ -357,44 +352,18 @@ def own_photo(person: dict) -> bool:
     )
 
 
-def google_token() -> str:
-    """Run PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND; its stderr passes through, its stdout (the
-    token) is never echoed or named in an error."""
-    command = os.environ.get(TOKEN_COMMAND_ENV)
-    if not command:
-        raise PhotoError(f"{TOKEN_COMMAND_ENV} is not set")
-    try:
-        proc = subprocess.run(["sh", "-c", command], stdout=subprocess.PIPE, text=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        raise PhotoError(f"{TOKEN_COMMAND_ENV} timed out") from None
-    if proc.returncode != 0:
-        raise PhotoError(f"{TOKEN_COMMAND_ENV} failed")
-    token = proc.stdout.strip()
-    if not token:
-        raise PhotoError(f"{TOKEN_COMMAND_ENV} printed nothing")
-    return token
-
-
-def upload_photo(resource: str, image: bytes, token: str) -> None:
-    """Set the contact's photo, then read it back through gog: done only when a
-    non-default contact photo shows."""
+def upload_photo(resource: str, image: bytes) -> None:
+    """Set the contact's photo through `gog api call`, then read it back: done only when
+    a non-default contact photo shows. gog reads the body from /dev/stdin (its `@-` is
+    not stdin), so the bytes never touch argv or disk."""
     if not _RESOURCE.fullmatch(resource):
         raise PhotoError(f"{resource!r} is not a contact resource")
+    body = {"photoBytes": base64.b64encode(image).decode(), "personFields": "photos"}
+    args = [*PHOTO_METHOD, "--params", json.dumps({"resourceName": resource})]
     try:
-        resp = httpx.patch(
-            PHOTO_API.format(resource),
-            headers={"Authorization": f"Bearer {token}"},
-            json={"photoBytes": base64.b64encode(image).decode(), "personFields": "photos"},
-            timeout=60,
-        )
-    except httpx.HTTPError as exc:
-        raise PhotoError(f"updateContactPhoto failed ({type(exc).__name__})") from None
-    if resp.status_code != 200:
-        try:
-            status = resp.json()["error"]["status"]
-        except (ValueError, KeyError, TypeError):
-            status = ""
-        raise PhotoError(f"updateContactPhoto returned HTTP {resp.status_code} {status}".rstrip())
+        _gog([*args, "--body", "@/dev/stdin", "--allow-write", "--force"], json.dumps(body))
+    except GogError:
+        raise PhotoError("updateContactPhoto through gog failed") from None
     if not own_photo(json.loads(_gog(["contacts", "raw", resource]))):
         raise PhotoError("the read-back shows only the default photo")
 
@@ -404,14 +373,12 @@ def _photo_status(photo: bool, image: bytes | None) -> str:
         return "no"
     if image is None:
         return "skipped (the Apple image could not be read; add it in Google by hand)"
-    if not os.environ.get(TOKEN_COMMAND_ENV):
-        return f"skipped ({TOKEN_COMMAND_ENV} is not set; add it in Google by hand)"
     return "yes (will upload)"
 
 
-def _put_photo(person_id: str, resource: str, image: bytes, token) -> bool:
+def _put_photo(person_id: str, resource: str, image: bytes) -> bool:
     try:
-        upload_photo(resource, image, token())
+        upload_photo(resource, image)
     except (PhotoError, GogError) as exc:
         print(
             f"  PHOTO FAILED {resource}: {exc}; retry with `people-sync port google "
@@ -507,7 +474,7 @@ def _show(plan: Plan) -> None:
         print(f"  skip: {what}")
 
 
-def _apply(plan: Plan, resume: dict | None, token) -> None:
+def _apply(plan: Plan, resume: dict | None) -> None:
     if resume:
         resource, record_id = resume["source_id"], resume["id"]
         print(f"  resuming {resource}: created earlier, not linked yet")
@@ -532,8 +499,8 @@ def _apply(plan: Plan, resume: dict | None, token) -> None:
         return
     print(f"  CREATED {resource}: read back and verified")
     reconcile.link(plan.person_id, record_id, False, reconcile.Ops(apply=True))
-    if plan.image and os.environ.get(TOKEN_COMMAND_ENV):
-        _put_photo(plan.person_id, resource, plan.image, token)
+    if plan.image:
+        _put_photo(plan.person_id, resource, plan.image)
 
 
 def run(people: list[str], apply: bool) -> None:
@@ -546,7 +513,6 @@ def run(people: list[str], apply: bool) -> None:
     cards, books = read_cards([r["apple_id"] for r in rows])
     print(f"address books read: {', '.join(books) or 'none'}")
     resumable = _resumable() if by_person else {}
-    token = functools.cache(google_token)
     ported = skipped = 0
     for person_rows in by_person.values():
         plan = plan_person(person_rows, cards, books)
@@ -559,7 +525,7 @@ def run(people: list[str], apply: bool) -> None:
         resume = next((resumable[r] for r in plan.record_ids if r in resumable), None)
         if apply:
             try:
-                _apply(plan, resume, token)
+                _apply(plan, resume)
             except GogError as exc:
                 sys.exit(f"{plan.name} ({plan.person_id}): {exc}; inspect Google before rerunning")
         elif resume:
@@ -573,8 +539,6 @@ def run(people: list[str], apply: bool) -> None:
 def run_photos(people: list[str], apply: bool) -> None:
     """Apple card photos onto already-ported people's Google contacts that show only the
     default photo. Nothing is recorded in soma."""
-    if apply and not os.environ.get(TOKEN_COMMAND_ENV):
-        sys.exit(f"{TOKEN_COMMAND_ENV} is not set: nothing can upload a photo")
     rows = somadata.sql(PORTED_SQL)
     if people:
         rows = [r for r in rows if r["id"] in people]
@@ -583,7 +547,6 @@ def run_photos(people: list[str], apply: bool) -> None:
         by_person.setdefault(row["id"], []).append(row)
     cards, books = read_cards(list(dict.fromkeys(r["apple_id"] for r in rows)))
     print(f"address books read: {', '.join(books) or 'none'}")
-    token = functools.cache(google_token)
     todo = present = none = unread = 0
     for person_rows in by_person.values():
         who = f"{person_rows[0]['name']} ({person_rows[0]['id']})"
@@ -617,7 +580,7 @@ def run_photos(people: list[str], apply: bool) -> None:
             if status.startswith("yes"):
                 if not apply:
                     todo += 1
-                elif _put_photo(person_rows[0]["id"], resource, image, token):
+                elif _put_photo(person_rows[0]["id"], resource, image):
                     todo += 1
     verb = "uploaded" if apply else "to upload"
     tail = f", {unread} unreadable" if unread else ""

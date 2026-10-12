@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 
-import httpx
 import pytest
 
 from people_sync import comm, port
@@ -23,8 +22,6 @@ CANARY_BIRTHDAY = "1991-07-14"
 IMAGE = b"\xff\xd8\xff synthetic full image"
 THUMB = b"\xff\xd8\xff synthetic thumbnail, larger than the full image"
 EXT_REF = "DDDDDDDD-0000-0000-0000-000000000004"
-TOKEN = "ya29.canary-token"
-API = "https://people.googleapis.com/v1/"
 DEFAULT_PHOTO = {"default": True, "metadata": {"source": {"type": "CONTACT"}}}
 OWN_PHOTO = {"metadata": {"source": {"type": "CONTACT"}, "primary": True}}
 
@@ -241,18 +238,32 @@ class Estate:
         self.inserted.setdefault(table, []).extend(rows)
 
 
-class Gog:
-    """The People API as gog shows it: batch create, then raw read-back."""
+PHOTO_CALL = ["api", "call", "people", "v1", "people.updateContactPhoto"]
 
-    def __init__(self, readback_edit=None, fail_create=False):
+
+class Gog:
+    """The People API as gog shows it: batch create, raw read-back, and the photo
+    method through `gog api call`."""
+
+    def __init__(self, readback_edit=None, fail_create=False, photo_fails=False, sets_photo=True):
         self.created: list[dict] = []
         self.photos: dict[str, list[dict]] = {}
         self.calls: list[list[str]] = []
+        self.uploads: list[dict] = []
         self.readback_edit = readback_edit
         self.fail_create = fail_create
+        self.photo_fails, self.sets_photo = photo_fails, sets_photo
 
     def __call__(self, args, stdin=None):
         self.calls.append(args)
+        if args[:5] == PHOTO_CALL:
+            resource = json.loads(args[args.index("--params") + 1])["resourceName"]
+            self.uploads.append({"resource": resource, "args": args, "body": json.loads(stdin)})
+            if self.photo_fails:
+                raise port.GogError("gog api call people failed", resource)
+            if self.sets_photo:
+                self.photos[resource] = [OWN_PHOTO, DEFAULT_PHOTO | {"metadata": {}}]
+            return json.dumps({"resourceName": resource})
         if args[:3] == ["contacts", "batch", "create"]:
             assert args[3:5] == ["--from-file", "-"]
             if self.fail_create:
@@ -293,9 +304,7 @@ class Gog:
 
 
 @pytest.fixture
-def world(mocker, monkeypatch):
-    monkeypatch.delenv(port.TOKEN_COMMAND_ENV, raising=False)
-
+def world(mocker):
     def make(candidates, cards, ledger=(), gog=None, books=("local", "remote")):
         estate = Estate(candidates, ledger)
         gog = gog or Gog()
@@ -317,7 +326,6 @@ CANARIES = (
     CANARY_EMAIL,
     CANARY_BIRTHDAY,
     "1991",
-    TOKEN,
     base64.b64encode(IMAGE).decode(),
     IMAGE.hex(),
     "synthetic full image",
@@ -580,137 +588,97 @@ def test_a_photo_that_cannot_be_read_is_skipped_with_the_reason(world, capsys, m
     assert "photo: skipped (the Apple image could not be read" in capsys.readouterr().out
 
 
-def test_dry_run_says_the_photo_will_upload_when_a_token_command_is_set(world, capsys, monkeypatch):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, "exit 7")  # a dry run never runs it
-    world([_candidate()], [_card(image=_inline(IMAGE))])
+def test_dry_run_says_the_photo_will_upload_when_the_image_was_read(world, capsys):
+    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
     port.main(["google"])
     out = capsys.readouterr().out
     assert "photo: yes (will upload)" in out
+    assert gog.uploads == []
     _assert_no_canary(out)
 
 
-def test_without_a_token_command_the_photo_is_skipped_and_says_why(world, capsys):
-    world([_candidate()], [_card(image=_inline(IMAGE))])
-    port.main(["google"])
-    assert f"photo: skipped ({port.TOKEN_COMMAND_ENV} is not set" in capsys.readouterr().out
-
-
-class PhotoApi:
-    """httpx.patch double for updateContactPhoto; a 200 sets the contact's own photo."""
-
-    def __init__(self, gog, status=200, sets_photo=True):
-        self.gog, self.status, self.sets_photo = gog, status, sets_photo
-        self.calls: list[dict] = []
-
-    def __call__(self, url, headers=None, json=None, timeout=None):
-        self.calls.append({"url": url, "headers": headers, "json": json})
-        resource = url.removeprefix(API).removesuffix(":updateContactPhoto")
-        if self.status == 200 and self.sets_photo:
-            self.gog.photos[resource] = [OWN_PHOTO, DEFAULT_PHOTO | {"metadata": {}}]
-        body = {"person": {}} if self.status == 200 else {"error": {"status": "INVALID"}}
-        return httpx.Response(self.status, json=body, request=httpx.Request("PATCH", url))
-
-
-@pytest.fixture
-def photo_api(mocker):
-    def make(gog, **kw):
-        api = PhotoApi(gog, **kw)
-        mocker.patch("people_sync.port.httpx.patch", side_effect=api)
-        return api
-
-    return make
-
-
-def test_apply_uploads_the_photo_after_linking_and_reads_it_back(
-    world, photo_api, capsys, monkeypatch
-):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf '%s\\n' {TOKEN}")
+def test_apply_uploads_the_photo_through_gog_after_linking_and_reads_it_back(world, capsys):
     estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
-    api = photo_api(gog)
-    order = []
-    link.side_effect = lambda *a, **k: order.append("link")
-    api_call = api.__call__
-
-    def patch(*a, **k):
-        order.append("photo")
-        return api_call(*a, **k)
-
-    port.httpx.patch.side_effect = patch
+    uploads_at_link = []
+    link.side_effect = lambda *a, **k: uploads_at_link.append(len(gog.uploads))
     port.main(["google", "--apply"])
     out = capsys.readouterr().out
-    (call,) = api.calls
-    assert call["url"] == API + "people/c1:updateContactPhoto"
-    assert call["headers"] == {"Authorization": f"Bearer {TOKEN}"}
-    assert base64.b64decode(call["json"]["photoBytes"]) == IMAGE
-    assert call["json"]["personFields"] == "photos"
-    assert order == ["link", "photo"]
+    (upload,) = gog.uploads
+    assert upload["resource"] == "people/c1"
+    assert base64.b64decode(upload["body"]["photoBytes"]) == IMAGE
+    assert upload["body"]["personFields"] == "photos"
+    assert upload["args"][upload["args"].index("--body") + 1] == "@/dev/stdin"
+    assert {"--allow-write", "--force"} <= set(upload["args"])
+    assert uploads_at_link == [0]
+    assert gog.calls[-1] == ["contacts", "raw", "people/c1"]
     assert "PHOTO people/c1: uploaded and read back" in out
     _assert_no_canary(out)
+    _assert_no_canary(json.dumps(gog.calls))
     _assert_no_canary(json.dumps(estate.inserted))
 
 
-def test_a_refused_upload_keeps_the_link_and_says_how_to_retry(
-    world, photo_api, capsys, monkeypatch
-):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
-    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
-    photo_api(gog, status=400)
+def test_a_failed_upload_keeps_the_link_and_says_how_to_retry(world, capsys):
+    estate, gog, link = world(
+        [_candidate()], [_card(image=_inline(IMAGE))], gog=Gog(photo_fails=True)
+    )
     port.main(["google", "--apply"])
     out = capsys.readouterr().out
-    assert "PHOTO FAILED people/c1: updateContactPhoto returned HTTP 400 INVALID" in out
+    assert "PHOTO FAILED people/c1: updateContactPhoto through gog failed;" in out
+    assert "may have created" not in out
     assert "--photos-only --person p1 --apply" in out
     link.assert_called_once()
     _assert_no_canary(out)
 
 
-def test_an_upload_the_read_back_does_not_show_is_reported(world, photo_api, capsys, monkeypatch):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
-    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
-    photo_api(gog, sets_photo=False)
+def test_an_upload_the_read_back_does_not_show_is_reported(world, capsys):
+    world([_candidate()], [_card(image=_inline(IMAGE))], gog=Gog(sets_photo=False))
     port.main(["google", "--apply"])
     assert "PHOTO FAILED people/c1: the read-back shows only the default photo" in (
         capsys.readouterr().out
     )
 
 
-def test_a_failing_token_command_never_calls_the_api(world, photo_api, capsys, monkeypatch):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"echo {TOKEN}; exit 3")
-    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
-    api = photo_api(gog)
+def test_apply_without_a_photo_uploads_nothing(world, capsys):
+    estate, gog, link = world([_candidate()], [_card()])
     port.main(["google", "--apply"])
-    out = capsys.readouterr().out
-    assert f"PHOTO FAILED people/c1: {port.TOKEN_COMMAND_ENV} failed" in out
-    assert api.calls == [] and TOKEN not in out
+    assert gog.uploads == [] and "PHOTO" not in capsys.readouterr().out
     link.assert_called_once()
 
 
-def test_apply_without_a_token_command_ports_without_the_photo(world, photo_api, capsys):
-    estate, gog, link = world([_candidate()], [_card(image=_inline(IMAGE))])
-    api = photo_api(gog)
-    port.main(["google", "--apply"])
-    assert api.calls == [] and "PHOTO" not in capsys.readouterr().out
-    link.assert_called_once()
+def test_upload_photo_sends_the_bytes_on_stdin_never_on_argv(mocker):
+    seen = []
+
+    def run(argv, input=None, **kw):
+        seen.append((argv, input))
+        out = {"photos": [OWN_PHOTO]} if argv[1:3] == ["contacts", "raw"] else {}
+        return subprocess.CompletedProcess(argv, 0, json.dumps(out), "")
+
+    mocker.patch("people_sync.port.subprocess.run", side_effect=run)
+    port.upload_photo("people/c7", IMAGE)
+    (argv, stdin), (readback, _) = seen
+    assert argv[:6] == ["gog", *PHOTO_CALL]
+    assert json.loads(argv[argv.index("--params") + 1]) == {"resourceName": "people/c7"}
+    assert argv[argv.index("--body") + 1] == "@/dev/stdin"
+    assert {"--allow-write", "--force", "-j", "--no-input"} <= set(argv)
+    body = json.loads(stdin)
+    assert base64.b64decode(body["photoBytes"]) == IMAGE and body["personFields"] == "photos"
+    _assert_no_canary(json.dumps(argv))
+    assert readback[1:4] == ["contacts", "raw", "people/c7"]
 
 
-def test_google_token_strips_output_and_never_names_it(monkeypatch):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf '  {TOKEN} \\n'")
-    assert port.google_token() == TOKEN
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, "printf ''")
-    with pytest.raises(port.PhotoError, match="printed nothing"):
-        port.google_token()
-    monkeypatch.delenv(port.TOKEN_COMMAND_ENV)
-    with pytest.raises(port.PhotoError, match="is not set"):
-        port.google_token()
+def test_upload_photo_reports_a_failed_gog_call_without_its_output(mocker):
+    failed = subprocess.CompletedProcess([], 1, '{"error": "people/c9 x"}', "boom")
+    mocker.patch("people_sync.port.subprocess.run", return_value=failed)
+    with pytest.raises(port.PhotoError) as exc:
+        port.upload_photo("people/c7", IMAGE)
+    assert str(exc.value) == "updateContactPhoto through gog failed"
 
 
 def _ported(person, apple, google, **names):
     return _candidate(person, apple, **names) | {"google_id": google}
 
 
-def test_photos_only_uploads_where_google_shows_only_the_default_photo(
-    world, photo_api, capsys, monkeypatch
-):
-    monkeypatch.setenv(port.TOKEN_COMMAND_ENV, f"printf %s {TOKEN}")
+def test_photos_only_uploads_where_google_shows_only_the_default_photo(world, capsys):
     gog = Gog()
     gog.created += [{"names": [{"givenName": "x"}]}] * 3
     gog.photos["people/c2"] = [OWN_PHOTO]
@@ -726,17 +694,16 @@ def test_photos_only_uploads_where_google_shows_only_the_default_photo(
         _card(APPLE_C),
     ]
     estate, gog, link = world(candidates, cards, gog=gog)
-    api = photo_api(gog)
     port.main(["google", "--photos-only"])
     out = capsys.readouterr().out
     assert "PHOTO Nova Quill (p1) -> people/c1: yes (will upload)" in out
     assert "SKIP Ira Vance (p2) -> people/c2: Google already has its own photo" in out
     assert "Lux" not in out
     assert "1 photo to upload, 1 already in Google, 1 without an Apple photo" in out
-    assert api.calls == [] and estate.inserted == {}
+    assert gog.uploads == [] and estate.inserted == {}
     port.main(["google", "--photos-only", "--apply"])
     out = capsys.readouterr().out
-    assert [c["url"] for c in api.calls] == [API + "people/c1:updateContactPhoto"]
+    assert [u["resource"] for u in gog.uploads] == ["people/c1"]
     assert "PHOTO people/c1: uploaded and read back" in out
     assert estate.inserted == {} and not link.called
     _assert_no_canary(out)
@@ -744,18 +711,7 @@ def test_photos_only_uploads_where_google_shows_only_the_default_photo(
     assert "0 photos to upload, 2 already in Google" in capsys.readouterr().out
 
 
-def test_photos_only_apply_needs_the_token_command(world, photo_api, capsys):
-    gog = Gog()
-    gog.created.append({"names": [{"givenName": "x"}]})
-    world([_ported("p1", APPLE_A, "people/c1")], [_card(image=_inline(IMAGE))], gog=gog)
-    port.main(["google", "--photos-only"])
-    assert f"skipped ({port.TOKEN_COMMAND_ENV} is not set" in capsys.readouterr().out
-    with pytest.raises(SystemExit) as exc:
-        port.main(["google", "--photos-only", "--apply"])
-    assert port.TOKEN_COMMAND_ENV in str(exc.value)
-
-
-def test_photos_only_respects_the_person_filter(world, photo_api, capsys):
+def test_photos_only_respects_the_person_filter(world, capsys):
     gog = Gog()
     gog.created += [{"names": [{"givenName": "x"}]}] * 2
     ira = {"name": "Ira Vance", "first_name": "Ira", "last_name": "Vance"}
@@ -826,8 +782,8 @@ def test_a_google_profile_photo_is_not_the_contacts_own():
 
 
 def test_upload_refuses_anything_but_a_contact_resource(mocker):
-    patch = mocker.patch("people_sync.port.httpx.patch")
+    gog = mocker.patch("people_sync.port._gog")
     for resource in ("people/c1/../../x", "contactGroups/1", "people/me"):
         with pytest.raises(port.PhotoError, match="not a contact resource"):
-            port.upload_photo(resource, IMAGE, TOKEN)
-    assert not patch.called
+            port.upload_photo(resource, IMAGE)
+    assert not gog.called

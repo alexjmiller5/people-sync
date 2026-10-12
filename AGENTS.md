@@ -559,12 +559,13 @@ confirm stops the run naming the resource it may have made. `changes` treats
 `ported_from` as bookkeeping (`RAW_NOISE`), since the next Google ingest
 replaces that raw.
 
-Photos: after a verified link, `_put_photo` runs `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND`
-once per run (`functools.cache`), PATCHes `updateContactPhoto` with httpx and confirms
-with `gog contacts raw` that a non-default CONTACT-source photo shows. A photo failure
+Photos: after a verified link, `_put_photo` calls `updateContactPhoto` through
+`gog api call people v1 people.updateContactPhoto --body @/dev/stdin` (gog's `@-` is not
+stdin; `/dev/stdin` keeps the base64 body on the `_gog` pipe, off argv and disk) and
+confirms with `gog contacts raw` that a non-default CONTACT-source photo shows. A photo failure
 never undoes the port; it names the `--photos-only` retry. `run_photos` (`--photos-only`)
 reads ported people (`PORTED_SQL`), skips contacts that already have their own photo and
-writes nothing to soma. Tests assert the canary token and image bytes never reach stdout
+writes nothing to soma. Tests assert the image bytes never reach argv, stdout
 or inserted rows.
 
 ## Updates to known contacts

@@ -31,10 +31,7 @@ Runtime dependencies outside Python:
 
 - The `soma` CLI - the only write path to the people estate.
 - The `gog` CLI - Google People API access for `ingest google`, `port google`
-  and Google photo fetches.
-- For copying Apple card photos into Google, a command that prints a Google
-  OAuth access token with the contacts scope (`PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND`;
-  gog does not wrap the People API's `updateContactPhoto`).
+  (contacts and their photos) and Google photo fetches.
 - macOS with Contacts data for `ingest apple` (reads the local AddressBook
   SQLite copies read-only).
 - A soma hub URL and a scoped file token for `photos store`.
@@ -120,11 +117,11 @@ name, phone count and types, emails and birthday match. A rerun resumes a record
 but unlinked port; nothing is created twice. Apple cards are never edited.
 
 After the link, the card's photo goes to the new contact through the People API's
-`updateContactPhoto` with the token `PEOPLE_SYNC_GOOGLE_TOKEN_COMMAND` prints, and is
-read back through `gog`. The full image wins over the thumbnail, and the larger of two
+`updateContactPhoto`, called with `gog api call` (the request body on gog's stdin), and
+is read back through `gog`. The full image wins over the thumbnail, and the larger of two
 cards' images wins; an image Core Data keeps outside the database (a 0x02 marker naming
 a file under the book's `.AddressBook-v22_SUPPORT/_EXTERNAL_DATA/`) is read from the
-same local or ssh book. Image bytes stay in memory. `port google --photos-only` does the
+same local or ssh book. Image bytes stay in memory and never reach argv or disk. `port google --photos-only` does the
 same for people already in Google whose contact shows only the default photo.
 
 The edges need `people_sync_records` among `provenance.from_kind`'s catalog options
@@ -228,7 +225,6 @@ programs.people-sync = {
   notion.peopleDataSource = "<data_source_id>";
   notion.relations.Gifts = [ "<data_source_id>" "<relation property id>" ];
   addressBookHost = "other-mac";          # optional: resolve `comm` participants with that Mac's contacts too
-  googleTokenCommand = "my-google-token"; # optional: `port google` copies Apple photos; unset = skipped
 };
 ```
 
