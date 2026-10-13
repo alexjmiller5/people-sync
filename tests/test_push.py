@@ -180,7 +180,7 @@ def test_apply_writes_the_company_and_marks_it_ours(world, capsys):
 def test_a_contact_already_in_sync_is_left_alone(world, capsys):
     book = {"people/c1": _contact(org="Springfield, Lakeside")}
     gog = world([_row()], book)
-    push.main(["google", "--apply"])
+    push.main(["google", "--field", "company", "--apply"])
     assert gog.updates == []
     assert "1 in sync" in capsys.readouterr().out
 
