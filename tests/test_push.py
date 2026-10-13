@@ -282,7 +282,8 @@ def test_a_marker_the_read_back_does_not_show_is_reported(world, capsys):
 
 def test_no_contact_picture_leaves_the_google_photo_alone(world, capsys):
     gog = world(
-        [_row(circles='["Springfield", "Lakeside"]')], {"people/c1": _contact(org="Springfield, Lakeside")}
+        [_row(circles='["Springfield", "Lakeside"]')],
+        {"people/c1": _contact(org="Springfield, Lakeside")},
     )
     push.main(["google", "--apply"])
     assert gog.uploads == [] and gog.updates == []
@@ -365,7 +366,9 @@ def test_stored_bytes_that_do_not_match_the_hash_are_not_uploaded(world, mocker,
 
 
 def test_a_contact_picture_without_a_live_photo_is_reported(world, capsys):
-    gog = world([_row(contact_photo_id="gone")], {"people/c1": _contact(org="Springfield, Lakeside")})
+    gog = world(
+        [_row(contact_photo_id="gone")], {"people/c1": _contact(org="Springfield, Lakeside")}
+    )
     push.main(["google", "--apply"])
     assert (
         "photo: skipped (contact_photo_id names no live photo of theirs)" in capsys.readouterr().out

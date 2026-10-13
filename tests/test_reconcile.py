@@ -899,7 +899,7 @@ def test_create_from_any_source_requires_a_name(env, monkeypatch):
     row = insert.call_args_list[0].args[1][0]
     assert row["id"] == "aaaabbbb" and row["name"] == "Tess Quinn Sample"
     assert (
-        row["first_name"] == "Nora"
+        row["first_name"] == "Tess"
         and row["last_name"] == "Sample"
         and row["middle_name"] == "Quinn"
     )
@@ -907,9 +907,7 @@ def test_create_from_any_source_requires_a_name(env, monkeypatch):
 
 
 def test_corrected_spelling_is_a_note_not_a_nickname(env):
-    person = _person(
-        id="p1", name="Mara Testerly", last_name="Testerly", nickname=None, notes=None
-    )
+    person = _person(id="p1", name="Mara Testerly", last_name="Testerly", nickname=None, notes=None)
     record = {
         "id": "linkedin:af",
         "source": "linkedin",
