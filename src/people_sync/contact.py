@@ -3,7 +3,8 @@ reads every linked Google contact and compares the fields People owns (names, ph
 emails, postal addresses, birthday) with soma.
 
 Every contact carries a review mark in its `clientData` (`people-sync.contact` = the
-fingerprint of its contact fields as last reviewed). Compared with it, a contact is
+People id it was reviewed for and the fingerprint of its contact fields as last reviewed;
+relinked to another person, the contact is new again). Compared with it, a contact is
 `new` (never pulled), `unchanged` (Google as reviewed: any difference is soma's newer
 state, which `push google` writes) or `changed` (edited in Google since). Items:
 
@@ -266,11 +267,22 @@ def soma_states(rows: list[dict]) -> dict[str, dict]:
     }
 
 
-def status_of(contact: dict) -> str:
-    mark = push._client(contact).get(MARK_KEY)
-    if not mark:
+def mark(person_id: str, state: dict) -> str:
+    """The review mark: the People id it was reviewed for, then the fields' fingerprint."""
+    return f"{person_id}:{fingerprint(state)}"
+
+
+def status_of(contact: dict, person_id: str) -> str:
+    """new (never pulled for this person, or linked to someone else when marked),
+    unchanged (Google as reviewed) or changed (edited in Google since, or a mark
+    that names no person)."""
+    value = push._client(contact).get(MARK_KEY)
+    if not value:
         return "new"
-    return "unchanged" if mark == fingerprint(google_state(contact)) else "changed"
+    owner, _, fp = value.rpartition(":")
+    if owner and owner != person_id:
+        return "new"
+    return "unchanged" if owner and fp == fingerprint(google_state(contact)) else "changed"
 
 
 def _edge(resource: str, to_kind: str, to_ref: str, field: str | None, cue: str) -> dict:
@@ -419,7 +431,7 @@ def run(people: list[str], apply: bool, accept: dict[str, str], output: str | No
         if not isinstance(c, dict):
             print(f"SKIP {row['name']} ({pid}) -> {resource}: Google did not return it ({c})")
             continue
-        status = status_of(c)
+        status = status_of(c, pid)
         counts[status] += 1
         g = google_state(c)
         items = diff(states[pid], g, status)
@@ -450,7 +462,7 @@ def run(people: list[str], apply: bool, accept: dict[str, str], output: str | No
             if it["kind"] == "add" or accept.get(it["id"]) == "google":
                 writes.take(pid, resource, it, today)
         if not open_items and status != "unchanged":
-            marks.append({"resource": resource, "client": {MARK_KEY: fingerprint(g)}})
+            marks.append({"resource": resource, "client": {MARK_KEY: mark(pid, g)}})
     if output:
         with open(output, "w") as f:
             json.dump(

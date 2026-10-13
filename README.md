@@ -144,7 +144,7 @@ same for people already in Google whose contact shows only the default photo.
 - **Contact** = names, phone numbers, emails, current postal addresses and birthday from
   `person_phones`, `person_emails`, street rows of `person_locations` and `people`,
   written only onto contacts that `pull google` marked as reviewed and Google has not
-  changed since (the mark is the fingerprint of the contact fields in `clientData`).
+  changed since (the mark in `clientData` is the People id plus the fingerprint of the contact fields).
 
 `--field company|photo|contact` limits a run.
 

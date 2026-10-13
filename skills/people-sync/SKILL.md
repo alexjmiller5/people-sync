@@ -298,7 +298,8 @@ people-sync push google --field contact         # preview, then --apply
 ```
 
 Every linked contact carries a review mark (`people-sync.contact` in its
-`clientData`, the fingerprint of its contact fields as last reviewed). Against
+`clientData`: the People id it was reviewed for and the fingerprint of its
+contact fields as last reviewed; relinking the contact to another person makes it new again). Against
 it a contact is `new`, `unchanged` (any difference is soma's newer state) or
 `changed` (edited in Google since). `pull` lists per contact: **add** (a Google
 value soma lacks: a number, an email, a current address, name parts that spell

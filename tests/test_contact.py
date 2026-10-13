@@ -281,7 +281,7 @@ def test_pull_apply_imports_adds_with_evidence_and_marks_the_contact(world, caps
         "person_locations",
         "people",
     }
-    assert _mark(gog) == contact.fingerprint(contact.google_state(book["people/c1"]))
+    assert _mark(gog) == contact.mark("p1", contact.google_state(book["people/c1"]))
 
 
 def test_pull_leaves_a_contact_with_open_decisions_unmarked(world, capsys):
@@ -328,7 +328,7 @@ def test_accepting_google_for_a_lost_value_retires_it_in_soma(world, tmp_path, c
     }
     google = _google(phoneNumbers=[PHONE2])
     stale = contact.fingerprint(contact.google_state(_google(phoneNumbers=[PHONE])))
-    google["clientData"] = [{"key": contact.MARK_KEY, "value": stale}]
+    google["clientData"] = [{"key": contact.MARK_KEY, "value": "p1:" + stale}]
     estate, gog = world(
         [_person(first_name="Nova", last_name="Quill")], {"people/c1": google}, phones=[phone]
     )
@@ -371,7 +371,7 @@ def push_world(world, mocker):
 def test_push_writes_soma_onto_a_reviewed_contact(push_world, capsys):
     google = _google(phoneNumbers=[PHONE])
     google["clientData"] = [
-        {"key": contact.MARK_KEY, "value": contact.fingerprint(contact.google_state(google))}
+        {"key": contact.MARK_KEY, "value": contact.mark("p1", contact.google_state(google))}
     ]
     phones = [
         {
@@ -400,13 +400,13 @@ def test_push_writes_soma_onto_a_reviewed_contact(push_world, capsys):
     assert [p["value"] for p in book["phoneNumbers"]] == ["+15550100001", "+442079460000"]
     assert book["birthdays"] == [{"date": {"month": 3, "day": 5}}]
     assert book["names"] == [{"givenName": "Nova", "familyName": "Quill"}]
-    assert _mark(gog) == contact.fingerprint(contact.google_state(book))
+    assert _mark(gog) == contact.mark("p1", contact.google_state(book))
     assert "WROTE people/c1" in out
 
 
 def test_push_skips_a_contact_google_changed_since_the_review(push_world, capsys):
     google = _google(phoneNumbers=[PHONE])
-    google["clientData"] = [{"key": contact.MARK_KEY, "value": "0" * 64}]
+    google["clientData"] = [{"key": contact.MARK_KEY, "value": "p1:" + "0" * 64}]
     estate, gog = push_world([_person(first_name="Nova", last_name="Quill")], {"people/c1": google})
     push.main(["google", "--field", "contact", "--apply"])
     assert gog.updates == []
@@ -433,7 +433,7 @@ def test_push_leaves_a_contact_already_equal_to_soma(push_world, capsys):
     ]
     google = _google(phoneNumbers=[PHONE], names=[{"givenName": "Nova", "familyName": "Quill"}])
     google["clientData"] = [
-        {"key": contact.MARK_KEY, "value": contact.fingerprint(contact.google_state(google))}
+        {"key": contact.MARK_KEY, "value": contact.mark("p1", contact.google_state(google))}
     ]
     estate, gog = push_world(
         [_person(first_name="Nova", last_name="Quill")], {"people/c1": google}, phones=phones
@@ -457,7 +457,7 @@ def test_number_formatting_is_not_a_difference():
 def test_a_contact_write_the_read_back_does_not_show_is_reported(push_world, capsys):
     google = _google(phoneNumbers=[PHONE])
     google["clientData"] = [
-        {"key": contact.MARK_KEY, "value": contact.fingerprint(contact.google_state(google))}
+        {"key": contact.MARK_KEY, "value": contact.mark("p1", contact.google_state(google))}
     ]
     phones = [
         {
@@ -514,3 +514,28 @@ def test_a_part_both_sides_hold_differently_is_a_conflict():
     google = contact.google_state(_google(names=[{"givenName": "Jamie", "familyName": "Testwell"}]))
     (item,) = contact.diff(_soma(person), google, "new")
     assert (item["kind"], item["field"]) == ("conflict", "names")
+
+
+def test_a_mark_belongs_to_one_person():
+    google = _google(phoneNumbers=[PHONE])
+    state = contact.google_state(google)
+    google["clientData"] = [{"key": contact.MARK_KEY, "value": contact.mark("p1", state)}]
+    assert contact.status_of(google, "p1") == "unchanged"
+    assert (
+        contact.status_of(google, "p2") == "new"
+    )  # relinked to another person: never pulled for them
+    google["clientData"] = [{"key": contact.MARK_KEY, "value": contact.fingerprint(state)}]
+    assert contact.status_of(google, "p1") == "changed"  # a mark without its person is not trusted
+
+
+def test_push_never_strips_a_contact_relinked_to_a_person_without_values(push_world, capsys):
+    google = _google(phoneNumbers=[PHONE])
+    google["clientData"] = [
+        {
+            "key": contact.MARK_KEY,
+            "value": contact.mark("someone-else", contact.google_state(google)),
+        }
+    ]
+    estate, gog = push_world([_person(first_name="Nova", last_name="Quill")], {"people/c1": google})
+    push.main(["google", "--field", "contact", "--apply"])
+    assert gog.updates == [] and "1 never pulled" in capsys.readouterr().out
