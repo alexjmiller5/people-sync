@@ -213,6 +213,7 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
         want = company(row["circles"])
         circles = {_norm(c) for c in json.loads(row["circles"] or "[]")}
         change: dict = {"resource": resource, "client": {}}
+        waiting = False  # contact fields wait for a pull: not in sync
         lines = []
         have = [n for n, _ in _orgs(contact)]
         if "company" in fields and (
@@ -251,6 +252,7 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
             desired = states[row["id"]]
             if status == "new":
                 unpulled += 1
+                waiting = True
             elif status == "changed":
                 skipped += 1
                 lines.append(
@@ -268,7 +270,7 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
                     f"birthday {'yes' if desired['birthday'] else 'no'}"
                 )
         if not lines:
-            synced += 1
+            synced += 0 if waiting else 1
             continue
         print(f"PUSH {who} -> {resource}")
         print("\n".join(lines))

@@ -416,8 +416,9 @@ def test_push_skips_a_contact_google_changed_since_the_review(push_world, capsys
 def test_push_skips_a_contact_never_pulled(push_world, capsys):
     estate, gog = push_world([_person()], {"people/c1": _google(phoneNumbers=[PHONE])})
     push.main(["google", "--field", "contact", "--apply"])
+    out = capsys.readouterr().out
     assert gog.updates == []
-    assert "1 never pulled" in capsys.readouterr().out
+    assert "0 in sync, 1 never pulled" in out
 
 
 def test_push_leaves_a_contact_already_equal_to_soma(push_world, capsys):
