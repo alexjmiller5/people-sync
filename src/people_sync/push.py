@@ -10,7 +10,11 @@ writes them one way.
   full size) is only marked; anything else goes through port's `updateContactPhoto`
   call and its read-back.
 
-`--field company` / `--field photo` limits a run to one field (default: both).
+- **Contact** = names, phones, emails, current postal addresses and birthday from soma
+  (`contact` module), written only onto contacts `pull google` marked as reviewed and
+  Google has not changed since.
+
+`--field company|photo|contact` limits a run (repeatable; default: all three).
 
 What this command wrote is marked in the contact's own `clientData`
 (`people-sync.company`, `people-sync.photo` = the picture's sha256), so a rerun writes
@@ -28,7 +32,8 @@ from people_sync import photos, port, somadata
 from people_sync.google_cleanup import company
 
 PEOPLE_SQL = """
-SELECT p.id, p.name, p.circles, p.contact_photo_id, ph.sha256 AS photo_sha,
+SELECT p.id, p.name, p.first_name, p.middle_name, p.last_name, p.birthday,
+  p.circles, p.contact_photo_id, ph.sha256 AS photo_sha,
   ph.r2_key AS photo_key, g.source_id AS google_id
 FROM people p
 JOIN person_accounts g ON g.person_id = p.id AND g.platform = 'google_contacts'
@@ -47,7 +52,9 @@ BATCH = 200
 API = ["api", "call", "people", "v1"]
 
 
-FIELDS = ("company", "photo")
+FIELDS = ("company", "photo", "contact")
+CONTACT_MASK = "names,phoneNumbers,emailAddresses,addresses,birthdays"
+READ_FIELDS = f"organizations,photos,clientData,{CONTACT_MASK}"
 
 
 def _norm(value: str | None) -> str:
@@ -105,7 +112,7 @@ def read(resources: list[str]) -> dict[str, dict | int]:
     for i in range(0, len(resources), BATCH):
         params = {
             "resourceNames": resources[i : i + BATCH],
-            "personFields": "organizations,photos,clientData",
+            "personFields": READ_FIELDS,
         }
         got = json.loads(port._gog([*API, "people.getBatchGet", "--params", json.dumps(params)]))
         for r in got.get("responses") or []:
@@ -127,12 +134,21 @@ def _upload(resource: str, row: dict) -> bool:
     return True
 
 
+def _mask(w: dict) -> str:
+    parts = (["organizations"] if "company" in w else []) + (
+        [CONTACT_MASK] if "contact" in w else []
+    )
+    return ",".join([*parts, "clientData"])
+
+
 def _update(writes: list[dict], contacts: dict[str, dict]) -> None:
     """One batchUpdateContacts per mask and batch; each result is checked field by field."""
-    for mask in ("organizations,clientData", "clientData"):
-        group = [w for w in writes if ("company" in w) == mask.startswith("organizations")]
+    from people_sync import contact as contact_fields
+
+    for mask in dict.fromkeys(_mask(w) for w in writes):
+        group = [w for w in writes if _mask(w) == mask]
         for i in range(0, len(group), BATCH):
-            body = {"contacts": {}, "updateMask": mask, "readMask": "organizations,clientData"}
+            body = {"contacts": {}, "updateMask": mask, "readMask": mask}
             for w in group[i : i + BATCH]:
                 contact = contacts[w["resource"]]
                 client = {k: v for k, v in _client(contact).items() if k not in w["client"]}
@@ -143,6 +159,7 @@ def _update(writes: list[dict], contacts: dict[str, dict]) -> None:
                 }
                 if "company" in w:
                     person["organizations"] = [{"name": w["company"]}] if w["company"] else []
+                person |= w.get("contact") or {}
                 body["contacts"][w["resource"]] = person
             args = [*API, "people.batchUpdateContacts", "--body", "@/dev/stdin"]
             got = json.loads(port._gog([*args, "--allow-write", "--force"], json.dumps(body)))
@@ -154,6 +171,12 @@ def _update(writes: list[dict], contacts: dict[str, dict]) -> None:
                     [w["company"]] if w["company"] else []
                 ):
                     problems.append("company")
+                want = w["client"].get(contact_fields.MARK_KEY)
+                if (
+                    "contact" in w
+                    and contact_fields.fingerprint(contact_fields.google_state(person)) != want
+                ):
+                    problems.append("contact fields")
                 client = _client(person)
                 if any(client.get(k) != v for k, v in w["client"].items()):
                     problems.append("marker")
@@ -173,8 +196,13 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
         names.setdefault(e["person_id"], set()).add(_norm(e.get("company")))
         titles.setdefault(e["person_id"], set()).add(_norm(e.get("title")))
     contacts = read(list(dict.fromkeys(r["google_id"] for r in rows)))
+    states = {}
+    if "contact" in fields:
+        from people_sync import contact as contact_fields
+
+        states = contact_fields.soma_states(list({r["id"]: r for r in rows}.values()))
     writes, uploads = [], []
-    synced = skipped = 0
+    synced = skipped = unpulled = 0
     for row in rows:
         resource, who = row["google_id"], f"{row['name']} ({row['id']})"
         contact = contacts.get(resource)
@@ -218,6 +246,27 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
             else:
                 lines.append("  photo: yes (will upload)")
                 uploads.append((change, row))
+        if "contact" in fields:
+            status = contact_fields.status_of(contact)
+            desired = states[row["id"]]
+            if status == "new":
+                unpulled += 1
+            elif status == "changed":
+                skipped += 1
+                lines.append(
+                    "  contact: skipped (Google changed since the last pull: "
+                    "run `people-sync pull google`)"
+                )
+            elif contact_fields.fingerprint(desired) != contact_fields.fingerprint(
+                contact_fields.google_state(contact)
+            ):
+                change["contact"] = contact_fields.to_google(desired)
+                change["client"][contact_fields.MARK_KEY] = contact_fields.fingerprint(desired)
+                lines.append(
+                    f"  contact: names, {len(desired['phones'])} phone(s), "
+                    f"{len(desired['emails'])} email(s), {len(desired['addresses'])} address(es), "
+                    f"birthday {'yes' if desired['birthday'] else 'no'}"
+                )
         if not lines:
             synced += 1
             continue
@@ -236,7 +285,8 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
         _update(writes, contacts)
     noun = "contact" if len(writes) == 1 else "contacts"
     verb = "updated" if apply else "to update"
-    print(f"\n{len(writes)} {noun} {verb}, {skipped} skipped, {synced} in sync")
+    tail = f", {unpulled} never pulled (contact fields wait for `pull google`)" if unpulled else ""
+    print(f"\n{len(writes)} {noun} {verb}, {skipped} skipped, {synced} in sync{tail}")
 
 
 def main(argv: list[str] | None = None) -> None:

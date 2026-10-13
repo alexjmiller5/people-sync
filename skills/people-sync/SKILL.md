@@ -27,10 +27,12 @@ development. Soma is the estate it writes into (`soma-map` /
   and only then interpreted; every row and promoted fact carries a
   provenance edge to the exact capture. A retention failure stops the run.
 - **A missing or stale export skips that source; it never blocks the run.**
-- **The address books are the phone book, soma is the brain.** Emails,
-  phone numbers and postal addresses are never copied into soma; the
-  `person_accounts.source_id` (Google `people/c...`, Apple `<uuid>:ABPerson`)
-  is the pointer, resolved on demand.
+- **People is the contact record; Google contacts are a synced copy.** Phone
+  numbers, emails and postal addresses live in `person_phones`,
+  `person_emails` and `person_locations` (rows with a street), names and
+  birthday on `people`. `pull google` brings Google's drift in at a review and
+  `push google` keeps Google in parity (Step 4c). The ledger, captures and logs
+  still never hold a contact detail: only those tables do.
 - **Nothing links an account to a person without the user's word**, except
   the exact-name auto-matcher (Step 2), whose links are recorded and
   reversible.
@@ -285,6 +287,32 @@ and `photo: yes (will upload)`. Apply uploads photos, then writes each contact i
 People API batches with its etag and reads the result back (`WROTE`, `VERIFY
 FAILED`, `PHOTO FAILED`). Its writes are marked in the contact's `clientData`, so a
 rerun only writes what changed and re-uploads a picture deleted in Google.
+
+## Step 4c - contact fields: pull, decide, push
+
+```bash
+people-sync pull google --output drift.json     # preview, always first
+people-sync pull google --apply                 # import adds, mark contacts with nothing open
+people-sync pull google --apply --accept decisions.json   # {item id: google|soma}
+people-sync push google --field contact         # preview, then --apply
+```
+
+Every linked contact carries a review mark (`people-sync.contact` in its
+`clientData`, the fingerprint of its contact fields as last reviewed). Against
+it a contact is `new`, `unchanged` (any difference is soma's newer state) or
+`changed` (edited in Google since). `pull` lists per contact: **add** (a Google
+value soma lacks: a number, an email, a current address, name parts that spell
+the People name, a birthday or its year; `--apply` writes it with an evidence
+edge from the Google ledger record), **missing** (a value soma holds that a
+changed contact lost) and **conflict** (a different name or birthday). Missing
+and conflict items wait for the user: build the review page from
+`--output`, then `--accept` maps each item id to `google` (take Google's side
+into soma: a lost number is retired, a lost address gets an end date) or `soma`
+(keep soma; push restores Google). Birthday conflicts follow the user's own
+ruling (each one individually). A contact with nothing open is marked;
+`push google --field contact` writes names, numbers, emails, current
+addresses and birthday from soma onto marked, unchanged contacts only, reads
+them back and re-marks them. A contact never pulled is counted, never written.
 
 ## Step 5 - Google write-back cleanup
 

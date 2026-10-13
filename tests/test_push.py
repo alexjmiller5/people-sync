@@ -56,6 +56,8 @@ class Estate:
         self.rows, self.employments = list(rows), list(employments)
 
     def sql(self, query):
+        if re.search(r"\bFROM person_(phones|emails|locations)\b", query):
+            return []
         if re.search(r"\bFROM person_employments\b", query):
             return list(self.employments)
         if re.search(r"\bFROM people p\b", query):

@@ -38,6 +38,7 @@ tests/             pytest, synthetic fixtures only
   port.py          Apple-only people into Google contacts (`people-sync port google`)
   push.py          People's company + contact photo onto linked Google contacts (`push google`)
   pick.py          default contact pictures by source order (`photos pick`)
+  contact.py       contact fields People owns: `pull google` drift + review marks; push's `contact` field
   review.py + review.html  the private review page (`people-sync review`)
   whatsapp.py      metadata-snapshot ingest
   apple_photos.py  named Apple Photos people into the ledger (`ingest apple_photos`)
@@ -661,12 +662,14 @@ commit messages. Concretely:
   contents. `log.warning("skipping malformed entry", source=..., index=i,
   reason=...)` is the shape; adding the name or handle leaks a person into the
   logs.
-- Emails, phone numbers, and addresses are NEVER copied into soma. The
-  Apple query selects presence counts (`phone_count`, `email_count`), not
-  values, and the Google raw dict keeps names, memberships, organizations,
-  birthdays, and the photo url only. Both keep the platform's `source_id`, so
-  a contact detail is resolved on demand through `gog` or Contacts instead of
-  being duplicated.
+- Emails, phone numbers, and addresses never enter the ledger, a capture or a
+  log. The Apple query selects presence counts (`phone_count`,
+  `email_count`), not values, and the Google raw dict keeps names,
+  memberships, organizations, birthdays, and the photo url only. Contact
+  details reach soma through one path: `contact.py` (`pull google`), which
+  reads the live contact and writes `person_phones`, `person_emails` and
+  street rows of `person_locations` directly, each with an evidence edge to
+  the Google ledger record.
 
 That PII boundary is the reason `sources.py` builds a curated `raw` dict for
 Google and Apple rather than storing the API response verbatim. If a new field
