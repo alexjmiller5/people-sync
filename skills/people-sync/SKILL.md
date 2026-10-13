@@ -449,7 +449,7 @@ is the user's call: `reconcile link <person> <ledger record>`.
 ## The review page
 
 ```bash
-people-sync propose --batch "<label>" <context.json> [--batch ...] [--google-groups <labels.json>] [--cues <cues.json>] [--links <links.json>] --output <proposals.json>
+people-sync propose --batch "<label>" <context.json> [--batch ...] [--google-groups <labels.json>] [--cues <cues.json>] [--links <links.json>] [--vocabulary <vocabulary.json>] --output <proposals.json>
 people-sync review  --batch "<label>" <context.json> [--batch ...] --photos <manifest.json> --proposals <proposals.json> --output <dir>/index.html
 ```
 
@@ -459,8 +459,12 @@ a shared place/school/era cue (Google label names via `--google-groups`,
 extra cue text per id via `--cues`), or a shared phone number via `--links`
 (`{record id: [record ids]}`, built from WhatsApp `contact_refs`). Anything
 unconnected is its own proposed person. Fuzzy joins carry an uncertainty
-note. Proposals never change the page's evidence, so regenerating them keeps
-the user's saved responses; a group whose proposal changed asks again.
+note. Cues come only from the user's vocabulary file
+(`--vocabulary`, default `$XDG_CONFIG_HOME/people-sync/vocabulary.json`):
+`{"aliases": {"<phrase>": ["<cue>", ...]}, "circles": {"<regex>": ["<cue>", ...]}}`,
+aliases matched in profile, label and `--cues` text, circle patterns against
+whole circle and label names. No file, no cue matches. Proposals never
+change the page's evidence, so regenerating them keeps the user's saved responses; a group whose proposal changed asks again.
 
 Contexts are prepared JSON per name group (`current_people`,
 `google_candidates`, `profiles`), the photo manifest maps stored keys to

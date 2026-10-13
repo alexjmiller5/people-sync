@@ -2,6 +2,21 @@ import json
 
 from people_sync import propose
 
+VOCAB = {
+    "aliases": {
+        "state university": ["stateu", "rivertown"],
+        "@stateualumni": ["stateu", "rivertown"],
+        "rivertown": ["rivertown"],
+        "springfield": ["springfield"],
+        "lakeside high school": ["springfield"],
+        "nyc": ["nyc"],
+    },
+    "circles": {
+        "springfield": ["springfield"],
+        "(?:fall|spring) 20\\d\\d": ["stateu", "rivertown"],
+    },
+}
+
 
 def _group(people=(), google=(), profiles=()):
     return {
@@ -35,6 +50,7 @@ def _group(people=(), google=(), profiles=()):
 
 
 def _clusters(group, **kw):
+    kw.setdefault("vocabulary", VOCAB)
     return [
         (sorted(c["person_ids"] + c["record_ids"]), c["reason"], c.get("uncertainty"))
         for c in propose.propose_group(group, **kw)["clusters"]
@@ -47,7 +63,7 @@ def test_handle_spelling_a_name_joins_across_a_surname_typo():
         profiles=[
             ("instagram", "testinafakersonn", "Testina", "nyc | springfield", None),
             ("facebook", "testina.fakerson", "Testina Fakerson", None, None),
-            ("instagram", "testinaother", "testina", "boston", None),
+            ("instagram", "testinaother", "testina", "rivertown", None),
         ],
     )
     clusters = _clusters(group)
@@ -77,12 +93,15 @@ def test_era_circle_meets_school_cue_only_when_unambiguous():
     bu_bio = ("instagram", "j.smith", "James", "@stateualumni '25", None)
     group = _group(people=[("James", ["Fall 2021", "Through Sam"])], profiles=[bu_bio])
     [only] = _clusters(group)
-    assert only[0] == ["instagram:j.smith", "p0"] and "shared cue: boston, bu" in only[1].lower()
+    assert (
+        only[0] == ["instagram:j.smith", "p0"]
+        and "shared cue: rivertown, stateu" in only[1].lower()
+    )
 
-    # two StateU James profiles: the cue no longer decides, both stay separate
+    # two State University James profiles: the cue no longer decides, both stay separate
     group = _group(
         people=[("James", ["Fall 2021"])],
-        profiles=[bu_bio, ("facebook", "james.smith.9", "James", None, ["state university"])],
+        profiles=[bu_bio, ("facebook", "james.smith.9", "James", None, ["State University"])],
     )
     assert len(_clusters(group)) == 3
 
@@ -111,7 +130,8 @@ def test_same_platform_accounts_do_not_merge_on_a_shared_cue():
     assert len(_clusters(group)) == 2
 
 
-def test_cli_writes_keyed_proposals(tmp_path, capsys):
+def test_cli_writes_keyed_proposals(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
     ctx = tmp_path / "b.json"
     ctx.write_text(json.dumps({"Ava": _group(google=[("Ava Long", None)])}))
     out = tmp_path / "out" / "proposals.json"
@@ -123,10 +143,10 @@ def test_cli_writes_keyed_proposals(tmp_path, capsys):
 
 def test_handle_abbreviating_a_surname_outranks_a_bare_place_cue():
     group = _group(
-        google=[("Testina Mockford", "Boston")],
+        google=[("Testina Mockford", "Rivertown")],
         profiles=[
             ("instagram", "testina_moc", "Testina", None, None),
-            ("instagram", "testinaother", "testina", "boston", None),
+            ("instagram", "testinaother", "testina", "rivertown", None),
         ],
     )
     clusters = _clusters(group)
@@ -155,7 +175,7 @@ def test_list_page_heading_is_not_a_name_and_phone_links_join():
             "record_id": "whatsapp:lid-1",
             "platform": "whatsapp",
             "handle": None,
-            "display_name": "Caro",
+            "display_name": "Carlie",
             "source_name": None,
             "bio": None,
             "location": None,
@@ -246,3 +266,26 @@ def test_social_profile_spelling_wins_the_label():
     )
     [only] = propose.propose_group(group)["clusters"]
     assert only["label"].startswith("Nora Fakington")
+
+
+def test_cli_reads_the_vocabulary_from_user_config(tmp_path, monkeypatch):
+    profiles = [("instagram", "j.smith", "James", "@stateualumni '25", None)]
+    ctx = tmp_path / "b.json"
+    ctx.write_text(
+        json.dumps({"James": _group(people=[("James", ["Fall 2021"])], profiles=profiles)})
+    )
+    out = tmp_path / "proposals.json"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    propose.main(["--batch", "B", str(ctx), "--output", str(out)])
+    assert len(json.loads(out.read_text())['["B", "James"]']["clusters"]) == 2  # no vocabulary
+
+    (tmp_path / "config" / "people-sync").mkdir(parents=True)
+    (tmp_path / "config" / "people-sync" / "vocabulary.json").write_text(json.dumps(VOCAB))
+    propose.main(["--batch", "B", str(ctx), "--output", str(out)])
+    [joined] = json.loads(out.read_text())['["B", "James"]']["clusters"]
+    assert "shared cue: rivertown, stateu" in joined["reason"].lower()
+
+    explicit = tmp_path / "other.json"
+    explicit.write_text(json.dumps({"aliases": {}, "circles": {}}))
+    propose.main(["--batch", "B", str(ctx), "--vocabulary", str(explicit), "--output", str(out)])
+    assert len(json.loads(out.read_text())['["B", "James"]']["clusters"]) == 2

@@ -12,6 +12,7 @@ decides.
 import argparse
 import itertools
 import json
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -20,38 +21,18 @@ LINK_SCORE = 3  # a full-name or handle match on its own
 JUNK_NAMES = {"mutuals", "join linkedin", "unnamed account"}  # page headings scraped as names
 WEAK_LINK_SCORE = 2  # a fuzzy surname or a cue match, only when unambiguous
 
-# Era / community circles that imply a place or school the profiles may name.
-ERA = re.compile(r"^(?:fall|spring|summer|winter) 20(?:2[1-5])$", re.I)
-CUE_ALIASES = {
-    "state university": "stateu",
-    "@stateualumni": "stateu",
-    "stateu alumni": "stateu",
-    "mascots": "stateu",
-    "boston": "boston",
-    "bos": "boston",
-    "springfield": "springfield",
-    "lakeside": "springfield",
-    "lakeside high school": "springfield",
-    "new york": "nyc",
-    "nyc": "nyc",
-    "new york city": "nyc",
-    "abroad": "abroad",
-    "exchange": "abroad",
-    "hooli": "hooli",
-    "globex": "globex",
-    "frat": "frat",
-    "example fraternity": "frat",
-    "initech": "initech",
-}
-CIRCLE_CUES = {
-    "exchange 2024": {"abroad", "stateu"},
-    "high school": {"springfield"},
-    "lakeside": {"springfield"},
-    "springfield": {"springfield"},
-    "stateu": {"stateu", "boston"},
-    "boston": {"boston"},
-    "nyc": {"nyc"},
-}
+
+def load_vocabulary(path: Path | None = None) -> dict:
+    """The user's own cue words: {"aliases": {phrase: [cue, ...]}, "circles":
+    {regex: [cue, ...]}}. Aliases are matched in profile text, circle patterns
+    against whole circle / label names (case-insensitive). `--cues` text is
+    matched against the aliases too. No file means no cues."""
+    if path is None:
+        base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+        path = Path(base) / "people-sync" / "vocabulary.json"
+        if not path.exists():
+            return {}
+    return json.loads(Path(path).read_text())
 
 
 def letters(s: str | None) -> str:
@@ -75,7 +56,7 @@ def edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-def cue_tokens(*texts) -> set[str]:
+def cue_tokens(aliases: dict, *texts) -> set[str]:
     found = set()
     for text in texts:
         if not text:
@@ -83,14 +64,17 @@ def cue_tokens(*texts) -> set[str]:
         if isinstance(text, (list, dict)):
             text = json.dumps(text, ensure_ascii=False)
         low = unicodedata.normalize("NFKD", str(text).casefold())
-        for phrase, cue in CUE_ALIASES.items():
-            if re.search(r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", low):
-                found.add(cue)
+        for phrase, cues in aliases.items():
+            if re.search(r"(?<![a-z])" + re.escape(phrase.casefold()) + r"(?![a-z])", low):
+                found.update(cues)
     return found
 
 
 class Item:
-    def __init__(self, kind, ident, name, *, handle=None, platform=None, texts=(), circles=()):
+    def __init__(
+        self, kind, ident, name, *, handle=None, platform=None, texts=(), circles=(), vocab=None
+    ):
+        vocab = vocab or {}
         self.kind = kind  # "person" | "google" | "profile"
         self.id = ident
         self.name = name or ""
@@ -101,21 +85,20 @@ class Item:
         self.last = self.tokens[-1] if len(self.tokens) > 1 else ""
         self.full = letters(self.name) if len(self.tokens) > 1 else ""
         self.handle_letters = letters(handle) if handle else ""
-        self.cues = cue_tokens(*texts)
+        self.cues = cue_tokens(vocab.get("aliases", {}), *texts)
         for circle in circles:
-            key = str(circle).casefold()
-            self.cues |= CIRCLE_CUES.get(key, set())
-            if ERA.match(key):
-                self.cues |= {"stateu", "boston"}
-        if "stateu" in self.cues:
-            self.cues.add("boston")
+            for pattern, cues in vocab.get("circles", {}).items():
+                if re.fullmatch(pattern, str(circle).strip(), re.I):
+                    self.cues.update(cues)
 
     @property
     def label(self) -> str:
         return self.name or self.handle or self.id
 
 
-def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> list[Item]:
+def items_for(
+    group: dict, google_groups: dict | None, cues: dict | None, vocab: dict | None = None
+) -> list[Item]:
     google_groups = google_groups or {}
     cues = cues or {}
     out = []
@@ -129,6 +112,7 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
                 p.get("name"),
                 texts=(p.get("notes"), *cues.get(p["id"], [])),
                 circles=circles,
+                vocab=vocab,
             )
         )
     for c in group.get("google_candidates", []):
@@ -146,6 +130,7 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
                 c.get("name"),
                 texts=(*orgs, *[name for name in labels if name], *cues.get(c["id"], [])),
                 circles=[name for name in labels if name] + [o for o in orgs if o],
+                vocab=vocab,
             )
         )
     for p in group.get("profiles", []):
@@ -171,6 +156,7 @@ def items_for(group: dict, google_groups: dict | None, cues: dict | None) -> lis
                     p.get("work"),
                     *cues.get(p["record_id"], []),
                 ),
+                vocab=vocab,
             )
         )
     return out
@@ -303,10 +289,12 @@ def label_for(members: list[Item]) -> str:
 QUIET_SOURCES = {"partiful"}
 
 
-def propose_group(group: dict, google_groups=None, cues=None, links=None, events=None) -> dict:
+def propose_group(
+    group: dict, google_groups=None, cues=None, links=None, events=None, vocabulary=None
+) -> dict:
     """`events`: {record id: [event titles]} - a quiet-source record that went to one of
     the user's chosen events earns its own box, labelled with the event."""
-    items = items_for(group, google_groups, cues)
+    items = items_for(group, google_groups, cues, vocabulary)
     events = events or {}
     clusters, excluded = [], []
     for members, why, fuzzy in cluster(items, links):
@@ -347,12 +335,14 @@ def propose_group(group: dict, google_groups=None, cues=None, links=None, events
     return {"clusters": clusters, **({"excluded": excluded} if excluded else {})}
 
 
-def propose(batches, google_groups=None, cues=None, links=None, events=None) -> dict:
+def propose(
+    batches, google_groups=None, cues=None, links=None, events=None, vocabulary=None
+) -> dict:
     out = {}
     for batch, path in batches:
         for name, group in json.loads(Path(path).read_text()).items():
             out[json.dumps([batch, name], ensure_ascii=False)] = propose_group(
-                group, google_groups, cues, links, events
+                group, google_groups, cues, links, events, vocabulary
             )
     return out
 
@@ -370,6 +360,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--events", type=Path, help="{record id: [event titles]}: quiet-source records worth a box"
     )
+    parser.add_argument(
+        "--vocabulary",
+        type=Path,
+        help="cue vocabulary JSON (default: $XDG_CONFIG_HOME/people-sync/vocabulary.json if present)",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     result = propose(
@@ -378,6 +373,7 @@ def main(argv: list[str] | None = None) -> None:
         json.loads(args.cues.read_text()) if args.cues else None,
         json.loads(args.links.read_text()) if args.links else None,
         json.loads(args.events.read_text()) if args.events else None,
+        load_vocabulary(args.vocabulary),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=1))
