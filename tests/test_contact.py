@@ -482,3 +482,20 @@ def test_apples_year_1604_placeholder_is_an_unknown_year():
     assert g["birthday"] == "--08-02"
     soma = _soma(_person(birthday="1992-08-02", first_name="Nova", last_name="Quill"))
     assert contact.diff(soma, g, "new") == []
+
+
+def test_a_placeholder_year_is_never_sent_to_google():
+    state = _soma(_person(birthday="0001-04-20", first_name="Nova", last_name="Quill"))
+    assert contact.to_google(state)["birthdays"] == [{"date": {"month": 4, "day": 20}}]
+    state = _soma(_person(birthday="1999-04-20", first_name="Nova", last_name="Quill"))
+    assert contact.to_google(state)["birthdays"] == [
+        {"date": {"year": 1999, "month": 4, "day": 20}}
+    ]
+
+
+def test_a_placeholder_year_in_soma_compares_as_no_year():
+    soma = _soma(_person(birthday="0001-04-20", first_name="Nova", last_name="Quill"))
+    google = contact.google_state(_google(birthdays=[{"date": {"month": 4, "day": 20}}]))
+    assert soma["birthday"] == "--04-20" and contact.fingerprint(soma) == contact.fingerprint(
+        google
+    )

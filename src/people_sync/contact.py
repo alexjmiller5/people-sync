@@ -135,8 +135,15 @@ def soma_state(person: dict, phones: list, emails: list, addresses: list) -> dic
             address_key(r): {k: r.get(k) for k, _ in ADDRESS_KEYS} | {"label": r.get("label")}
             for r in addresses
         },
-        "birthday": person.get("birthday"),
+        "birthday": _plain_birthday(person.get("birthday")),
     }
+
+
+def _plain_birthday(value: str | None) -> str | None:
+    """A year before 1900 is a placeholder for "no year" (0001, 1604)."""
+    if value and not value.startswith("-") and int(value[:4]) < 1900:
+        return "-" + value[4:]
+    return value
 
 
 def fingerprint(state: dict) -> str:
@@ -215,7 +222,7 @@ def to_google(state: dict) -> dict:
             if not state["birthday"].startswith("--")
             else ("", *state["birthday"][2:].split("-"))
         )
-        date = {"month": int(m), "day": int(d)} | ({"year": int(y)} if y else {})
+        date = {"month": int(m), "day": int(d)} | ({"year": int(y)} if y and int(y) >= 1900 else {})
     return {
         "names": [names] if names else [],
         "phoneNumbers": [
