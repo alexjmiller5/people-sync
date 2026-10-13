@@ -499,3 +499,17 @@ def test_a_placeholder_year_in_soma_compares_as_no_year():
     assert soma["birthday"] == "--04-20" and contact.fingerprint(soma) == contact.fingerprint(
         google
     )
+
+
+def test_google_parts_fill_people_parts_around_a_known_middle_name():
+    person = _person(name="Rex Example", middle_name="Quinn")
+    google = contact.google_state(_google(names=[{"givenName": "Rex", "familyName": "Example"}]))
+    (item,) = contact.diff(_soma(person), google, "new")
+    assert (item["kind"], item["field"]) == ("add", "names")
+
+
+def test_a_part_both_sides_hold_differently_is_a_conflict():
+    person = _person(first_name="Jaime", last_name="Testwell", name="Jaime Testwell")
+    google = contact.google_state(_google(names=[{"givenName": "Jamie", "familyName": "Testwell"}]))
+    (item,) = contact.diff(_soma(person), google, "new")
+    assert (item["kind"], item["field"]) == ("conflict", "names")

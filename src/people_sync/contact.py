@@ -184,14 +184,24 @@ def diff(soma: dict, google: dict, status: str) -> list[dict]:
 
     g_names, s_names = google["names"], soma["names"]
     if any(g_names.values()) and g_names != s_names:
-        if not any(s_names.values()) and _spelled(g_names) == (soma.get("name") or ""):
-            item("add", "names", g=g_names)
+        conflict = None
+        if any(s_names.values()):
+            # a part both sides hold differently is a conflict; Google fills parts People lacks;
+            # People holding more parts than Google is soma's state, written by push
+            if any(s_names[k] and g_names[k] and s_names[k] != g_names[k] for k in g_names):
+                conflict = True
+            elif any(g_names[k] and not s_names[k] for k in g_names):
+                conflict = False
         else:
+            conflict = _spelled(g_names) != (soma.get("name") or "")
+        if conflict is False:
+            item("add", "names", g=g_names)
+        elif conflict:
             item(
                 "conflict",
                 "names",
                 g=g_names,
-                s=s_names if any(s_names.values()) else soma.get("name"),
+                s=soma.get("name"),  # the reviewed full name, not its stored parts
             )
     for kind, value in _birthday_items(soma["birthday"], google["birthday"]):
         item(kind, "birthday", g=value, s=soma["birthday"])
