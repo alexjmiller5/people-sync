@@ -80,7 +80,8 @@ def address_key(a: dict) -> str:
 def _birthday(date: dict | None) -> str | None:
     if not date or not date.get("month") or not date.get("day"):
         return None
-    year = f"{date['year']:04d}" if date.get("year") else "-"
+    # a year before 1900 is the Contacts placeholder for "no year" (1604)
+    year = f"{date['year']:04d}" if (date.get("year") or 0) >= 1900 else "-"
     return f"{year}-{date['month']:02d}-{date['day']:02d}"
 
 

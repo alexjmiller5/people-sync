@@ -475,3 +475,10 @@ def test_a_contact_write_the_read_back_does_not_show_is_reported(push_world, cap
     )
     push.main(["google", "--field", "contact", "--apply"])
     assert "VERIFY FAILED people/c1: contact fields not as written" in capsys.readouterr().out
+
+
+def test_apples_year_1604_placeholder_is_an_unknown_year():
+    g = contact.google_state(_google(birthdays=[{"date": {"year": 1604, "month": 8, "day": 2}}]))
+    assert g["birthday"] == "--08-02"
+    soma = _soma(_person(birthday="1992-08-02", first_name="Nova", last_name="Quill"))
+    assert contact.diff(soma, g, "new") == []
