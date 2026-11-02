@@ -171,7 +171,7 @@ def _update(writes: list[dict], contacts: dict[str, dict]) -> None:
                     [w["company"]] if w["company"] else []
                 ):
                     problems.append("company")
-                want = w["client"].get(contact_fields.MARK_KEY)
+                want = (w["client"].get(contact_fields.MARK_KEY) or "").rpartition(":")[2]
                 if (
                     "contact" in w
                     and contact_fields.fingerprint(contact_fields.google_state(person)) != want
@@ -248,7 +248,7 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
                 lines.append("  photo: yes (will upload)")
                 uploads.append((change, row))
         if "contact" in fields:
-            status = contact_fields.status_of(contact)
+            status = contact_fields.status_of(contact, row["id"])
             desired = states[row["id"]]
             if status == "new":
                 unpulled += 1
@@ -263,7 +263,7 @@ def run(people: list[str], apply: bool, fields: tuple[str, ...] = FIELDS) -> Non
                 contact_fields.google_state(contact)
             ):
                 change["contact"] = contact_fields.to_google(desired)
-                change["client"][contact_fields.MARK_KEY] = contact_fields.fingerprint(desired)
+                change["client"][contact_fields.MARK_KEY] = contact_fields.mark(row["id"], desired)
                 lines.append(
                     f"  contact: names, {len(desired['phones'])} phone(s), "
                     f"{len(desired['emails'])} email(s), {len(desired['addresses'])} address(es), "
