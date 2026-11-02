@@ -253,6 +253,14 @@ def _primary_or_first(items: list[dict], key: str) -> str | None:
     return items[0].get(key) if items else None
 
 
+def google_photo_url(person: dict) -> str | None:
+    # Google supplies a default silhouette URL even when no portrait exists.
+    return _primary_or_first(
+        [p for p in person.get("photos") or [] if not p.get("default") and p.get("url")],
+        "url",
+    )
+
+
 def collect_google() -> dict:
     pages, token, seen = [], None, set()
     complete = True
@@ -374,7 +382,7 @@ def parse_google(payload: dict) -> list[Record]:
                         "labels": person.get("memberships") or [],
                         "org": person.get("organizations") or [],
                         "birthday": person.get("birthdays") or [],
-                        "photo_url": _primary_or_first(person.get("photos") or [], "url"),
+                        "photo_url": google_photo_url(person),
                     },
                 )
             )

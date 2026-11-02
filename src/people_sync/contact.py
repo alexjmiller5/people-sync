@@ -209,6 +209,11 @@ def diff(soma: dict, google: dict, status: str) -> list[dict]:
         for key, value in google[field].items():
             if key not in soma[field]:
                 item("add", field, key, g=value)
+            else:
+                ours = soma[field][key]
+                keys = ("label",) if field != "addresses" else (*dict(ADDRESS_KEYS), "label")
+                if any(_text(ours.get(k)) != _text(value.get(k)) for k in keys):
+                    item("conflict", field, key, g=value, s=ours)
         if status == "changed":
             for key, value in soma[field].items():
                 if key not in google[field]:
@@ -313,6 +318,16 @@ class Writes:
                     f"UPDATE {table} SET deleted_at = updated_at WHERE id = {somadata.sq(it['soma_id'])}"
                 )
             return
+        if it["kind"] == "conflict" and f in ("phones", "emails", "addresses"):
+            table = "person_locations" if f == "addresses" else "person_" + f
+            rid = it["soma_id"]
+            if not rid:
+                raise ValueError("Reviewed contact value no longer exists")
+            values = g if f == "addresses" else {"label": g.get("label")}
+            sets = ", ".join(f"{col} = {somadata.sq(v)}" for col, v in values.items())
+            self.retire.append(f"UPDATE {table} SET {sets} WHERE id = {somadata.sq(rid)}")
+            self.edges.append(_edge(resource, table, rid, None, "Reviewed Google contact edit"))
+            return
         if f == "names":
             self.people.setdefault(pid, {}).update(
                 {col: g[ours] for ours, _, col in NAME_KEYS if g[ours]}
@@ -401,7 +416,10 @@ def _value(value) -> str | None:
 def _show(item: dict) -> str:
     value = _value(item["google"] if item["kind"] != "missing" else item["soma"])
     soma = f" (soma: {_value(item['soma'])})" if item["kind"] == "conflict" else ""
-    return f"{item['kind']} {item['field']}: {value}{soma}"
+    labels = ""
+    if item["kind"] == "conflict" and item["field"] in ("phones", "emails", "addresses"):
+        labels = f" [label: {item['soma'].get('label')} -> {item['google'].get('label')}]"
+    return f"{item['kind']} {item['field']}: {value}{soma}{labels}"
 
 
 def run(people: list[str], apply: bool, accept: dict[str, str], output: str | None) -> None:
@@ -425,7 +443,11 @@ def run(people: list[str], apply: bool, accept: dict[str, str], output: str | No
         items = diff(states[pid], g, status)
         for it in items:
             it["id"] = item_id(resource, it)
-            if it["kind"] == "missing":
+            if it["kind"] in ("missing", "conflict") and it["field"] in (
+                "phones",
+                "emails",
+                "addresses",
+            ):
                 it["soma_id"] = _soma_row_id(pid, it)
         open_items = [it for it in items if it["kind"] != "add" and it["id"] not in accept]
         report.append(
@@ -467,12 +489,18 @@ def run(people: list[str], apply: bool, accept: dict[str, str], output: str | No
 
 
 def _soma_row_id(pid: str, it: dict) -> str:
-    if it["field"] in ("phones", "emails"):
-        return f"{pid}:{it['key']}"
-    for r in somadata.sql(ADDRESSES_SQL):
-        if r["person_id"] == pid and address_key(r) == it["key"]:
-            return r["id"]
-    return ""
+    field = it["field"]
+    query, key = {
+        "phones": (PHONES_SQL, lambda r: phone_key(r["number"])),
+        "emails": (EMAILS_SQL, lambda r: r["address"].casefold()),
+        "addresses": (ADDRESSES_SQL, address_key),
+    }[field]
+    matches = [
+        r["id"] for r in somadata.sql(query) if r["person_id"] == pid and key(r) == it["key"]
+    ]
+    if len(matches) != 1:
+        raise ValueError("Contact value needs review: missing or ambiguous soma rows")
+    return matches[0]
 
 
 def main(argv: list[str] | None = None) -> None:

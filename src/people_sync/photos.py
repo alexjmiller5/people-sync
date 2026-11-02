@@ -159,7 +159,7 @@ def fetch_google_photo(resource_name: str) -> bytes | None:
             "photo fetch failed", source="google_contacts", index=-1, reason="raw fetch failed"
         )
         return None
-    url = sources._primary_or_first(person.get("photos") or [], "url")
+    url = sources.google_photo_url(person)
     if not url:
         return None
     return fetch_url_photo(url)

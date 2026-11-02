@@ -1,7 +1,7 @@
 """What changed on accounts already linked to a person: renames, new jobs and cities,
 birthdays, new photos, unfollows. Read-only; soma's `history` table already
 records every cell edit that ingest and scrape make, so this only reads it back.
-A first fill (empty -> value) is enrichment, promote's job, so it is not listed.
+A first fill (empty -> value) is enrichment, except new profile photos are reviewed.
 Acting on a change is a triage decision (reconcile, promote), never automatic."""
 
 import json
@@ -66,7 +66,9 @@ def diff(rows: list[dict]) -> list[dict]:
                     out.append(
                         base | {"field": f"raw.{key}", "old": old.get(key), "new": new.get(key)}
                     )
-        elif row["old"] not in EMPTY and row["old"] != row["new"]:
+        elif (row["old"] not in EMPTY or row["col"] == "avatar_sha256") and row["old"] != row[
+            "new"
+        ]:
             prefix = "profile." if row["tbl"] == "people_sync_profiles" else ""
             out.append(base | {"field": prefix + row["col"], "old": row["old"], "new": row["new"]})
     return out

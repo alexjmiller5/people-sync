@@ -79,3 +79,8 @@ def test_cli_prints_changes(mocker, capsys):
     cli.main(["changes", "--since", "2026-09-01"])
     run.assert_called_once_with("2026-09-01")
     assert json.loads(capsys.readouterr().out) == [{"field": "name"}]
+
+
+def test_first_profile_photo_is_reported_for_review():
+    (item,) = changes.diff([h("people_sync_profiles", "avatar_sha256", None, "abc123")])
+    assert (item["field"], item["old"], item["new"]) == ("profile.avatar_sha256", None, "abc123")

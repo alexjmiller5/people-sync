@@ -43,6 +43,46 @@ development. Soma is the estate it writes into (`soma-map` /
   Notion is never contacted; `reconcile merge` then says its relation check
   did not run.
 
+## Review authority and identity
+
+- Resolve the user's self person through a confirmed binding. Keep the Apple
+  My Card for Autofill; it is an explicit exception to the Apple inbox rule.
+  Preserve its native My Card designation, typed fields and existing values.
+  Canonical contact details belong in soma; a one-way self-to-Apple update
+  needs a reviewed field mapping and native Autofill verification first.
+- Company/organization text entered on a contact is context to interpret,
+  not proof of an employer or a literal circle name. Preserve the original
+  source and propose notes, existing circles, employment or explicit
+  introductions separately. Ask about ambiguous facts and new circle names.
+  Do not push a synthesized company value until its output format is reviewed.
+- For a new note mentioning a namesake, rank candidates with recent confirmed
+  interactions and current context above historical-only circles. Recency is
+  a suggestion signal, never identity proof. Show the exact person IDs and
+  supporting context; an old-circle person remains possible and no note is
+  attached automatically just because another candidate seems more likely.
+
+## Contact quality at every review
+
+People review owns these checks; a general compliance run routes findings
+here. Read the canonical phones/emails and linked source captures together.
+Known personal mobile numbers use `mobile`; retain explicit work, landline
+and fax labels. Email labels describe the address's evidenced purpose
+(personal/home, work, school or a supported custom label), never a guess
+from a domain. Missing or conflicting labels are review items.
+
+Every phone needs an explicit country calling code. Use a source's verified
+international/canonical form when available, retaining extensions and all
+original evidence. A local-only number needs confirmed country context;
+never prepend a country code based on residence, device locale or a default.
+Keep unresolved values intact and report them for review. Neither a label
+repair nor formatting authorizes dropping a distinct number or email.
+
+Read `pull google --output` every review: label changes to existing phones
+and emails, and edits within an existing postal address, are conflicts that
+require an explicit `--accept` decision. Missing values also need a decision.
+Keep the original row ID and primary flag when accepting an edit. Preview
+and read back approved destination changes; preserve unrelated Google fields.
+
 ## Configuration the operator supplies
 
 Environment variables, all optional except where a command needs them:
@@ -261,12 +301,13 @@ record's `raw`.
 
 ## Step 4b - push People onto Google
 
-People owns two fields of every linked Google contact, written one way:
+Use the photo/contact preview at each review. Company output needs its own
+reviewed format before enabling that field:
 
 ```bash
-people-sync push google                    # preview - always first, with the user
-people-sync push google --person <id> ...  # limit to some people (repeatable)
-people-sync push google --apply            # after the user approved the preview
+people-sync push google --field photo --field contact  # preview first
+people-sync push google --field photo --field contact --person <id> ...
+people-sync push google --field photo --field contact --apply  # approved people only
 ```
 
 - **Company** = the person's circles in order, joined with ", ". A Google company
@@ -495,6 +536,29 @@ The last list is Apple-only people: each is a `port google` candidate (Step 4).
 A vocabulary fix is an estate-wide rename with the user's approval, never a
 half-migrated pair of spellings.
 
+**Photo and account links, every review:** choose the last completed review
+as the cutoff, carrying unanswered findings forward. Run `changes --since`
+for replaced and first profile photos. Also inspect newly created links and
+changed link targets, because inserts have no cell-history event:
+
+```sql
+SELECT id, person_id, platform, source_id, created_at
+FROM person_accounts WHERE deleted_at IS NULL AND created_at >= '<cutoff>';
+SELECT row_id, old, new, created_at FROM history
+WHERE tbl = 'person_accounts' AND col IN ('person_id', 'source_id', 'active', 'deleted_at')
+  AND created_at >= '<cutoff>';
+SELECT id, person_id, platform, r2_key, sha256, fetched_at
+FROM person_photos WHERE deleted_at IS NULL AND fetched_at >= '<cutoff>';
+```
+
+Read the exact live person/source IDs and provenance, verify each stored
+image's hash and show new/changed photos beside the current contact photo.
+Include newly linked Apple Photos clusters. A shadow/default avatar is not a
+replacement portrait; preserve the existing choice until the source and
+identity are clear. Never infer identity from appearance or silently replace
+`contact_photo_id`. Changed/removed links and unresolved disagreements stay
+in the review queue, independent of photo picking.
+
 **What changed on people already linked:**
 
 ```bash
@@ -505,7 +569,8 @@ Read-only. One row per changed value on a matched record or its scraped
 profile (`field`, `old`, `new`, `at`, with the person): a new name or
 spelling, a moved city, a new job, an edited birthday, a new photo
 (`profile.avatar_sha256`), a dropped follow. A first fill (empty -> value)
-is not listed; that is `promote`'s job. Each row is a question for the user,
+is enrichment handled by `promote`, except the first profile photo, which is
+also listed for review. Each row is a question for the user,
 applied through `reconcile`, `promote` or a direct edit with its provenance
 edge, never in bulk. Re-scrapes are what surface profile changes: matched
 records are revisited once they are 180 days stale.

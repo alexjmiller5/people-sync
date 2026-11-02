@@ -514,3 +514,84 @@ def test_a_part_both_sides_hold_differently_is_a_conflict():
     google = contact.google_state(_google(names=[{"givenName": "Jamie", "familyName": "Testwell"}]))
     (item,) = contact.diff(_soma(person), google, "new")
     assert (item["kind"], item["field"]) == ("conflict", "names")
+
+
+@pytest.mark.parametrize("field", ["phones", "emails", "addresses"])
+def test_pull_reviews_edits_to_existing_contact_values_losslessly(world, tmp_path, field):
+    rows = {
+        "phones": {
+            "id": "original-phone",
+            "person_id": "p1",
+            "number": "+15550100001",
+            "label": "work",
+            "is_primary": 0,
+        },
+        "emails": {
+            "id": "original-email",
+            "person_id": "p1",
+            "address": "Nova@Example.test",
+            "label": "work",
+            "is_primary": 0,
+        },
+        "addresses": {
+            "id": "original-address",
+            "person_id": "p1",
+            "street": "1 Synthetic Way",
+            "city": "Testville",
+            "postal_code": "00001",
+            "country": "United States",
+            "region": "TS",
+            "extended": "Unit Old",
+            "label": "home",
+        },
+    }
+    google = _google(
+        phoneNumbers=[PHONE],
+        emailAddresses=[EMAIL],
+        addresses=[ADDRESS | {"extendedAddress": "Unit New"}],
+    )
+    estate, gog = world(
+        [_person(first_name="Nova", last_name="Quill")],
+        {"people/c1": google},
+        **{field: [rows[field]]},
+    )
+    report = tmp_path / "report.json"
+    contact.main(["google", "--apply", "--output", str(report)])
+    items = json.loads(report.read_text())["contacts"][0]["items"]
+    conflicts = [i for i in items if i["field"] == field and i["kind"] == "conflict"]
+    assert len(conflicts) == 1
+    assert _mark(gog) is None
+    table = {"phones": "person_phones", "emails": "person_emails", "addresses": "person_locations"}[
+        field
+    ]
+    assert estate.tables[table] == [rows[field]]
+    decisions = tmp_path / "decisions.json"
+    decisions.write_text(json.dumps({conflicts[0]["id"]: "google"}))
+    contact.main(["google", "--apply", "--accept", str(decisions)])
+    (updated,) = estate.tables[table]
+    assert updated["id"] == rows[field]["id"]
+    if field == "addresses":
+        assert updated["extended"] == "Unit New"
+    else:
+        assert updated["label"] == "home" if field == "emails" else updated["label"] == "mobile"
+        assert updated["is_primary"] == 0
+    assert any(e["to_ref"] == updated["id"] for e in estate.tables["provenance"])
+
+
+def test_ambiguous_same_number_rows_refuse_contact_edits(world):
+    phone = {
+        "id": "original",
+        "person_id": "p1",
+        "number": "+15550100001",
+        "label": "work",
+        "is_primary": 0,
+    }
+    estate, gog = world(
+        [_person(first_name="Nova", last_name="Quill")],
+        {"people/c1": _google(phoneNumbers=[PHONE])},
+        phones=[phone, phone | {"id": "duplicate"}],
+    )
+    with pytest.raises(ValueError, match="ambiguous"):
+        contact.main(["google", "--apply"])
+    assert estate.tables["person_phones"] == [phone, phone | {"id": "duplicate"}]
+    assert not estate.updates and not gog.updates

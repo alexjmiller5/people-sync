@@ -308,3 +308,14 @@ def test_phone_index_and_google_contact_ids(mocker):
         ],
     )
     assert sources.google_contact_ids() == {"abc123": "google_contacts:people/c9"}
+
+
+def test_google_ingest_does_not_promote_a_default_photo_url(mocker, monkeypatch):
+    person = json.loads(GOOGLE_RAW_C1)
+    person["photos"] = [{"url": "https://example.test/shadow.jpg", "default": True}]
+    monkeypatch.setattr(
+        __import__(__name__, fromlist=["GOOGLE_RAW_C1"]), "GOOGLE_RAW_C1", json.dumps(person)
+    )
+    mocker.patch("people_sync.sources.subprocess.run", side_effect=_fake_run_google)
+    records, _ = sources.fetch_google()
+    assert next(r for r in records if r.source_id == "people/c1").raw["photo_url"] is None

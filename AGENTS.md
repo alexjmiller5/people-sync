@@ -795,3 +795,13 @@ The optional `tests/review_browser.mjs` check exercises a synthetic page via
 the chrome-control CDP bridge. It refuses to run outside `/review-smoke.html`,
 expects the synthetic Batch Smoke groups Example, Next and Unresolved, and
 restores their original browser saves after checking interactions.
+
+Contact pull treats changed labels and same-key address details as explicit
+conflicts. Accepted edits update the original row, preserve primary flags and
+record evidence; ambiguous same-key source rows refuse mutation. Photo-change
+reports include the first profile photo as well as replacements. The shipped
+runbook owns contact label/country-code checks, self-card preservation and
+reviewing new/changed photo and account links.
+Google ingest and photo fetching share a non-default-photo selector: provider
+silhouettes never become stored portraits or ledger photo URLs. Existing choices
+are preserved; repairing an old choice requires reviewed identity/source evidence.

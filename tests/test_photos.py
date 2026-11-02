@@ -551,3 +551,46 @@ def test_rekey_after_a_crash_before_the_row_update_adds_no_second_edge(mocker, e
         estate.execute("SELECT r2_key FROM person_photos WHERE id='photo:p1:r1'").fetchone()[0]
         == new
     )
+
+
+def test_google_default_avatar_is_not_fetched_or_used_as_a_portrait(mocker):
+    mocker.patch(
+        "people_sync.sources._run",
+        return_value=json.dumps(
+            {
+                "photos": [
+                    {
+                        "url": "https://example.test/shadow.jpg",
+                        "default": True,
+                        "metadata": {"primary": True},
+                    },
+                ]
+            }
+        ),
+    )
+    fetch = mocker.patch("people_sync.photos.fetch_url_photo", return_value=b"shadow")
+    assert photos.fetch_google_photo("people/c1") is None
+    fetch.assert_not_called()
+
+
+def test_google_default_primary_does_not_hide_an_actual_profile_photo(mocker):
+    mocker.patch(
+        "people_sync.sources._run",
+        return_value=json.dumps(
+            {
+                "photos": [
+                    {
+                        "url": "https://example.test/shadow.jpg",
+                        "default": True,
+                        "metadata": {"primary": True},
+                    },
+                    {"url": "https://example.test/portrait.jpg", "default": False},
+                ]
+            }
+        ),
+    )
+    mocker.patch(
+        "people_sync.photos.fetch_url_photo",
+        side_effect=lambda url: b"portrait" if url.endswith("/portrait.jpg") else b"shadow",
+    )
+    assert photos.fetch_google_photo("people/c1") == b"portrait"
