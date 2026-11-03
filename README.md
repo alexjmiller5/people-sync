@@ -477,10 +477,14 @@ exact append/read grants for `comm_apple_messages`, `comm_apple_calls`,
 `comm_whatsapp_messages` and `comm_whatsapp_calls`; the server must authorize batch
 append for those exact grants before narrowing an installed credential.
 Refresh reads only `GET /v1/streams/<stream>/records` (20 objects and at most
-2 MB per page), never archive SQL, manifest or replay. It validates original
+2 MB per page), never archive SQL, manifest or replay. HTTP 413 alone halves
+that page's requested object limit through 20, 10, 5, 2 and 1, always preserving
+the exact cursor, route and credential. A single-object 413 fails closed; other
+errors and a successful response exceeding the byte cap are not retried. It validates original
 single-event/batch bodies and deduplicates event IDs per stream in private,
 disk-backed temporary SQLite before reusing the local aggregate. A conflicting
-duplicate, malformed page/event, repeated cursor/object, scan-budget limit,
+duplicate, malformed/deeply nested page or landing JSON, invalid event,
+repeated cursor/object, scan-budget limit,
 redirect or HTTP refusal discards the hub result. No broader credential or route
 is attempted. With an outbox or a failed read, refresh uses the existing local
 mirror and prints the reason. A scan is bounded at 10,000 pages per stream;

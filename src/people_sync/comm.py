@@ -1025,30 +1025,42 @@ STREAM_PAGE_LIMIT = 20
 STREAM_MAX_PAGES = 10_000
 
 
+def _stream_json(data):
+    try:
+        return json.loads(data)
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as e:
+        raise HubError("invalid or deeply nested stream JSON") from e
+
+
 def _stream_page(client, base: str, stream: str, token: str, cursor: str | None) -> dict:
     if stream not in STREAM.values():
         raise HubError("unsupported communication stream")
     params = {"limit": STREAM_PAGE_LIMIT}
     if cursor is not None:
         params["cursor"] = cursor
-    with client.stream(
-        "GET",
-        f"{base}/v1/streams/{stream}/records",
-        params=params,
-        headers={"Authorization": f"Bearer {token}"},
-    ) as response:
-        if response.status_code != 200:
-            raise HubError(f"stream read refused (HTTP {response.status_code})")
-        data = bytearray()
-        for chunk in response.iter_bytes():
-            data.extend(chunk)
-            if len(data) > STREAM_PAGE_BYTES:
-                raise HubError("stream response exceeds byte limit")
-    page = json.loads(data)
+    while True:
+        with client.stream(
+            "GET",
+            f"{base}/v1/streams/{stream}/records",
+            params=params,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as response:
+            if response.status_code == 413 and params["limit"] > 1:
+                params["limit"] = max(1, params["limit"] // 2)
+                continue
+            if response.status_code != 200:
+                raise HubError(f"stream read refused (HTTP {response.status_code})")
+            data = bytearray()
+            for chunk in response.iter_bytes():
+                data.extend(chunk)
+                if len(data) > STREAM_PAGE_BYTES:
+                    raise HubError("stream response exceeds byte limit")
+        break
+    page = _stream_json(data)
     if not isinstance(page, dict) or set(page) != {"entries", "next_cursor"}:
         raise HubError("invalid stream page")
     entries, next_cursor = page["entries"], page["next_cursor"]
-    if not isinstance(entries, list) or len(entries) > STREAM_PAGE_LIMIT:
+    if not isinstance(entries, list) or len(entries) > params["limit"]:
         raise HubError("invalid stream entries")
     if next_cursor is not None and (
         not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 8192
@@ -1156,7 +1168,7 @@ def hub_aggregates() -> list[dict]:
                                 ):
                                     raise HubError("invalid or repeated stream object")
                                 objects.add(entry["id"])
-                                records = json.loads(entry["body"])
+                                records = _stream_json(entry["body"])
                                 if not isinstance(records, list):
                                     records = [records]
                                 for raw in records:

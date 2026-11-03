@@ -95,7 +95,7 @@ def test_conflicting_event_identity_refuses_partial_results(monkeypatch):
         comm.hub_aggregates()
 
 
-@pytest.mark.parametrize("status", [401, 403, 413, 503])
+@pytest.mark.parametrize("status", [401, 403, 413, 429, 500, 503])
 def test_refusal_does_not_try_archive_replay_or_broader_routes(monkeypatch, status):
     calls = []
 
@@ -106,7 +106,7 @@ def test_refusal_does_not_try_archive_replay_or_broader_routes(monkeypatch, stat
     service(monkeypatch, handle)
     with pytest.raises(comm.HubError):
         comm.hub_aggregates()
-    assert calls == ["/v1/streams/comm_apple_messages/records"]
+    assert calls == ["/v1/streams/comm_apple_messages/records"] * (5 if status == 413 else 1)
 
 
 def test_repeated_cursor_is_rejected(monkeypatch):
@@ -124,13 +124,16 @@ def test_repeated_cursor_is_rejected(monkeypatch):
 
 
 @pytest.mark.parametrize("late", [False, True])
-def test_refresh_falls_back_to_mirror_after_http_failure(monkeypatch, tmp_path, capsys, late):
+@pytest.mark.parametrize("status", [403, 413])
+def test_refresh_falls_back_to_mirror_after_http_failure(
+    monkeypatch, tmp_path, capsys, late, status
+):
     service(
         monkeypatch,
         lambda req: (
             httpx.Response(200, json=page([event(), event(event_id="remote-only")]))
             if late and req.url.path == "/v1/streams/comm_apple_messages/records"
-            else httpx.Response(403)
+            else httpx.Response(status)
         ),
     )
     state = comm.State(tmp_path / "state")
@@ -287,4 +290,140 @@ def test_reader_refuses_noncanonical_stream_routes(monkeypatch, stream):
 def test_invalid_timestamp_types_trigger_safe_mirror_fallback_error(monkeypatch, at):
     service(monkeypatch, lambda req: httpx.Response(200, json=page([event(at=at)])))
     with pytest.raises(comm.HubError):
+        comm.hub_aggregates()
+
+
+def test_server_shaped_413_reduces_page_size_preserving_cursor_scope_and_dedupe(monkeypatch):
+    stream = "comm_apple_messages"
+    cursors = {2: "opaque+/=2", 4: "opaque+/=4"}
+    objects = []
+    for i, event_id in enumerate(["e1", "e2", "e1", "e3", "e4", "e5"]):
+        objects.extend(
+            page([event(event_id=event_id, padding="x" * 600_000)], key=str(i))["entries"]
+        )
+    calls = []
+
+    def handle(req):
+        assert req.method == "GET" and req.headers["Authorization"] == "Bearer comm-token"
+        assert req.url.path in {f"/v1/streams/{s}/records" for s in comm.STREAM.values()}
+        assert set(req.url.params) <= {"limit", "cursor"}
+        if req.url.path != f"/v1/streams/{stream}/records":
+            return httpx.Response(200, json={"entries": [], "next_cursor": None})
+        limit = int(req.url.params["limit"])
+        requested = req.url.params.get("cursor")
+        calls.append((requested, limit))
+        assert requested in (None, *cursors.values())
+        start = 0 if requested is None else next(i for i, c in cursors.items() if c == requested)
+        entries = objects[start : start + limit]
+        result = {"entries": entries, "next_cursor": cursors.get(start + len(entries))}
+        body = json.dumps(result, separators=(",", ":")).encode()
+        if len(body) > 2_000_000:
+            return httpx.Response(413, json={"error": "stream page too large"})
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    service(monkeypatch, handle)
+    (row,) = comm.hub_aggregates()
+    assert row["n"] == 5
+    assert calls == [
+        *((c, limit) for c in [None, cursors[2]] for limit in [20, 10, 5, 2]),
+        (cursors[4], 20),
+    ]
+
+
+def test_413_single_object_stops_with_same_cursor_and_no_partial_result(monkeypatch):
+    cursor = "opaque+/=after-first"
+    calls = []
+
+    def handle(req):
+        requested = req.url.params.get("cursor")
+        calls.append((req.url.path, requested, int(req.url.params["limit"])))
+        assert len(calls) <= 6, "unbounded 413 retry"
+        if requested is None:
+            return httpx.Response(200, json=page([event()], cursor=cursor))
+        return httpx.Response(413, json={"error": "stream page too large"})
+
+    service(monkeypatch, handle)
+    with pytest.raises(comm.HubError, match="413"):
+        comm.hub_aggregates()
+    assert [(requested, limit) for _, requested, limit in calls] == [
+        (None, 20),
+        *((cursor, n) for n in [20, 10, 5, 2, 1]),
+    ]
+    assert {path for path, _, _ in calls} == {"/v1/streams/comm_apple_messages/records"}
+
+
+def test_reduced_page_still_enforces_response_bytes_without_further_retry(monkeypatch):
+    calls = []
+
+    def handle(req):
+        calls.append(int(req.url.params["limit"]))
+        if len(calls) == 1:
+            return httpx.Response(413, json={"error": "stream page too large"})
+        return httpx.Response(200, content=b" " * (comm.STREAM_PAGE_BYTES + 1))
+
+    service(monkeypatch, handle)
+    with pytest.raises(comm.HubError, match="byte limit"):
+        comm.hub_aggregates()
+    assert calls == [20, 10]
+
+
+def test_server_must_honor_reduced_object_count(monkeypatch):
+    def handle(req):
+        if int(req.url.params["limit"]) > 1:
+            return httpx.Response(413, json={"error": "stream page too large"})
+        first = page([event()], key="one")["entries"]
+        second = page([event(event_id="e2")], key="two")["entries"]
+        return httpx.Response(200, json={"entries": first + second, "next_cursor": None})
+
+    service(monkeypatch, handle)
+    with pytest.raises(comm.HubError, match="invalid stream entries"):
+        comm.hub_aggregates()
+
+
+@pytest.mark.parametrize("location", ["page", "landing"])
+@pytest.mark.parametrize("late", [False, True])
+def test_deep_stream_json_uses_mirror_and_discards_partial_hub_result(
+    monkeypatch, tmp_path, capsys, location, late
+):
+    deep = "[" * 10_000 + "0" + "]" * 10_000
+
+    def handle(req):
+        if late and req.url.path == "/v1/streams/comm_apple_messages/records":
+            return httpx.Response(200, json=page([event(), event(event_id="remote-only")]))
+        if location == "page":
+            return httpx.Response(200, content=deep.encode())
+        payload = page([])
+        payload["entries"][0]["body"] = deep
+        return httpx.Response(200, json=payload)
+
+    service(monkeypatch, handle)
+    state = comm.State(tmp_path / "state")
+    with state.db:
+        state.add(comm.STREAM["apple_messages"], event())
+        state.mark_landed(comm.STREAM["apple_messages"], ["e1"])
+    monkeypatch.setattr(comm, "_state", lambda args: state)
+    monkeypatch.setattr(comm, "load_resolver", lambda stores: (comm.Resolver({}), {}))
+    monkeypatch.setattr(
+        comm.somadata, "sql", lambda query: [{"id": "b" * 32}] if "FROM people" in query else []
+    )
+    written = []
+    monkeypatch.setattr(comm, "write_summaries", lambda rows: written.extend(rows) or {})
+    try:
+        comm.cmd_refresh(SimpleNamespace(local=False))
+        report = json.loads(capsys.readouterr().out)
+        assert report["source"] == "local" and "JSON" in report["why"]
+        assert len(written) == 1 and written[0]["inbound_count"] == 1
+        assert state.waiting() == 0
+    finally:
+        state.db.close()
+
+
+def test_unrelated_recursion_errors_are_not_swallowed_as_parse_failures(monkeypatch):
+    service(monkeypatch, lambda req: httpx.Response(200, json=page([event()])))
+
+    def unexpected(*args):
+        raise RecursionError("unrelated application failure")
+
+    monkeypatch.setattr(comm, "_aggregate_event", unexpected)
+    with pytest.raises(RecursionError, match="unrelated application failure"):
         comm.hub_aggregates()

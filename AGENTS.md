@@ -807,9 +807,13 @@ silhouettes never become stored portraits or ledger photo URLs. Existing choices
 are preserved; repairing an old choice requires reviewed identity/source evidence.
 
 Communication refresh uses only exact GET records routes for its four streams,
-with 20-object/2 MB pages and a 10,000-page-per-stream scan budget. Validate and
+with at most 20 objects/2 MB per page and a 10,000-page-per-stream scan budget.
+Only HTTP 413 reduces that request's limit (20, 10, 5, 2, 1), retaining its exact
+cursor/scope; a single-object 413 fails closed without partial aggregation. Validate and
 dedupe original event IDs in private temporary SQLite, reuse local aggregates,
-and discard the whole hub result on invalid/conflicting/incomplete reads. Preserve
+and discard the whole hub result on invalid/conflicting/incomplete reads. JSON
+syntax, encoding and recursion failures are converted at the remote decode sites;
+unrelated application exceptions must not be swallowed as parse failures. Preserve
 the importer mirror/outbox fallback and never retry through archive SQL, manifest,
 replay or broader credentials. The server grant/deployment and credential cutover
 are independent owner operations; consumer source changes do not authorize them.

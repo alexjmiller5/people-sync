@@ -658,7 +658,9 @@ events as duplicates.
 accepted/duplicate/excluded metadata counts against the source adapters, then
 spot-check direct-contact summaries against the source metadata. Refresh reads
 only the four exact streams through bounded `/records` pagination and dedupes
-`event_id` locally; group events do not count toward direct summaries. A malformed
+`event_id` locally; group events do not count toward direct summaries. HTTP 413
+reduces only that page's object count down to one with its exact cursor and scope;
+a single-object 413 still uses the mirror, never a broader read. A malformed
 or unavailable page, conflicting event ID, repeated cursor/object or scan-budget
 limit uses the mirror and reports why. Never label that fallback a complete hub
 read. Confirm `soma check` for the two output tables through the authorized
