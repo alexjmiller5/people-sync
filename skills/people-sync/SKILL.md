@@ -96,7 +96,7 @@ Environment variables, all optional except where a command needs them:
 | `PEOPLE_SYNC_CDP_TARGET` | login, scrape, list | attach to one caller-owned tab and leave it open |
 | `PEOPLE_SYNC_CDP_APPROVE_COMMAND` | attach on a real profile | a command that answers the browser's remote-debugging prompt |
 | `PEOPLE_SYNC_CREDENTIAL_COMMAND`, `PEOPLE_SYNC_EMAIL_CODE_COMMAND`, `PEOPLE_SYNC_SMS_CODE_COMMAND` | `login` | commands that print a login's credentials / one-time codes; unset = `login` only verifies an existing session |
-| `SOMA_COMM_HUB_TOKEN` | `comm import`, `comm refresh` only | the hub token comm's `soma` calls use instead of `SOMA_HUB_TOKEN`: it must batch-append to the four `comm_*` streams (`/v1/streams/<name>/batch`) and query them (`soma archive query --raw`), which today takes `full`; unset = `SOMA_HUB_TOKEN`, and a refused append leaves events in the local outbox while `refresh` uses the local mirror |
+| `SOMA_COMM_HUB_TOKEN` | `comm import`, `comm refresh` only | the stream credential used instead of `SOMA_HUB_TOKEN`: exact append/read on the four `comm_*` streams; batch authorization must be available before narrowing. Refresh requires `SOMA_HUB_URL` and reads bounded `/records` pages, never archive SQL/replay. Unset = `SOMA_HUB_TOKEN`; refused appends stay in the outbox and failed reads use the local mirror |
 | `PEOPLE_SYNC_ADDRESSBOOK_HOST` | `comm`, `port google` | ssh host whose macOS address book is also read (read-only, in memory) to resolve participants and read the cards to port; unset = this Mac's address book only |
 | `XDG_STATE_HOME` | everything | private state root (`.../people-sync/`: capture cache, scrape counters, halt screenshots, the WhatsApp id map, `comm/comm.sqlite`) |
 
@@ -654,10 +654,16 @@ says how many wait and why); the next `comm import` hands them over first.
 Rerunning appends nothing; `--full` re-reads everything and counts known
 events as duplicates.
 
-**Verify a run:** per stream, `soma archive query --raw "SELECT count(DISTINCT
-event_id) FROM stream('comm_<source>')"` equals the summed `accepted` of that
-source's import rows once the outbox is empty; spot-check a few summaries
-against the stores (counts only); `soma check` clean for both tables.
+**Verify a run:** `comm coverage` reports the import counts and outbox. Reconcile
+accepted/duplicate/excluded metadata counts against the source adapters, then
+spot-check direct-contact summaries against the source metadata. Refresh reads
+only the four exact streams through bounded `/records` pagination and dedupes
+`event_id` locally; group events do not count toward direct summaries. A malformed
+or unavailable page, conflicting event ID, repeated cursor/object or scan-budget
+limit uses the mirror and reports why. Never label that fallback a complete hub
+read. Confirm `soma check` for the two output tables through the authorized
+operator interface. No archive query, replay, broader token or automatic credential
+change belongs to this consumer workflow.
 
 ## Gotchas
 

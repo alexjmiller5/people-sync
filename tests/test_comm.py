@@ -856,12 +856,6 @@ def test_channel_coverage_intersects_whatsapp_messages_and_calls():
     assert "imessage" not in cov
 
 
-def test_hub_aggregate_sql_dedupes_on_event_id():
-    sql = comm.hub_aggregate_sql("apple_calls")
-    assert "stream('comm_apple_calls')" in sql and "DISTINCT event_id" in sql
-    assert "conversation_kind = 'direct'" in sql
-
-
 # --- the comm credential ------------------------------------------------------------------
 
 
@@ -880,7 +874,6 @@ def test_comm_hub_calls_use_the_comm_token_when_set(monkeypatch):
     rec = Recorder(stdout="[]")
     monkeypatch.setattr(comm.subprocess, "run", rec)
     comm.soma_append("comm_apple_calls", [{"event_id": "x"}])
-    comm.hub_aggregates()
     assert rec.calls and all(kw["env"]["SOMA_HUB_TOKEN"] == "comm-token" for _, kw in rec.calls)
     assert "SOMA_COMM_HUB_TOKEN" not in rec.calls[0][1]["env"]
 
@@ -939,33 +932,3 @@ def test_a_lasting_or_refused_failure_stops_the_flush(stores, tmp_path, monkeypa
     )
     report = run("apple_messages", stores, tmp_path / "s2", refused)
     assert report["landed"] == 0 and waits == []  # a refusal is not retried
-
-
-def test_hub_aggregates_come_back_as_canonical_iso_times(monkeypatch):
-    rows = [
-        {
-            "participant_ref": REF_A,
-            "person_id": None,
-            "channel": "sms",
-            "kind": "message",
-            "direction": "inbound",
-            "outcome": None,
-            "n": 1,
-            "last_at": "2026-10-08 16:35:03.734",
-            "last_seconds": None,
-        },
-        {
-            "participant_ref": REF_B,
-            "person_id": None,
-            "channel": "phone",
-            "kind": "call",
-            "direction": "inbound",
-            "outcome": "answered",
-            "n": 2,
-            "last_at": "2026-10-08 16:35:03",
-            "last_seconds": 12.5,
-        },
-    ]
-    monkeypatch.setattr(comm.subprocess, "run", Recorder(stdout=json.dumps(rows)))
-    got = comm.hub_aggregates()
-    assert {r["last_at"] for r in got} == {"2026-10-08T16:35:03.734Z", "2026-10-08T16:35:03.000Z"}

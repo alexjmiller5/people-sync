@@ -25,6 +25,7 @@ import base64
 import gzip
 import hashlib
 import json
+import math
 import os
 import plistlib
 import re
@@ -39,6 +40,9 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
+
+import httpx
 
 from people_sync import captures, ledger, somadata, sources
 
@@ -830,6 +834,8 @@ def flush(state: State, stream: str, append) -> tuple[int, str | None]:
 
 def soma_append(stream: str, records: list[dict]) -> None:
     """One `soma stream import` call per hub batch, so a refusal leaves nothing half-sent."""
+    if stream not in STREAM.values():
+        raise AppendError("unsupported communication stream")
     body = "\n".join(json.dumps(r, sort_keys=True, separators=(",", ":")) for r in records)
     proc = subprocess.run(
         ["soma", "stream", "import", stream, "--chunk", str(BATCH)],
@@ -999,21 +1005,6 @@ def local_aggregates(state: State) -> list[dict]:
     return [dict(zip(names, row)) for row in cur.fetchall()]
 
 
-def hub_aggregate_sql(source: str) -> str:
-    """The same aggregate over the stream's landed records (DuckDB through `soma archive
-    query --raw`), deduplicated on event_id."""
-    if source in CALL_SOURCES:
-        kind, outcome, seconds = "'call'", "outcome", 'arg_max(duration_seconds, "at")'
-    else:
-        kind, outcome, seconds = "'message'", "NULL", "NULL"
-    return (
-        f"SELECT participant_ref, person_id, channel, {kind} AS kind, direction, "
-        f'{outcome} AS outcome, count(DISTINCT event_id) AS n, max("at") AS last_at, '
-        f"{seconds} AS last_seconds FROM stream('{STREAM[source]}') "
-        "WHERE conversation_kind = 'direct' AND participant_ref IS NOT NULL GROUP BY ALL"
-    )
-
-
 class HubError(RuntimeError):
     pass
 
@@ -1029,31 +1020,169 @@ def _json_values(text: str) -> list:
     return values
 
 
+STREAM_PAGE_BYTES = 2_000_000
+STREAM_PAGE_LIMIT = 20
+STREAM_MAX_PAGES = 10_000
+
+
+def _stream_page(client, base: str, stream: str, token: str, cursor: str | None) -> dict:
+    if stream not in STREAM.values():
+        raise HubError("unsupported communication stream")
+    params = {"limit": STREAM_PAGE_LIMIT}
+    if cursor is not None:
+        params["cursor"] = cursor
+    with client.stream(
+        "GET",
+        f"{base}/v1/streams/{stream}/records",
+        params=params,
+        headers={"Authorization": f"Bearer {token}"},
+    ) as response:
+        if response.status_code != 200:
+            raise HubError(f"stream read refused (HTTP {response.status_code})")
+        data = bytearray()
+        for chunk in response.iter_bytes():
+            data.extend(chunk)
+            if len(data) > STREAM_PAGE_BYTES:
+                raise HubError("stream response exceeds byte limit")
+    page = json.loads(data)
+    if not isinstance(page, dict) or set(page) != {"entries", "next_cursor"}:
+        raise HubError("invalid stream page")
+    entries, next_cursor = page["entries"], page["next_cursor"]
+    if not isinstance(entries, list) or len(entries) > STREAM_PAGE_LIMIT:
+        raise HubError("invalid stream entries")
+    if next_cursor is not None and (
+        not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 8192
+    ):
+        raise HubError("invalid stream cursor")
+    return page
+
+
+def _aggregate_event(record: dict, source: str) -> dict:
+    if not isinstance(record, dict):
+        raise HubError("invalid communication event")
+    event_id = record.get("event_id")
+    if (
+        not isinstance(event_id, str)
+        or not event_id.strip()
+        or len(event_id) > 1024
+        or re.search(r"[\x00-\x1f\x7f]", event_id)
+    ):
+        raise HubError("invalid communication event identity")
+    channel = record.get("channel")
+    if (
+        type(record.get("v")) is not int
+        or record["v"] != 1
+        or channel not in CHANNELS
+        or source not in COVERAGE_SOURCES[channel]
+        or record.get("direction") not in ("inbound", "outbound")
+        or record.get("conversation_kind") not in ("direct", "group")
+    ):
+        raise HubError("invalid communication metadata")
+    for field, length in (("participant_ref", 64), ("person_id", 32)):
+        value = record.get(field)
+        if value is not None and (
+            not isinstance(value, str) or not re.fullmatch(f"[0-9a-f]{{{length}}}", value)
+        ):
+            raise HubError("invalid communication identity reference")
+    if not isinstance(record.get("at"), str):
+        raise HubError("invalid communication timestamp")
+    when = datetime.fromisoformat(record["at"].replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        raise HubError("communication timestamp needs timezone")
+    at = _iso(when.timestamp())
+    outcome, seconds = None, None
+    if source in CALL_SOURCES:
+        outcome, seconds = record.get("outcome"), record.get("duration_seconds")
+        if outcome not in ("answered", "missed", "unanswered", "unknown") or (
+            seconds is not None
+            and (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0)
+        ):
+            raise HubError("invalid communication call outcome")
+    # Store only aggregate inputs, never unknown fields from a remote payload.
+    return {
+        "event_id": event_id,
+        "at": at,
+        "channel": channel,
+        "direction": record["direction"],
+        "conversation_kind": record["conversation_kind"],
+        "participant_ref": record.get("participant_ref"),
+        "person_id": record.get("person_id"),
+        "outcome": outcome,
+        "duration_seconds": seconds,
+    }
+
+
 def hub_aggregates() -> list[dict]:
-    rows = []
-    for source in SOURCES:
-        proc = subprocess.run(
-            ["soma", "archive", "query", "--raw", hub_aggregate_sql(source)],
-            capture_output=True,
-            text=True,
-            env=_hub_env(),
+    """Read only the four exact streams, validating complete pages before publishing.
+    Disk-backed scratch dedupes event IDs without changing the importer's mirror."""
+    env = _hub_env()
+    base, token = env.get("SOMA_HUB_URL", "").rstrip("/"), env.get("SOMA_HUB_TOKEN")
+    try:
+        url = urlsplit(base)
+        valid = (
+            token
+            and url.hostname
+            and not url.username
+            and not url.password
+            and not url.query
+            and not url.fragment
+            and (url.port is None or 1 <= url.port <= 65535)
+            and (
+                url.scheme == "https"
+                or (url.scheme == "http" and url.hostname in ("127.0.0.1", "::1"))
+            )
         )
-        if proc.returncode != 0:
-            lines = [ln.strip() for ln in proc.stderr.splitlines() if ln.strip()]
-            last = lines[-1] if lines else f"exit {proc.returncode}"
-            if "is empty" in last:
-                continue  # a stream nothing has landed in yet
-            raise HubError(last[:200])
-        for value in _json_values(proc.stdout):
-            if isinstance(value, list):
-                rows.extend(r for r in value if isinstance(r, dict) and "participant_ref" in r)
-    for row in rows:
-        # DuckDB reads `at` as a TIMESTAMP and prints it as "YYYY-MM-DD HH:MM:SS[.fff]".
-        when = datetime.fromisoformat(row["last_at"].replace("Z", "+00:00"))
-        row["last_at"] = _iso(
-            (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).timestamp()
-        )
-    return rows
+    except ValueError:
+        valid = False
+    if not valid:
+        raise HubError("communication hub URL/token not configured securely")
+    try:
+        with tempfile.TemporaryDirectory(prefix="people-sync-refresh-") as root:
+            state = State(root)
+            try:
+                with httpx.Client(timeout=30, follow_redirects=False) as client, state.db:
+                    for source in SOURCES:
+                        stream, cursor, cursors, objects = STREAM[source], None, set(), set()
+                        for _ in range(STREAM_MAX_PAGES):
+                            page = _stream_page(client, base, stream, token, cursor)
+                            for entry in page["entries"]:
+                                if (
+                                    not isinstance(entry, dict)
+                                    or set(entry) != {"id", "body"}
+                                    or not isinstance(entry["id"], str)
+                                    or not re.fullmatch(r"[0-9a-f]{64}", entry["id"])
+                                    or entry["id"] in objects
+                                    or not isinstance(entry["body"], str)
+                                ):
+                                    raise HubError("invalid or repeated stream object")
+                                objects.add(entry["id"])
+                                records = json.loads(entry["body"])
+                                if not isinstance(records, list):
+                                    records = [records]
+                                for raw in records:
+                                    record = _aggregate_event(raw, source)
+                                    if not state.add(stream, record):
+                                        old = state.db.execute(
+                                            "SELECT record FROM events WHERE stream=? AND event_id=?",
+                                            (stream, record["event_id"]),
+                                        ).fetchone()[0]
+                                        if json.loads(old) != record:
+                                            raise HubError(
+                                                "conflicting communication event identity"
+                                            )
+                            cursor = page["next_cursor"]
+                            if cursor is None:
+                                break
+                            if cursor in cursors:
+                                raise HubError("repeated stream cursor")
+                            cursors.add(cursor)
+                        else:
+                            raise HubError("communication stream page budget exhausted")
+                return local_aggregates(state)
+            finally:
+                state.db.close()
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, OverflowError, sqlite3.Error) as e:
+        raise HubError("invalid or unavailable communication stream") from e
 
 
 def _later(a, b):
