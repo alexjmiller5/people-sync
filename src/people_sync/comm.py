@@ -1052,9 +1052,9 @@ def _stream_page(client, base: str, stream: str, token: str, cursor: str | None)
                 raise HubError(f"stream read refused (HTTP {response.status_code})")
             data = bytearray()
             for chunk in response.iter_bytes():
-                data.extend(chunk)
-                if len(data) > STREAM_PAGE_BYTES:
+                if len(chunk) > STREAM_PAGE_BYTES - len(data):
                     raise HubError("stream response exceeds byte limit")
+                data.extend(chunk)
         break
     page = _stream_json(data)
     if not isinstance(page, dict) or set(page) != {"entries", "next_cursor"}:

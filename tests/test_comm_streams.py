@@ -427,3 +427,49 @@ def test_unrelated_recursion_errors_are_not_swallowed_as_parse_failures(monkeypa
     monkeypatch.setattr(comm, "_aggregate_event", unexpected)
     with pytest.raises(RecursionError, match="unrelated application failure"):
         comm.hub_aggregates()
+
+
+@pytest.mark.parametrize("prefix_bytes,chunk_bytes", [(0, 2_000_001), (1_999_999, 2)])
+def test_crossing_chunk_is_rejected_before_copying_to_response_buffer(
+    monkeypatch, prefix_bytes, chunk_bytes
+):
+    copied = []
+    buffers = []
+    closed = []
+
+    class TrackedBuffer(bytearray):
+        def __init__(self):
+            super().__init__()
+            buffers.append(self)
+
+        def extend(self, chunk):
+            copied.append(len(chunk))
+            super().extend(chunk)
+
+    class Response:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            closed.append(True)
+
+        def iter_bytes(self):
+            if prefix_bytes:
+                yield b"x" * prefix_bytes
+            yield b"x" * chunk_bytes
+
+    class Client:
+        def stream(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(comm, "bytearray", TrackedBuffer, raising=False)
+    with pytest.raises(comm.HubError, match="byte limit"):
+        comm._stream_page(
+            Client(), "https://hub.example.test", "comm_apple_messages", "fixture", None
+        )
+    assert copied == ([prefix_bytes] if prefix_bytes else [])
+    assert len(buffers) == 1 and len(buffers[0]) == prefix_bytes
+    assert len(buffers[0]) <= comm.STREAM_PAGE_BYTES
+    assert closed == [True]

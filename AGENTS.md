@@ -817,3 +817,5 @@ unrelated application exceptions must not be swallowed as parse failures. Preser
 the importer mirror/outbox fallback and never retry through archive SQL, manifest,
 replay or broader credentials. The server grant/deployment and credential cutover
 are independent owner operations; consumer source changes do not authorize them.
+Reject a response chunk exceeding remaining capacity before copying it into the
+decoded response buffer. That buffer cap is not a transport/decompression RSS cap.
